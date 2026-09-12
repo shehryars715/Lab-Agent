@@ -24,6 +24,7 @@ from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 
 from labsagent.models import TaskOutcome
+from labsagent.report.cover import CoverInfo, build_cover
 from labsagent.report.docx_utils import (
     enclosing_table,
     flatten_paragraphs,
@@ -100,6 +101,8 @@ def _annotate_one(anchor: Paragraph, outcome: TaskOutcome) -> None:
     cursor = _label(cursor, OUTPUT_LABEL)
     for image_path in outcome.screenshot_paths:
         cursor = _image(cursor, image_path)
+    for figure_path in outcome.figure_paths:
+        cursor = _image(cursor, figure_path)
 
     if outcome.explanation:
         cursor = _explanation(cursor, outcome.explanation)
@@ -109,8 +112,15 @@ def annotate_manual(
     manual_path: Path,
     out_path: Path,
     outcomes: list[TaskOutcome],
+    cover: CoverInfo | None = None,
 ) -> Path:
-    """Copy the manual and insert each task's work beneath its anchor."""
+    """Copy the manual and insert each task's work beneath its anchor.
+
+    A `cover` is prepended AFTER anchors have been resolved to Paragraph
+    objects. Order matters: prepending shifts every integer index in the
+    document, but object references survive it -- the same reason anchors are
+    resolved before any mutation at all.
+    """
     manual_path, out_path = Path(manual_path), Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(manual_path, out_path)
@@ -140,6 +150,9 @@ def annotate_manual(
             anchor = insert_paragraph_after_table(tbl, doc)
 
         resolved.append((anchor, outcome))
+
+    if cover is not None:
+        build_cover(doc, cover)
 
     for anchor, outcome in resolved:
         _annotate_one(anchor, outcome)

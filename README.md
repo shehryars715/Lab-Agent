@@ -36,7 +36,10 @@ done: 3 passed, 0 failed, $0.001625
 4. **Captures the output** — renders the terminal session as a PNG.
 5. **Annotates the manual** — opens a *copy* and inserts `Code:` and `Output:` beneath
    each task. The original text is never regenerated, so formatting survives intact.
-6. **Packages the submission** — report, loose code files, loose screenshots.
+6. **Adds a cover sheet** — course, section, instructor, lab engineer and date are read
+   straight out of the manual's own front matter; only your name and roll number are
+   asked for, once, then remembered.
+7. **Packages the submission** — report, loose code files, loose screenshots.
 
 A task that can't be solved is marked failed *in the report*, with its error, and the
 run continues. A partial report beats a crashed run.
@@ -81,6 +84,53 @@ Sum = 8
 The transcript is correct by construction — the echo happens where the read happens, so
 nothing is fabricated.
 
+### Only ask for what the document can't tell you
+
+A cover sheet needs course, section, date, instructor, lab engineer, name and roll
+number. Six of those are already printed in the manual's front matter, so they are
+matched out of it — by label where labelled, by shape otherwise — at zero cost and with
+no model call. A field that isn't found comes back empty rather than guessed.
+
+That leaves two questions, asked once and cached. The measure of this kind of feature is
+how rarely it has to speak.
+
+---
+
+## Measuring before optimising
+
+`probe.py` wraps the point where the request dict is built, so it sees exactly what goes
+on the wire — the system prompt after middleware rewrites it, the full tool schemas after
+binding, every accumulated message. tiktoken isn't DeepSeek's tokenizer, so the estimate
+is rescaled by the true `input_tokens` the API reports back for that same payload: an
+approximate tokenizer gives real numbers once you measure its error.
+
+On one five-task lab that turned a $0.031 run into a $0.0095 run, unchanged in output:
+
+| | Before | After |
+|---|---|---|
+| Cost | $0.0313 | **$0.0095** |
+| Wall clock | 238 s | **125 s** |
+| Billable (cache-miss) input | 118,580 | **9,619** |
+
+Three things were paying for nothing:
+
+- **Images read as text.** The agent called `read_file` on matplotlib PNGs. Each returned
+  ~33,000 tokens of mojibake, and because context accumulates, each was resent on every
+  later turn of that task — 70% of all tool-result tokens, for zero information. Binary
+  reads are now refused at the confinement boundary. A tool that returns text into a
+  context window needs a type check and a size ceiling, because the caller deciding what
+  to read is a language model.
+- **Ten tools shipped, three used.** Unused schemas are resent every turn, and the mere
+  presence of `ls` and `glob` invited orientation calls that produced yet more context.
+  Trimmed to what the job needs: 2,909 → 1,007 tokens of fixed prefix per call.
+- **Reasoning tokens.** Billed as output at 2× the cache-miss input rate, and never
+  echoed back, so they are invisible to input attribution — one turn generated 2,628
+  output tokens of which 120 survived. Switchable off, off by default: it is a quality
+  trade-off, not a free win.
+
+Attribution is the point. A per-phase total says a run cost three cents; it cannot tell
+you that two of them went on reading a picture of a graph.
+
 ---
 
 ## Quick start
@@ -101,7 +151,7 @@ uv run python examples/solve_one_task.py
 # Solve a whole lab and produce a submission zip
 uv run python examples/solve_lab.py
 
-# Test suite — 85 tests, fully offline, no API key
+# Test suite — 134 tests, fully offline, no API key
 uv run pytest
 ```
 
@@ -131,6 +181,8 @@ src/labsagent/
   runstore.py      run directories, atomic manifests, resumability
   events.py        typed progress events
   usage.py         token and cost accounting
+  probe.py         per-call token attribution: where the context actually went
+  profile.py       student identity, asked once and cached
 ```
 
 Two protocols define the extension points:
@@ -166,14 +218,14 @@ break a run.
 | Model | DeepSeek `deepseek-flash` via `langchain-deepseek` |
 | Documents | `python-docx` + `lxml` |
 | Images | `Pillow` |
-| Tests | `pytest` — 85 tests, no network, no API key |
+| Tests | `pytest` — 134 tests, no network, no API key |
 
 ---
 
 ## Testing
 
 The test suite never calls the API. The model is scripted (`tests/fakes.py`), so the loop
-is exercised deterministically, for free, in about five seconds:
+is exercised deterministically, for free, in about six seconds:
 
 ```bash
 uv run pytest

@@ -6,6 +6,7 @@ Isolation here is weak by design -- it's a development backend. The E2B backend
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,15 @@ class LocalSandbox:
     def __init__(self, workdir: Path | None = None, keep: bool = False) -> None:
         self._owned = workdir is None
         self._keep = keep
-        self._workdir = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="labsagent-"))
+        # MUST be resolved. _resolve() returns absolute paths, and callers pass
+        # relative workdirs (runs/<id>/workspace/task1). A relative _workdir makes
+        # every Path.relative_to() against it raise "is not in the subpath of",
+        # and FilesystemBackend(root_dir=...) inherits the same breakage.
+        self._workdir = (
+            Path(workdir).resolve()
+            if workdir
+            else Path(tempfile.mkdtemp(prefix="labsagent-")).resolve()
+        )
         self._workdir.mkdir(parents=True, exist_ok=True)
         self._closed = False
 
@@ -75,11 +84,15 @@ class LocalSandbox:
             raise SandboxError("sandbox is closed")
 
         resolved = [sys.executable if c == "python" else c for c in cmd]
+        # Headless plotting. Without Agg, matplotlib tries to open a window and
+        # either hangs or dies in a non-interactive subprocess.
+        env = {**os.environ, "MPLBACKEND": "Agg"}
         started = time.monotonic()
         try:
             proc = subprocess.run(
                 resolved,
                 cwd=self._workdir,
+                env=env,
                 input=stdin,
                 capture_output=True,
                 text=True,

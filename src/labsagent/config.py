@@ -27,6 +27,27 @@ class Settings(BaseSettings):
     timeout_s: int = 30
     max_retries_per_task: int = 3
 
+    # Ship only the tools this job needs. deepagents offers ls/glob/grep/delete/
+    # edit_file and a subagent `task` tool; solving a one-file lab task needs
+    # none of them, and every unused schema is resent on every turn of every
+    # task. Measured: 3,271 -> 1,369 tokens of fixed prefix per call.
+    lean_tools: bool = True
+
+    # DeepSeek V4.1 thinks by default, and reasoning tokens are billed as output
+    # at 2x the cache-miss input rate while never appearing in the next request.
+    # "none" disables thinking. Left off by default because it is a QUALITY
+    # trade-off, not a free win -- measure it on your own labs before trusting it.
+    reasoning_effort: str | None = None
+
+    # Reasoning is worth paying for where the model must DECIDE something, and
+    # wasted where it must merely TRANSCRIBE. Ingest is the second kind: copy the
+    # task text out of a document into a fixed schema. Measured on Lab 10,
+    # thinking cost 8,554 output tokens there against 766 without, for the same
+    # five tasks and the same anchors -- so this defaults to off while the solver
+    # keeps its reasoning. Per-phase is the right granularity for this knob;
+    # one global switch would force a bad trade in one direction or the other.
+    ingest_reasoning_effort: str | None = "none"
+
     @property
     def configured(self) -> bool:
         return bool(self.deepseek_api_key)

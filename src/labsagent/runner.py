@@ -21,15 +21,25 @@ SHIM_NAME = "_labsagent_shim.py"
 INPUTS_NAME = "_labsagent_inputs.txt"
 
 
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg")
+
+
 @dataclass
 class RunOutcome:
     result: ExecResult
     transcript: Transcript
     warnings: list[str]
+    figures: list[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.figures is None:
+            self.figures = []
 
     @property
     def ok(self) -> bool:
-        return self.result.ok
+        # A program that draws a chart but prints nothing still succeeded.
+        return (self.result.exit_code == 0 and not self.result.timed_out
+                and (bool(self.result.stdout.strip()) or bool(self.figures)))
 
 
 def _clean_stderr(stderr: str) -> str:
@@ -59,9 +69,20 @@ def run_solution(
     sandbox.write_file(SHIM_NAME, SHIM_SRC.read_text(encoding="utf-8"))
     sandbox.write_file(INPUTS_NAME, "\n".join(values) + ("\n" if values else ""))
 
+    before = set(sandbox.list_files())
+
     raw = sandbox.run(
         ["python", SHIM_NAME, entry_file, INPUTS_NAME],
         timeout=timeout_s,
+    )
+
+    # Plots are a second output channel: many tasks produce figures rather than
+    # printed text, and a run that draws a chart but prints nothing is still a
+    # successful run.
+    figures = sorted(
+        f
+        for f in set(sandbox.list_files()) - before
+        if f.lower().endswith(IMAGE_SUFFIXES)
     )
 
     warnings: list[str] = []
@@ -87,4 +108,5 @@ def run_solution(
         result=result,
         transcript=Transcript.from_exec(f"python {entry_file}", result),
         warnings=warnings,
+        figures=figures,
     )

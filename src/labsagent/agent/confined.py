@@ -43,6 +43,44 @@ from deepagents.backends.protocol import (
 DENIED = "access denied: path resolves outside the workspace"
 _ROOT_ALIASES = ("/", "\\", "", ".")
 
+# Reading a PNG through a text tool is never useful and is ruinously expensive:
+# a 100 KB plot decodes to ~75,000 tokens of mojibake, which then rides along in
+# the context window for every remaining turn of the task. Measured on one real
+# lab run, two such reads accounted for 25% of all input tokens.
+#
+# The general rule: a tool that returns text should refuse non-text input at the
+# BOUNDARY. Prompting a model not to do something is a request; a guard is a
+# guarantee -- and this one is free, deterministic, and cannot regress.
+BINARY_SUFFIXES = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".ico", ".pdf",
+     ".zip", ".gz", ".tar", ".7z", ".rar", ".exe", ".dll", ".so", ".dylib",
+     ".pyc", ".pyd", ".npy", ".npz", ".pkl", ".joblib", ".db", ".sqlite",
+     ".woff", ".woff2", ".ttf", ".otf", ".mp3", ".mp4", ".wav", ".avi"}
+)
+BINARY_REFUSED = (
+    "{name} is a binary {kind} file ({size:,} bytes), not text. Reading it would "
+    "return unusable bytes. It exists and was written successfully -- that is all "
+    "you need to know about it."
+)
+# Even a text file can be pathological (a log, a dumped array). Bytes, not lines,
+# because one line can be a megabyte.
+MAX_READ_BYTES = 64_000
+TOO_LARGE = (
+    "{name} is {size:,} bytes, too large to read into context. Showing the first "
+    "{shown:,} bytes only.\n\n{head}"
+)
+
+
+def looks_binary(path: Path) -> bool:
+    """Suffix first, then a NUL-byte sniff for files with no useful extension."""
+    if path.suffix.lower() in BINARY_SUFFIXES:
+        return True
+    try:
+        with path.open("rb") as handle:
+            return b"\x00" in handle.read(4096)
+    except OSError:
+        return False
+
 
 class ConfinedBackend:
     """Delegates to `inner`, mapping agent paths into `root` and refusing escapes."""
@@ -88,6 +126,30 @@ class ConfinedBackend:
         target = self._mapped(file_path)
         if target is None:
             return ReadResult(error=DENIED, file_data=None)
+
+        host = Path(target)
+        if host.is_file():
+            size = host.stat().st_size
+            if looks_binary(host):
+                # An ERROR, not empty content: the agent must learn the read was
+                # refused and why, or it simply tries again.
+                return ReadResult(
+                    error=BINARY_REFUSED.format(
+                        name=host.name,
+                        kind=host.suffix.lstrip(".").lower() or "binary",
+                        size=size,
+                    ),
+                    file_data=None,
+                )
+            if size > MAX_READ_BYTES:
+                head = host.read_text(encoding="utf-8", errors="replace")[:MAX_READ_BYTES]
+                return ReadResult(
+                    error=TOO_LARGE.format(
+                        name=host.name, size=size, shown=MAX_READ_BYTES, head=head
+                    ),
+                    file_data=None,
+                )
+
         return self._inner.read(target, offset, limit)
 
     def write(self, file_path: str, content: str) -> WriteResult:

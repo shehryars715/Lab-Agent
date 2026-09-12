@@ -30,6 +30,11 @@ class TaskRecorder:
     """
 
     entry_file: str | None = None
+    # What was actually EXECUTED, as opposed to what the agent later claims in
+    # record_task_result. The two can differ -- an agent that wrote to
+    # "workspace/task3.py" may still report "task3.py" -- and only one of them
+    # is known to exist.
+    last_entry_file: str | None = None
     status: str | None = None
     notes: str = ""
     attempts: int = 0
@@ -38,6 +43,7 @@ class TaskRecorder:
     last_stderr: str = ""
     last_transcript: Any = None
     warnings: list[str] = field(default_factory=list)
+    last_figures: list[str] = field(default_factory=list)
 
     @property
     def finished(self) -> bool:
@@ -68,11 +74,13 @@ def build_tools(
         outcome = _run_solution(sandbox, entry_file, stdin_values or [], timeout_s)
 
         recorder.attempts += 1
+        recorder.last_entry_file = entry_file
         recorder.last_ok = outcome.ok
         recorder.last_stdout = outcome.result.stdout
         recorder.last_stderr = outcome.result.stderr
         recorder.last_transcript = outcome.transcript
         recorder.warnings = outcome.warnings
+        recorder.last_figures = list(outcome.figures)
 
         parts = [f"exit_code: {outcome.result.exit_code}"]
         if outcome.result.timed_out:

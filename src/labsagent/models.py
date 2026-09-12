@@ -81,6 +81,7 @@ class TaskOutcome:
     code_path: Path | None = None
     code_text: str = ""
     screenshot_paths: list[Path] = field(default_factory=list)
+    figure_paths: list[Path] = field(default_factory=list)
     transcript: Transcript | None = None
     explanation: str | None = None
     attempts: int = 0

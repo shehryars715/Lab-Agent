@@ -10,9 +10,14 @@ requires-python = ">=3.14"
 dependencies = [
     "deepagents>=0.7.13",
     "langchain-deepseek>=1.1.0",
+    "matplotlib>=3.11.2",
+    "nbformat>=5.11.1",
+    "numpy>=2.5.3",
     "pillow>=12.3.0",
     "pydantic-settings>=2.15.0",
     "python-docx>=1.2.0",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
     "typer>=0.27.2",
 ]
 

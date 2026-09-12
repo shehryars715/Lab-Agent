@@ -138,9 +138,14 @@ def solve_task(
                 if isinstance(message, AIMessage):
                     phase.add_message(message)
 
-            # Trust execution, not the agent's claim.
+            # Trust execution, not the agent's claim -- including for the
+            # FILENAME. `last_entry_file` is the path run_solution actually ran,
+            # so it is known to exist; `entry_file` is only what the agent says
+            # it ran, and an agent that wrote to "workspace/task3.py" will still
+            # cheerfully report "task3.py".
             if recorder.last_ok and recorder.last_transcript:
-                entry = recorder.entry_file or f"{task.id}.py"
+              try:
+                entry = recorder.last_entry_file or recorder.entry_file or f"{task.id}.py"
                 code_text = sandbox.read_file(entry)
 
                 code_path = store.code_dir / f"{task.id}.py"
@@ -148,6 +153,19 @@ def solve_task(
                 emitter.emit(
                     ev.ArtifactWritten(task_id=task.id, artifact="code", path=str(code_path))
                 )
+
+                # Figures the program drew are a separate artifact class from the
+                # terminal screenshot: both belong in the report.
+                figure_paths = []
+                for name in recorder.last_figures:
+                    dest = store.shots_dir / f"{task.id}_{Path(name).name}"
+                    dest.write_bytes((Path(sandbox.workdir) / name).read_bytes())
+                    figure_paths.append(dest)
+                    emitter.emit(
+                        ev.ArtifactWritten(
+                            task_id=task.id, artifact="figure", path=str(dest)
+                        )
+                    )
 
                 shots = screenshots.render(
                     recorder.last_transcript, store.shots_dir / f"{task.id}_output.png"
@@ -165,12 +183,24 @@ def solve_task(
                     code_path=code_path,
                     code_text=code_text,
                     screenshot_paths=list(shots),
+                    figure_paths=figure_paths,
                     transcript=recorder.last_transcript,
                     explanation=recorder.notes or None,
                     attempts=attempt,
                     error=None,
                 )
                 break
+              except (OSError, ValueError) as exc:
+                # Collecting artifacts must never kill the RUN. Without this the
+                # failure policy is a lie: one task whose file has moved takes
+                # the other four down with it, and the report never gets built.
+                emitter.emit(
+                    ev.AttemptFailed(
+                        task_id=task.id, attempt=attempt, error=f"artifact: {exc}"
+                    )
+                )
+                outcome.error = f"could not collect artifacts: {exc}"[:400]
+                continue
 
             error = (recorder.last_stderr or "produced no output").strip()
             emitter.emit(

@@ -95,6 +95,7 @@ def _outcome_to_dict(outcome: TaskOutcome) -> dict[str, Any]:
         "code_path": outcome.code_path.as_posix() if outcome.code_path else None,
         "code_text": outcome.code_text,
         "screenshot_paths": [p.as_posix() for p in outcome.screenshot_paths],
+        "figure_paths": [p.as_posix() for p in outcome.figure_paths],
         "transcript": (
             {
                 "command": outcome.transcript.command,
@@ -118,6 +119,7 @@ def _outcome_from_dict(data: dict[str, Any]) -> TaskOutcome:
         code_path=Path(data["code_path"]) if data.get("code_path") else None,
         code_text=data.get("code_text", ""),
         screenshot_paths=[Path(p) for p in data.get("screenshot_paths", [])],
+        figure_paths=[Path(p) for p in data.get("figure_paths", [])],
         transcript=(
             Transcript(command=raw["command"], lines=raw["lines"], prompt=raw["prompt"])
             if raw

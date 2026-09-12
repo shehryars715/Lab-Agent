@@ -6,6 +6,8 @@ pass identically, the protocol is wrong -- fix the protocol, not the test.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from labsagent.errors import SandboxError
@@ -63,3 +65,18 @@ def test_virtual_root_paths_resolve_into_the_workspace(sandbox):
 def test_virtual_root_escape_still_refused(sandbox):
     with pytest.raises(SandboxError):
         sandbox.write_file("/../escaped.txt", "nope")
+
+
+def test_relative_workdir_is_resolved(tmp_path, monkeypatch):
+    """A relative workdir made every relative_to() raise, breaking list_files and
+    the agent's filesystem backend. Regression: 0/3 tasks failed before any model
+    call because of this."""
+    from labsagent.sandbox.local import LocalSandbox
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ws").mkdir()
+
+    with LocalSandbox(workdir=Path("ws"), keep=True) as sb:
+        assert sb.workdir.is_absolute()
+        sb.write_file("a.py", "print(1)")
+        assert sb.list_files() == ["a.py"]

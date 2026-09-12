@@ -199,6 +199,9 @@ SCHEMA_HINT = """{
 }"""
 
 
+INGEST_ATTEMPTS = 3
+
+
 def extract_labspec(
     manual: RawManual, model
 ) -> tuple[LabSpec, list[AnchorRepair], Usage]:
@@ -224,13 +227,27 @@ def extract_labspec(
     # -- do NOT hardcode a previously measured figure, which silently goes stale
     # and then lies in your cost report.
     handler = UsageMetadataCallbackHandler()
-    try:
-        extracted = structured.invoke(prompt, config={"callbacks": [handler]})
-    except Exception as exc:
-        raise SpecError(f"extraction failed for {manual.path.name}: {exc}") from exc
 
-    spec, repairs = to_labspec(extracted, manual)
-    return spec, repairs, _usage_from_handler(handler)
+    # RETRY, because json_mode has no server-side schema enforcement. Observed
+    # in the wild: the model answered with the literal response_format object,
+    # {"type": "json_object"}, which is valid JSON and wrong. Ingest is a single
+    # call that gates the entire run, so one bad sample must not be terminal --
+    # the cheapest fix for a stochastic failure is another sample.
+    last: Exception | None = None
+    for attempt in range(1, INGEST_ATTEMPTS + 1):
+        try:
+            extracted = structured.invoke(prompt, config={"callbacks": [handler]})
+        except Exception as exc:  # noqa: BLE001 - classified below, then re-raised
+            last = exc
+            continue
+        if extracted.tasks:
+            spec, repairs = to_labspec(extracted, manual)
+            return spec, repairs, _usage_from_handler(handler)
+        # Well-formed but empty is still a failed extraction, not a lab with
+        # zero tasks -- treat it as a retryable miss rather than shipping it.
+        last = SpecError(f"attempt {attempt} returned no tasks")
+
+    raise SpecError(f"extraction failed for {manual.path.name}: {last}") from last
 
 
 def _usage_from_handler(handler) -> Usage:

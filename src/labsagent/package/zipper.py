@@ -34,7 +34,7 @@ def build_submission(
             elif outcome.code_text:
                 zf.writestr(f"code/{outcome.task.id}.py", outcome.code_text)
 
-            for shot in outcome.screenshot_paths:
+            for shot in list(outcome.screenshot_paths) + list(outcome.figure_paths):
                 shot = Path(shot)
                 if shot.exists():
                     zf.write(shot, arcname=f"screenshots/{shot.name}")
