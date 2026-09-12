@@ -1,0 +1,8 @@
+# Normalise line endings so the repo is identical across platforms.
+* text=auto eol=lf
+
+# Binary
+*.png binary
+*.docx binary
+*.ttf binary
+*.zip binary
