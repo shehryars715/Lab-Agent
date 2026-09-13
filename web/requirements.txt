@@ -1,0 +1,19 @@
+# Web layer dependencies.
+#
+# Deliberately NOT in the project's pyproject.toml: the core pipeline is
+# complete and working, and adding a web framework to its dependency list
+# would make every future `uv sync` for a CLI-only user pay for a server they
+# never run. Keep the web layer's cost at the web layer.
+#
+#   uv pip install -r web/requirements.txt
+#
+# Why each is here:
+#   fastapi         routing + StreamingResponse, which is what makes SSE a
+#                   one-liner instead of a hand-rolled socket dance
+#   uvicorn         the ASGI server; `--reload` gives a real dev loop
+#   python-multipart  FastAPI needs it to parse `UploadFile` / `Form`. It is
+#                   not optional: without it the upload endpoint 500s at
+#                   import time with a message that names this package.
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.12

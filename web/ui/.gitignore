@@ -1,0 +1,13 @@
+# Scoped to the front end rather than added to the repo-root .gitignore: the
+# root file is about the Python project, and a Node toolchain's ignore rules
+# belong next to the Node toolchain. It also means `web/` can be lifted out
+# wholesale without losing them.
+#
+# node_modules is ~250 MB for this one page. The root .gitignore does not
+# mention it -- there was no Node code in the repo until now -- so without this
+# a `git add web/` stages 2,186 dependency files.
+node_modules/
+
+# Build output. Already matched by the root .gitignore's bare `dist/`, repeated
+# here so this directory is self-describing.
+dist/

@@ -8,8 +8,18 @@ captures the output, fills the answers into a copy of the manual, and packages
 everything as a zip.
 
 ```bash
-uv run python examples/solve_lab.py path/to/manual.docx
+uv run python examples/solve_lab.py path/to/manual.docx   # the CLI
 ```
+
+Or use it in a browser — a chat interface where you attach the manual, answer one
+question partway through, and download the result:
+
+```bash
+cd web/ui && npm install && npm run build && cd ../..
+uv run uvicorn web.server.app:app --port 8000     # then open http://127.0.0.1:8000
+```
+
+See [`web/README.md`](web/README.md) for the design reasoning behind it.
 
 ```
 run 20260913-011204_lab03  lab 03  3 tasks
@@ -94,6 +104,25 @@ no model call. A field that isn't found comes back empty rather than guessed.
 That leaves two questions, asked once and cached. The measure of this kind of feature is
 how rarely it has to speak.
 
+### Ask before the work, not after
+
+The web interface pauses once per run, between reading the manual and writing any code —
+so an answer changes what gets built rather than only what the cover page says. What it
+asks is not a fixed form. The model reads the extracted tasks and proposes what it
+genuinely cannot decide:
+
+```
+Q: Which dataset file should I load?
+   why: Determines whether I read a CSV path or generate synthetic data.
+Q: Which regression model should I fit?
+   why: Changes the library calls and the coefficients I report.
+```
+
+Returning **zero questions is the correct answer for a well-specified lab**, and the
+prompt says so explicitly. A briefing that invents a question to look useful is the
+failure mode, not the feature. One structured call produces both the questions and the
+cover design, for about $0.0002.
+
 ---
 
 ## Measuring before optimising
@@ -151,8 +180,20 @@ uv run python examples/solve_one_task.py
 # Solve a whole lab and produce a submission zip
 uv run python examples/solve_lab.py
 
-# Test suite — 134 tests, fully offline, no API key
+# Test suite — 171 tests, fully offline, no API key
 uv run pytest
+```
+
+The web interface needs three extra packages and a Node toolchain, kept out of
+`pyproject.toml` so a CLI-only user never installs a server they don't run:
+
+```bash
+uv pip install -r web/requirements.txt
+cd web/ui && npm install && npm run build && cd ../..
+uv run uvicorn web.server.app:app --port 8000
+
+cd web/ui && npm test             # 14 reducer tests, no browser
+uv run python web/smoke_test.py   # 40 end-to-end assertions, live, ~$0.002
 ```
 
 Output is written to `runs/<timestamp>_lab<NN>/`:
@@ -175,7 +216,7 @@ src/labsagent/
   agent/           model, tools, prompt, sandboxed filesystem
   sandbox/         where code is written and executed
   capture/         execution -> terminal-styled PNG
-  report/          in-place DOCX annotation
+  report/          in-place DOCX annotation, and four cover layouts
   package/         submission archive
   orchestrator.py  the multi-task loop: retries, isolation, recovery
   runstore.py      run directories, atomic manifests, resumability
@@ -183,7 +224,15 @@ src/labsagent/
   usage.py         token and cost accounting
   probe.py         per-call token attribution: where the context actually went
   profile.py       student identity, asked once and cached
+
+web/
+  server/          FastAPI: the event log, the pause gate, the composed pipeline
+  ui/              React chat interface; its reducer is pure and tested without a browser
 ```
+
+**Nothing in `src/labsagent/` was modified to build the web layer** except the cover
+layouts. That is what `events.py` was written for — two phases before it had a second
+consumer.
 
 Two protocols define the extension points:
 
@@ -218,7 +267,8 @@ break a run.
 | Model | DeepSeek `deepseek-flash` via `langchain-deepseek` |
 | Documents | `python-docx` + `lxml` |
 | Images | `Pillow` |
-| Tests | `pytest` — 134 tests, no network, no API key |
+| Web | FastAPI + uvicorn, SSE; React 19 + Vite |
+| Tests | `pytest` — 171 tests, no network, no API key |
 
 ---
 
@@ -238,12 +288,28 @@ never modified), cost arithmetic, run-store atomicity, and resumability.
 The sample manual used by the examples is generated on demand from
 `tests/fixtures/make_manual.py` — no binary fixtures are committed.
 
+The web layer has two more suites. The chat's transcript state machine is a pure function
+of the event stream, so it is tested in ~100ms with no browser and no DOM
+(`cd web/ui && npm test`). `web/smoke_test.py` is the opposite: it drives a real run
+against a live server, answers the mid-run pause, downloads every artifact and asserts on
+the bytes — including that the name typed into the browser reaches the cover page of the
+Word document, which is the one thing a mocked test cannot prove.
+
 ---
 
 ## Status
 
-Working end to end. Roadmap: cloud sandbox backend, a dedicated explanation sub-agent,
-evaluation harness, a web interface, and support for languages beyond Python.
+Working end to end, from the command line and in a browser. Roadmap: cloud sandbox
+backend, a dedicated explanation sub-agent, an evaluation harness, and support for
+languages beyond Python.
+
+**One open question, and it is the important one.** The tool assumes the agent *writes*
+the code and the deliverable is a Word report plus a zip. The one real lab manual in this
+repo is a DS311 Data Mining lab where the code is already given, the work happens in
+pandas/sklearn under Colab, and the deliverable is *"submit your notebook on LMS"*. If
+that is typical rather than exceptional, the report pipeline is the wrong centre of
+gravity — the sandbox, run store, event system, cost tracking and orchestration all carry
+over unchanged, but the report would become the optional branch. See `PLAN.md` §19.
 
 ## License
 
