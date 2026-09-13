@@ -181,19 +181,19 @@ test('replayed frames are ignored', () => {
   assert.equal(lastRun(twice).state.progress.done, 2, 'not 4')
 })
 
-test('the ticker is bounded and keeps the newest lines', () => {
-  const many = play(
-    Array.from({ length: 30 }, (_, i) => ({
-      type: 'activity',
-      task_id: 'task1',
-      text: `step ${i}`,
-      seq: i + 10,
-    })),
-    play([START, { type: 'spec', lab_number: '1', title: 't', task_count: 1, tasks: [{ id: 'task1', title: 'a' }], seq: 1 }]),
-  )
-  const ticker = lastRun(many).state.ticker
-  assert.ok(ticker.length < 30, 'bounded')
-  assert.match(ticker.at(-1).message, /step 29/, 'keeps the newest')
+// Tool activity is shown on the task it belongs to, in the running row --
+// "running task2.py" where the work is. There is deliberately no scrolling log
+// of every step any more; that used to be `state.ticker`, and its absence is
+// what these two assert.
+test('activity lands on the task, and nowhere else', () => {
+  const base = play([
+    START,
+    { type: 'spec', lab_number: '1', title: 't', task_count: 1, tasks: [{ id: 'task1', title: 'a' }], seq: 1 },
+    { type: 'activity', task_id: 'task1', text: 'running task1.py', seq: 2 },
+    { type: 'activity', task_id: 'task1', text: 'exit 0', seq: 3 },
+  ])
+  assert.equal(lastRun(base).state.tasks.task1.activity, 'exit 0', 'the latest one wins')
+  assert.equal(lastRun(base).state.ticker, undefined, 'no step log is kept')
 })
 
 test('an activity frame for an unknown task does not invent one', () => {
@@ -203,7 +203,7 @@ test('an activity frame for an unknown task does not invent one', () => {
   ])
   const s = reduce(base, { type: 'activity', task_id: 'task9', text: 'writing x.py', seq: 2 })
   assert.deepEqual(Object.keys(lastRun(s).state.tasks), ['task1'])
-  assert.match(lastRun(s).state.ticker.at(-1).message, /writing x\.py/, 'still shown')
+  assert.equal(lastRun(s).state.tasks.task1.activity, null, 'not attributed to the wrong task')
 })
 
 test('a failed run surfaces the error on the run entry', () => {

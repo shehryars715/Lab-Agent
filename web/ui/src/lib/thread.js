@@ -26,7 +26,6 @@ export const PHASES = [
   { key: 'packaging', label: 'Packaging', hue: 160 },
 ]
 
-const TICKER_MAX = 7
 const NARRATION_MAX = 400
 
 export const initial = {
@@ -49,7 +48,6 @@ const emptyRun = () => ({
   order: [],
   progress: { done: 0, total: 0 },
   cost: 0,
-  ticker: [],
   artifacts: [],
   summary: null,
   error: null,
@@ -90,16 +88,6 @@ function push(state, entry) {
   return { ...state, entries: [...state.entries, entry] }
 }
 
-function pushTicker(state, message, tone = '') {
-  return patchRun(state, (run) => ({
-    ...run,
-    // The id is a counter, not `ticker.length`: the list is capped at seven, so
-    // a length-derived key stops changing once it is full and two identical
-    // consecutive messages ("running task2.py" twice) would collide.
-    ticker: [...run.ticker, { id: nextId('feed'), message, tone }].slice(-TICKER_MAX),
-  }))
-}
-
 function upsertTask(run, id, patch) {
   const existing = run.tasks[id] ?? {
     id,
@@ -114,19 +102,23 @@ function upsertTask(run, id, patch) {
   return { ...run.tasks, [id]: { ...existing, ...patch } }
 }
 
+/** Core events move the task list and nothing else.
+ *
+ *  There is deliberately no per-step log here any more. Every one of these
+ *  events used to append a monospace line -- `[2/5] Forward Propagation`,
+ *  `writing task2.py`, `exit 0` -- which meant the card narrated the plumbing
+ *  the moment anything happened. The agent's own sentences say the same thing
+ *  in the register a person actually reads, and the running task row still
+ *  shows what it is doing right now. Two channels saying "working on task 2"
+ *  is one channel too many.
+ */
 function applyCoreEvent(state, e) {
   switch (e.kind) {
-    case 'RunStarted':
-      return pushTicker(state, `run ${e.run_id} · ${e.task_count} tasks`)
-
     case 'TaskStarted':
-      return pushTicker(
-        patchRun(state, (run) => ({
-          ...run,
-          tasks: upsertTask(run, e.task_id, { status: 'running', title: e.title }),
-        })),
-        `[${e.index}/${e.total}] ${e.title}`,
-      )
+      return patchRun(state, (run) => ({
+        ...run,
+        tasks: upsertTask(run, e.task_id, { status: 'running', title: e.title }),
+      }))
 
     case 'AttemptStarted':
       return patchRun(state, (run) => ({
@@ -138,39 +130,32 @@ function applyCoreEvent(state, e) {
       }))
 
     case 'AttemptFailed':
-      return pushTicker(
-        patchRun(state, (run) => ({
-          ...run,
-          tasks: upsertTask(run, e.task_id, { error: e.error }),
-        })),
-        e.error,
-        'warn',
-      )
+      return patchRun(state, (run) => ({
+        ...run,
+        tasks: upsertTask(run, e.task_id, { error: e.error }),
+      }))
 
     case 'TaskFinished':
-      return pushTicker(
-        patchRun(state, (run) => ({
-          ...run,
-          cost: run.cost + (e.cost_usd || 0),
-          progress: { ...run.progress, done: run.progress.done + 1 },
-          tasks: upsertTask(run, e.task_id, {
-            status: e.status,
-            attempts: e.attempts,
-            cost: e.cost_usd,
-            activity: null,
-            error: e.status === 'passed' ? null : run.tasks[e.task_id]?.error,
-          }),
-        })),
-        `${e.status === 'passed' ? '✓' : '✗'} ${e.task_id}`,
-        e.status === 'passed' ? 'ok' : 'bad',
-      )
+      return patchRun(state, (run) => ({
+        ...run,
+        cost: run.cost + (e.cost_usd || 0),
+        progress: { ...run.progress, done: run.progress.done + 1 },
+        tasks: upsertTask(run, e.task_id, {
+          status: e.status,
+          attempts: e.attempts,
+          cost: e.cost_usd,
+          activity: null,
+          error: e.status === 'passed' ? null : run.tasks[e.task_id]?.error,
+        }),
+      }))
 
     case 'RunFinished':
       return patchRun(state, { cost: e.cost_usd })
 
     default:
-      // Unknown kinds are ignored rather than fatal, so the core can grow new
-      // events without breaking a deployed front end.
+      // Unknown kinds -- including RunStarted, which now has nothing to say --
+      // are ignored rather than fatal, so the core can grow new events without
+      // breaking a deployed front end.
       return state
   }
 }
@@ -283,20 +268,19 @@ export function reduce(state, frame) {
       const entries = base.entries.map((e) =>
         e.id === base.awaiting ? { ...e, timedOut: true } : e,
       )
-      return pushTicker({ ...base, entries, awaiting: null }, 'no answer given — carrying on', 'warn')
+      return { ...base, entries, awaiting: null }
     }
 
+    // Tool activity still lands on the task it belongs to, so the running row
+    // can show "running task2.py" where the work is. Only the trailing log of
+    // every step is gone.
     case 'activity':
-      return pushTicker(
-        patchRun(base, (run) => ({
-          ...run,
-          tasks: run.tasks[frame.task_id]
-            ? upsertTask(run, frame.task_id, { activity: frame.text })
-            : run.tasks,
-        })),
-        frame.text,
-        frame.tone || '',
-      )
+      return patchRun(base, (run) => ({
+        ...run,
+        tasks: run.tasks[frame.task_id]
+          ? upsertTask(run, frame.task_id, { activity: frame.text })
+          : run.tasks,
+      }))
 
     case 'artifact':
       return patchRun(base, (run) => ({

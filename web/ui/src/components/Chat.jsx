@@ -25,6 +25,12 @@ export default function Chat({
   const pinned = useRef(true)
   const count = entries.length
 
+  // Which sentence is the current one. Computed rather than left to
+  // `:last-child`, which never matches here: the thread ends with a scroll
+  // sentinel, and `.say` elements are interleaved with run and question cards,
+  // so "last child" and "last thing the agent said" are different elements.
+  const latestSay = [...entries].reverse().find((e) => e.kind === 'agent-text')?.id
+
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return undefined
@@ -52,8 +58,11 @@ export default function Chat({
           }
           if (entry.kind === 'agent-text') {
             return (
-              <div className="say" key={entry.id}>
-                {entry.text}
+              <div className={`say ${entry.id === latestSay ? 'is-latest' : ''}`} key={entry.id}>
+                {/* A resting version of the working orb, so the thing that
+                    spoke and the thing that is working read as one speaker. */}
+                <span className="say-mark" aria-hidden />
+                <p className="say-body">{entry.text}</p>
               </div>
             )
           }

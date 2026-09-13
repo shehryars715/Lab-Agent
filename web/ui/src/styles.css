@@ -203,15 +203,56 @@ button {
   word-break: break-word;
 }
 
-/* The agent speaks plainly -- no bubble, no avatar. In a working agent the
-   prose is narration, not a turn, and boxing it would make every sentence look
-   like a reply that expects one. */
+/* The agent's voice.
+
+   A soft card with the corner nearest its own mark squared off, mirroring the
+   user bubble's squared bottom-right -- so the two sides of the conversation
+   are distinguishable at a glance without either one shouting. The mark is a
+   still version of the working orb, which is what makes the sentence and the
+   spinner read as the same speaker rather than two unrelated widgets.
+*/
 .say {
-  max-width: 92%;
-  color: var(--text-muted);
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  max-width: 88%;
+  animation: sayIn 0.5s var(--ease) both;
+}
+
+.say-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex: none;
+  margin-top: 4px;
+  background: radial-gradient(circle at 35% 30%,
+    hsl(258 92% 74%),
+    hsl(258 78% 54%));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.say-body {
+  margin: 0;
+  padding: 11px 15px;
+  border-radius: 4px 15px 15px 15px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   font-size: 14.5px;
-  animation: rise 0.4s var(--ease) both;
-  padding-left: 2px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+/* The most recent sentence says what is happening now, so it holds a faint
+   tint until the next one arrives. Subtle enough to read as emphasis rather
+   than as a state change. */
+.say.is-latest .say-body {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 6%, var(--surface)),
+    var(--surface)
+  );
 }
 
 .card {
@@ -539,59 +580,6 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.feed {
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.75;
-  min-height: 22px;
-}
-
-.feed-line {
-  display: flex;
-  gap: 9px;
-  color: var(--text-faint);
-  animation: feedIn 0.45s var(--ease) both;
-  white-space: nowrap;
-  overflow: hidden;
-  /* The padding is for the highlight background; the negative margin cancels
-     it so the lines stay flush with the rest of the card. */
-  padding: 1px 7px;
-  margin: 0 -7px;
-  border-radius: 5px;
-}
-
-/* The newest line is the only one that changed, so it is the only one worth
-   looking at. It slides in from the left with a slight blur, under a tint that
-   flashes brighter and settles -- the eye lands on the head of the stream
-   instead of re-reading the same six lines every time one is added.
-
-   The tint is a background, not a colour change, because the tone classes
-   below already use colour to mean something: overriding it here would erase
-   the difference between a normal step and a failure. */
-.feed-line:last-child {
-  animation: feedIn 0.45s var(--ease) both, feedFlash 1.5s var(--ease) both;
-}
-
-.feed-line .m {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.feed-line.ok .m {
-  color: var(--ok);
-}
-
-.feed-line.warn .m {
-  color: var(--warn);
-}
-
-.feed-line.bad .m {
-  color: var(--danger);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1164,25 +1152,18 @@ input.invalid {
   }
 }
 
-@keyframes feedIn {
+/* The mark fades in a beat ahead of the words, so the sentence reads as having
+   been spoken rather than as a block that simply appeared. */
+@keyframes sayIn {
   from {
     opacity: 0;
-    transform: translateX(-10px);
-    filter: blur(2px);
+    transform: translateY(6px) scale(0.985);
+    filter: blur(1.5px);
   }
   to {
     opacity: 1;
     transform: none;
     filter: blur(0);
-  }
-}
-
-@keyframes feedFlash {
-  from {
-    background-color: color-mix(in srgb, var(--accent) 26%, transparent);
-  }
-  to {
-    background-color: color-mix(in srgb, var(--accent) 9%, transparent);
   }
 }
 

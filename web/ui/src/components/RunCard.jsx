@@ -49,19 +49,6 @@ function TaskList({ run }) {
   )
 }
 
-function Feed({ lines }) {
-  if (!lines.length) return null
-  return (
-    <div className="feed" aria-live="polite">
-      {lines.map((line) => (
-        <div className={`feed-line ${line.tone}`} key={line.id}>
-          <span className="m">{line.message}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 function Result({ run, jobId, elapsed }) {
   const s = run.summary
   const perfect = s.failed === 0
@@ -156,7 +143,6 @@ export default function RunCard({ entry, jobId }) {
     <div className="card working-card">
       <Working run={run} jobId={jobId} />
       <TaskList run={run} />
-      <Feed lines={run.ticker} />
     </div>
   )
 }
