@@ -303,13 +303,18 @@ Working end to end, from the command line and in a browser. Roadmap: cloud sandb
 backend, a dedicated explanation sub-agent, an evaluation harness, and support for
 languages beyond Python.
 
-**One open question, and it is the important one.** The tool assumes the agent *writes*
-the code and the deliverable is a Word report plus a zip. The one real lab manual in this
-repo is a DS311 Data Mining lab where the code is already given, the work happens in
-pandas/sklearn under Colab, and the deliverable is *"submit your notebook on LMS"*. If
-that is typical rather than exceptional, the report pipeline is the wrong centre of
-gravity — the sandbox, run store, event system, cost tracking and orchestration all carry
-over unchanged, but the report would become the optional branch. See `PLAN.md` §19.
+### Scope
+
+This assumes the agent *writes* the code and the deliverable is a Word report plus a zip.
+That assumption was checked against the real course material in this repo — the DS311
+Data Mining manual, where the code is already given and the deliverable is a notebook on
+LMS — and **confirmed as the right default**: labs of that second shape are rare. The
+notebook path is not planned.
+
+If that ever changes, the reusable half is the sandbox, run store, event system, cost
+tracking, orchestration and in-place document editing. The parts that would need
+replacing are the input-echo shim, the write-from-scratch solver prompt, and the
+plain-text screenshot rendering.
 
 ## License
 
