@@ -180,9 +180,18 @@ uv run python examples/solve_one_task.py
 # Solve a whole lab and produce a submission zip
 uv run python examples/solve_lab.py
 
-# Test suite — 171 tests, fully offline, no API key
+# Test suite — 216 tests, fully offline, no API key
 uv run pytest
+
+# The eval set: pass rate, cost and duration per lab (live, ~$0.0065 for one pass)
+uv run python -m labsagent.cli eval --list       # the cases, without spending anything
+uv run python -m labsagent.cli eval --samples 3  # sampled, because temperature=0 is not
+                                                 # deterministic here
 ```
+
+`labsagent eval` works too, via the console script — but some Windows Application
+Control policies block the generated `.exe` shim, and the `python -m` form always works.
+
 
 The web interface needs three extra packages and a Node toolchain, kept out of
 `pyproject.toml` so a CLI-only user never installs a server they don't run:
@@ -218,10 +227,13 @@ src/labsagent/
   capture/         execution -> terminal-styled PNG
   report/          in-place DOCX annotation, and four cover layouts
   package/         submission archive
+  evals/           the fixture set, the scoring, and the report
+  cli.py           `labsagent eval`
   orchestrator.py  the multi-task loop: retries, isolation, recovery
   runstore.py      run directories, atomic manifests, resumability
   events.py        typed progress events
   usage.py         token and cost accounting
+  agent/explainer.py  writes report prose in a context that never saw the debugging
   probe.py         per-call token attribution: where the context actually went
   profile.py       student identity, asked once and cached
 
@@ -256,6 +268,41 @@ The core emits typed events (`TaskStarted`, `AttemptFailed`, `ArtifactWritten`,
 ship today — a terminal renderer and a log recorder — and a failing consumer can never
 break a run.
 
+### Doing and describing are separate jobs
+
+The explanation under each task used to be written by the solver, as its last act, with
+its whole debugging session still in context — three failed attempts, two tracebacks, the
+tool schemas. Agents write about what they have been looking at, so it produced prose
+about the journey: *"I initially used a while loop but it looped forever, so I switched to
+`range()`."* True, and exactly wrong under a lab task.
+
+You cannot prompt that away; "don't mention the debugging" competes against fifty thousand
+tokens of debugging. So a separate call writes it, and the orchestrator builds that call's
+entire input by hand — task statement, final code, what it printed. The debugging cannot
+leak because it is never assembled. **Context isolation is enforced at the caller, not
+requested at the callee.**
+
+`wants_explanation` drives length: two sentences normally, five when the task says
+"explain". The prompt asks, and the code then truncates on sentence boundaries, because a
+length instruction is not a contract until something enforces it.
+
+### Measuring, not guessing
+
+`labsagent eval` runs a fixture set of seven labs and scores every task on two separate
+questions: **`ran`** (did a program execute cleanly) and **`matched`** (did it print the
+right thing). Keeping them apart is the point. Run-to-green alone cannot see a prompt
+change that makes every solution subtly wrong — every wrong program still exits 0. One
+fixture exists purely to make that concrete: a task asking for two decimal places, where
+`Total: 24.5` runs perfectly and is the wrong answer.
+
+The expected outputs are **written by hand from the task statements**, not recorded from a
+previous run. A recorded golden tells you behaviour changed; it will happily enshrine a
+wrong answer, because it never knew the right one.
+
+One more fixture cannot be solved at all — it requires fetching from a host that does not
+resolve. Its scoring is inverted: failing is the pass, and passing is reported as a false
+success. Without it the give-up path would never execute.
+
 ---
 
 ## Stack
@@ -268,7 +315,7 @@ break a run.
 | Documents | `python-docx` + `lxml` |
 | Images | `Pillow` |
 | Web | FastAPI + uvicorn, SSE; React 19 + Vite |
-| Tests | `pytest` — 171 tests, no network, no API key |
+| Tests | `pytest` — 216 tests, no network, no API key |
 
 ---
 
@@ -299,8 +346,8 @@ Word document, which is the one thing a mocked test cannot prove.
 
 ## Status
 
-Working end to end, from the command line and in a browser. Roadmap: cloud sandbox
-backend, a dedicated explanation sub-agent, an evaluation harness, and support for
+Working end to end, from the command line and in a browser, with an isolated explanation
+pass and a sampled eval set. Remaining roadmap: a cloud sandbox backend, and support for
 languages beyond Python.
 
 ### Scope

@@ -12,7 +12,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from labsagent import events as ev  # noqa: E402
-from labsagent.agent.build import build_model  # noqa: E402
+from labsagent.agent.build import build_explainer, build_model  # noqa: E402
 from labsagent.capture.rendered import RenderedBackend  # noqa: E402
 from labsagent.config import load_settings  # noqa: E402
 from labsagent.ingest.cover import extract_cover_facts  # noqa: E402
@@ -46,6 +46,7 @@ def ensure_fixture(path: Path) -> Path:
 
 USAGE = """usage: solve_lab.py [manual.docx] [options]
 
+  --no-explain    skip the per-task explanation pass (slightly cheaper)
   --no-notebook   skip the .ipynb export
   --no-zip        skip the submission archive
   --no-think      disable DeepSeek reasoning in the SOLVER too (cheaper, less capable)
@@ -105,6 +106,11 @@ def main() -> int:
     manifest = run_lab(
         spec, store, settings, RenderedBackend(theme="light"),
         emitter=emitter, usage=usage, model=model,
+        # Describing is a separate job from doing, so it gets a separate call
+        # with a separate context -- see agent/explainer.py.
+        explainer=(
+            None if "--no-explain" in flags else build_explainer(settings, usage)
+        ),
     )
 
     # 3. Annotate the manual in place, then package

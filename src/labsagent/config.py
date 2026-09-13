@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     # one global switch would force a bad trade in one direction or the other.
     ingest_reasoning_effort: str | None = "none"
 
+    # Explaining is the same KIND of work as ingest: the program already exists
+    # and already works, so the model is describing, not deciding. By the rule
+    # above that makes reasoning wasted spend, and the explanation is the one
+    # place where a longer, more deliberated answer is actively worse -- the
+    # target is two plain sentences, not an essay.
+    explain_reasoning_effort: str | None = "none"
+
     @property
     def configured(self) -> bool:
         return bool(self.deepseek_api_key)

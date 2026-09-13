@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from labsagent import events as ev
-from labsagent.agent.build import build_model
+from labsagent.agent.build import build_explainer, build_model
 from labsagent.capture.rendered import RenderedBackend
 from labsagent.config import PROJECT_ROOT, Settings
 from labsagent.ingest.cover import extract_cover_facts
@@ -437,6 +437,7 @@ def run_job(
                 emitter=emitter,
                 usage=usage,
                 model=build_model(settings),
+                explainer=build_explainer(settings, usage),
             )
 
         # Remember what a revision would need. A re-run has to reach the same
@@ -573,6 +574,7 @@ def revise_job(job: Job, feedback: str) -> None:
                 usage=usage,
                 model=build_model(settings),
                 resume=True,
+                explainer=build_explainer(settings, usage),
             )
 
         _emit_report_and_package(job, context, resumed.outcomes, usage)

@@ -20,6 +20,12 @@ Four decisions are encoded here, each deliberate:
 4. REFERENCES: a task saying "extend your Task 2 program" gets Task 2's
    statement and final code injected. This deliberately breaks task independence
    -- it is the one place where fresh-context-per-task is the wrong default.
+
+5. DESCRIBING IS NOT DOING. The report prose is written by a separate call that
+   never sees the debugging -- see agent/explainer.py. It is injected as a
+   callable rather than built here, so the CLI, the tests and the web layer each
+   decide independently whether to pay for it. With no explainer wired in, the
+   solver's own notes remain the fallback and nothing changes.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ from langchain_core.messages import AIMessage
 
 from labsagent import events as ev
 from labsagent.agent.build import build_solver
+from labsagent.agent.explainer import Explainer
 from labsagent.capture.base import ScreenshotBackend
 from labsagent.config import Settings
 from labsagent.errors import SandboxError
@@ -88,13 +95,18 @@ def solve_task(
     emitter: ev.Emitter,
     done: dict[str, TaskOutcome],
     model=None,
+    explainer: Explainer | None = None,
 ) -> SolveResult:
     """One task, bounded attempts, isolated workspace."""
     workspace = store.workspace / task.id
     workspace.mkdir(parents=True, exist_ok=True)
 
     phase = usage.phase("solve")
-    before = phase.cost_usd
+    # Measured on the TOTAL, not on the solve phase alone. The explain call
+    # below bills to its own phase, so a solve-only delta would quietly
+    # under-report what this task cost -- and this number is what the web UI
+    # shows per task.
+    before = usage.total.cost_usd
     outcome = TaskOutcome(task=task, status="failed", error="not attempted")
 
     infra_retries = 0
@@ -208,8 +220,29 @@ def solve_task(
             )
             outcome.error = error[:400]
 
+    # AFTER the loop, not inside it: an explanation is written once, about the
+    # program that finally worked, and a task that needed three attempts should
+    # not pay for three explanations of code that was thrown away.
+    if outcome.status == "passed" and explainer is not None:
+        # Guarded for the same reason artifact collection is: this task has
+        # already succeeded, and a decoration must never be able to undo that.
+        # `Explainer` swallows its own model errors, but `explainer` is any
+        # callable as far as this function knows, so the guarantee belongs here
+        # rather than in one particular implementation of the seam.
+        try:
+            written = explainer(outcome.task, outcome.code_text, outcome.transcript)
+        except Exception as exc:  # noqa: BLE001
+            emitter.emit(
+                ev.AttemptFailed(
+                    task_id=task.id, attempt=attempt, error=f"explain: {exc}"[:300]
+                )
+            )
+            written = None
+        if written:
+            outcome.explanation = written
+
     outcome.attempts = attempt
-    cost = phase.cost_usd - before
+    cost = usage.total.cost_usd - before
     emitter.emit(
         ev.TaskFinished(
             task_id=task.id, status=outcome.status, attempts=attempt, cost_usd=cost
@@ -227,6 +260,7 @@ def run_lab(
     usage: RunUsage | None = None,
     model=None,
     resume: bool = False,
+    explainer: Explainer | None = None,
 ) -> RunManifest:
     """Solve every task. Failures are recorded, never fatal."""
     emitter = emitter or ev.Emitter()
@@ -256,7 +290,15 @@ def run_lab(
             )
         )
         result = solve_task(
-            task, store, settings, screenshots, usage, emitter, done, model=model
+            task,
+            store,
+            settings,
+            screenshots,
+            usage,
+            emitter,
+            done,
+            model=model,
+            explainer=explainer,
         )
         manifest.outcomes.append(result.outcome)
         done[task.id] = result.outcome

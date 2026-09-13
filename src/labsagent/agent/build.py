@@ -32,6 +32,7 @@ from deepagents.backends import FilesystemBackend
 from langchain_deepseek import ChatDeepSeek
 
 from labsagent.agent.confined import ConfinedBackend
+from labsagent.agent.explainer import Explainer
 from labsagent.agent.prompts import SOLVER_PROMPT
 from labsagent.agent.tools import TaskRecorder, build_tools
 from labsagent.config import Settings
@@ -67,20 +68,39 @@ def build_model(settings: Settings, phase: str = "solve"):
     """One model per phase, because reasoning is worth different amounts in each.
 
     `phase="ingest"` is structured extraction -- copying text into a schema --
-    where thinking buys nothing measurable. `phase="solve"` writes and debugs
-    programs, where it does.
+    where thinking buys nothing measurable. `phase="explain"` is description:
+    the program already exists and already works, and the job is to say what it
+    does. `phase="solve"` writes and debugs programs, where thinking does pay.
+
+    A LOOKUP RATHER THAN A CHAIN OF IFS. With one special case an `if` is
+    honest; the second is where it stops being a special case and becomes a
+    table. Written as a chain, adding "explain" means editing a conditional and
+    hoping the fallthrough is still right -- written as a dict, a new phase is a
+    new row.
     """
-    effort = (
-        settings.ingest_reasoning_effort
-        if phase == "ingest"
-        else settings.reasoning_effort
-    )
+    effort = {
+        "ingest": settings.ingest_reasoning_effort,
+        "explain": settings.explain_reasoning_effort,
+    }.get(phase, settings.reasoning_effort)
     kwargs = {"reasoning_effort": effort} if effort else {}
     return ChatDeepSeek(
         model=settings.model_name,
         temperature=settings.temperature,
         api_key=settings.deepseek_api_key,
         **kwargs,
+    )
+
+
+def build_explainer(settings: Settings, usage=None, model=None) -> Explainer:
+    """The report-prose writer, with the model choice made in exactly one place.
+
+    Every composition root wants the same thing here, and the interesting part
+    -- that this phase runs WITHOUT reasoning -- should not have to be
+    remembered separately by the CLI, the web layer and the eval harness.
+    """
+    return Explainer(
+        model=model if model is not None else build_model(settings, phase="explain"),
+        usage=usage,
     )
 
 
