@@ -14,6 +14,13 @@
 #   python-multipart  FastAPI needs it to parse `UploadFile` / `Form`. It is
 #                   not optional: without it the upload endpoint 500s at
 #                   import time with a message that names this package.
+#   requests        only the live test scripts use it -- smoke_test.py and
+#                   matrix_test.py. It was already arriving transitively via
+#                   langchain and therefore already load-bearing while being
+#                   declared nowhere, which is how `pandas` and `tiktoken`
+#                   went wrong in this repo. Named here so it stops being
+#                   luck.
 fastapi>=0.115
 uvicorn[standard]>=0.32
 python-multipart>=0.0.12
+requests>=2.32

@@ -26,7 +26,7 @@ def _spec() -> LabSpec:
         course="CS-102",
         tasks=[
             Task(id=f"task{i}", title=f"T{i}", statement="s",
-                 sample_inputs=["5"], anchor_idx=i * 2)
+                 sample_inputs=["5"])
             for i in (1, 2, 3)
         ],
     )
@@ -51,6 +51,7 @@ def _manifest() -> RunManifest:
             )
         ],
         cost_usd=0.0004,
+        anchors={f"task{i}": i * 2 for i in (1, 2, 3)},
     )
 
 
@@ -68,7 +69,9 @@ def test_manifest_round_trips_through_json():
     assert out.code_path == Path("code/task1.py")
     assert out.screenshot_paths == [Path("screenshots/task1.png")]
     assert out.transcript.lines == ["hi"]
-    assert out.task.anchor_idx == 2
+    # Anchors are a side table now, not a field on each Task -- they must
+    # still survive the round trip or a revision cannot rebuild the report.
+    assert restored.anchors == {"task1": 2, "task2": 4, "task3": 6}
 
 
 def test_create_makes_the_full_tree(tmp_path):

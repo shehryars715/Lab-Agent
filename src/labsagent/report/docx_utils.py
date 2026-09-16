@@ -103,6 +103,36 @@ def shade(paragraph: Paragraph, fill: str) -> None:
     pr.append(shd)
 
 
+def table_borders(table, color: str = "auto", size: int = 4) -> None:
+    """Box every cell, without depending on a style the document may not have.
+
+    `table.style = "Table Grid"` is the usual way to do this and it is a trap
+    the moment the document is not one you created. Word writes only the styles
+    a document actually USES into styles.xml, so a manual that never contained
+    a bordered table simply has no 'Table Grid' and python-docx raises
+    `KeyError: no style with name 'Table Grid'`.
+
+    That is not hypothetical: of the two real manuals in `labs/`, Lab 10 ships
+    57 styles and has it, Lab 13 ships 21 and does not. Which one you got was
+    luck, and on Lab 13 it cost the entire Word report after every task had
+    been solved and paid for.
+
+    Direct formatting also makes the cover look the same everywhere, because
+    even where 'Table Grid' exists its appearance is whatever THAT document
+    defines it to be. Same reasoning as `style_code_run` below.
+    """
+    pr = table._tbl.tblPr
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        element = OxmlElement(f"w:{edge}")
+        element.set(qn("w:val"), "single")
+        element.set(qn("w:sz"), str(size))
+        element.set(qn("w:space"), "0")
+        element.set(qn("w:color"), color)
+        borders.append(element)
+    pr.append(borders)
+
+
 def style_code_run(run, font: str = "Consolas", size_pt: float = 9.0) -> None:
     """Direct run formatting, deliberately not a named style.
 

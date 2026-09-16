@@ -26,6 +26,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from labsagent.emit import REGISTRY
+
 from .pipeline import RUNS_ROOT
 
 
@@ -89,13 +91,20 @@ def artifacts_for(directory: Path) -> list[dict[str, Any]]:
             )
 
     if report_dir.is_dir():
-        for path in sorted(report_dir.glob("*.docx")):
-            add("report", path, "Report", "report")
-        # One zip per run. `max` rather than `next` so a stray extra archive
-        # resolves deterministically instead of by directory order.
-        zips = sorted(report_dir.glob("*.zip"))
-        if zips:
-            add("package", zips[-1], "Complete package", "package")
+        # DRIVEN BY THE EMITTER REGISTRY, not by two hardcoded globs. The old
+        # version looked for *.docx and *.zip only, which is why a notebook --
+        # built on every single run -- was invisible in history even though it
+        # sat right there on disk. A format added to the registry now shows up
+        # here for free.
+        by_suffix = {
+            suffix: emitter
+            for emitter in REGISTRY.values()
+            for suffix in getattr(emitter, "extensions", ())
+        }
+        for path in sorted(report_dir.iterdir()):
+            emitter = by_suffix.get(path.suffix.lower())
+            if path.is_file() and emitter is not None:
+                add(emitter.name, path, emitter.label, emitter.kind)
 
     if code_dir.is_dir():
         for path in sorted(code_dir.glob("*.py")):

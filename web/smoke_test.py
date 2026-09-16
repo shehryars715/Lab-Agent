@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import threading
 import zipfile
@@ -33,7 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # tool's output arrives as a replacement character.
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-BASE = "http://127.0.0.1:8000"
+# Overridable so the smoke test can run against a second instance while
+# another server is already holding :8000.
+BASE = os.environ.get("LABSAGENT_BASE", "http://127.0.0.1:8000")
 NAME = "Test Student"
 CMS = "22F-9999"
 
@@ -267,8 +270,12 @@ def run(manual: Path) -> None:
 
     artifacts = {e["key"]: e for e in events if e.get("type") == "artifact"}
     print(f"\n  artifacts: {sorted(artifacts)}")
-    check("report produced", "report" in artifacts)
-    check("package produced", "package" in artifacts)
+    # KEYED BY EMITTER NAME now, not by two fixed slots. The notebook has
+    # always been built on every run; it just had no download of its own and
+    # nothing here ever asserted it existed.
+    check("report produced", "docx" in artifacts)
+    check("notebook produced AND downloadable", "ipynb" in artifacts)
+    check("package produced", "zip" in artifacts)
     check("at least one code file produced", any(k.startswith("code:") for k in artifacts))
 
     paths: dict[str, Path] = {}
@@ -282,10 +289,10 @@ def run(manual: Path) -> None:
         paths[key] = out
 
     # -- the check that matters most --------------------------------------
-    if "report" in paths:
+    if "docx" in paths:
         from docx import Document
 
-        doc = Document(str(paths["report"]))
+        doc = Document(str(paths["docx"]))
         text = "\n".join(p.text for p in doc.paragraphs)
         text += "\n".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
         check(
@@ -300,10 +307,27 @@ def run(manual: Path) -> None:
             f"{len(doc.paragraphs)} paragraphs",
         )
 
-    if "package" in paths:
-        with zipfile.ZipFile(paths["package"]) as zf:
+    if "ipynb" in paths:
+        import json as _json
+
+        nb = _json.loads(paths["ipynb"].read_text(encoding="utf-8"))
+        outputs = [
+            o
+            for c in nb.get("cells", [])
+            if c.get("cell_type") == "code"
+            for o in c.get("outputs", [])
+        ]
+        check(
+            "the notebook opens already showing results",
+            any(o.get("output_type") in ("stream", "display_data") for o in outputs),
+            f"{len(outputs)} embedded outputs",
+        )
+
+    if "zip" in paths:
+        with zipfile.ZipFile(paths["zip"]) as zf:
             names = zf.namelist()
         check("package contains the report", any(n.endswith(".docx") for n in names))
+        check("package contains the notebook", any(n.endswith(".ipynb") for n in names))
         check("package contains code", any(n.startswith("code/") for n in names))
         check(
             "package contains screenshots",

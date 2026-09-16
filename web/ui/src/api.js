@@ -55,7 +55,9 @@ export function saveIdentity(values) {
 
 export async function createRun({ file, instructions, seed }) {
   const form = new FormData()
-  form.append('manual', file)
+  // No file is a valid run: the message is then the document. Appending a
+  // null would post the string "null" as a filename, so it is omitted.
+  if (file) form.append('manual', file)
   form.append('instructions', instructions ?? '')
   form.append('name', seed?.name ?? '')
   form.append('cms_id', seed?.cms_id ?? '')

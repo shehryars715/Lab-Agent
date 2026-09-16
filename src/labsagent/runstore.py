@@ -49,8 +49,8 @@ def _task_to_dict(task: Task) -> dict[str, Any]:
         "statement": task.statement,
         "sample_inputs": list(task.sample_inputs),
         "sample_output": task.sample_output,
-        "anchor_idx": task.anchor_idx,
         "wants_explanation": task.wants_explanation,
+        "instruction": task.instruction,
     }
 
 
@@ -61,8 +61,8 @@ def _task_from_dict(data: dict[str, Any]) -> Task:
         statement=data["statement"],
         sample_inputs=list(data.get("sample_inputs", [])),
         sample_output=data.get("sample_output"),
-        anchor_idx=data.get("anchor_idx", -1),
         wants_explanation=data.get("wants_explanation", False),
+        instruction=data.get("instruction", ""),
     )
 
 
@@ -139,6 +139,7 @@ def manifest_to_dict(manifest: RunManifest) -> dict[str, Any]:
         "outcomes": [_outcome_to_dict(o) for o in manifest.outcomes],
         "token_usage": dict(manifest.token_usage),
         "cost_usd": manifest.cost_usd,
+        "anchors": dict(manifest.anchors),
     }
 
 
@@ -150,6 +151,7 @@ def manifest_from_dict(data: dict[str, Any]) -> RunManifest:
         outcomes=[_outcome_from_dict(o) for o in data.get("outcomes", [])],
         token_usage=dict(data.get("token_usage", {})),
         cost_usd=data.get("cost_usd", 0.0),
+        anchors={str(k): int(v) for k, v in (data.get("anchors") or {}).items()},
     )
 
 

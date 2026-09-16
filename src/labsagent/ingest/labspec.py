@@ -32,23 +32,46 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from pydantic import BaseModel, Field
 
 from labsagent.errors import SpecError
 from labsagent.ingest.docx_reader import RawManual
+from labsagent.ingest.readers import produces_anchors
+from labsagent.intent import Intent, detect_formats
 from labsagent.models import LabSpec, Task
 from labsagent.usage import Usage
 
-EXTRACTION_PROMPT = """You are reading a university programming lab manual.
+EXTRACTION_PROMPT = """You are reading a document a student uploaded, and deciding what it is.
+
+Do NOT assume it is a lab manual. It might be a university programming lab, a
+notebook-style data assignment, or something else entirely -- a CV, an invoice,
+an essay, a blank page. Saying so plainly is a correct and useful answer. It is
+much worse to invent tasks that are not there than to report that you found
+none.
 
 Each line below is one paragraph of the document, prefixed with its index in
 square brackets, e.g. "[7]". Style names appear in brackets after the index when
 the paragraph is not body text.
 
-Identify every TASK the student must implement. Ignore objectives, headers,
-titles and closing remarks -- only tasks that require writing a program.
+First classify the document:
+
+- document_kind: "lab" for a programming lab whose tasks the student must write
+  code for; "notebook_lab" when the code is largely given and the deliverable is
+  a notebook; "other" for anything that is not an assignment at all.
+- confidence: 0.0 to 1.0, how sure you are of document_kind. Be honest. Use a
+  low value when the document is ambiguous or you are guessing.
+- what_this_is: one short phrase describing the document as you actually found
+  it, e.g. "a two-page CV" or "Lab 03 on loops and functions". Always fill this
+  in, especially when document_kind is "other" -- it is what the student is told.
+
+If document_kind is "other", return an empty tasks list and stop. Do not invent
+tasks to fill the schema.
+
+Otherwise, identify every TASK the student must implement. Ignore objectives,
+headers, titles and closing remarks -- only tasks that require writing a program.
 
 For each task report:
 
@@ -71,9 +94,46 @@ For each task report:
 
 Also report the lab number, the lab title, and the course code if present.
 
+Finally, resolve what the student asked for into `intent`. Their request, which
+may be empty, is quoted below.
+
+- tasks_wanted: the task_numbers they asked for, e.g. [3] for "only task 3".
+  Leave EMPTY when they did not narrow it down -- empty means all of them. Only
+  use numbers that exist in the tasks you just listed.
+- artifacts: which files to produce, from exactly this set:
+    "docx"  a Word report, the manual annotated in place
+    "ipynb" a Jupyter/Colab notebook with outputs already in it
+    "py"    a plain Python script
+    "md"    a markdown write-up
+    "zip"   an archive of everything
+  Leave EMPTY only when they named no file type at all. If the document itself
+  says what to submit -- "submit only the .ipynb on LMS" -- honour that.
+
+  ANY mention of a file type or extension belongs HERE and never in notes.
+  Worked example. Request: "Provide the completed lab as an executed .ipynb
+  notebook file that includes the run outputs."
+      artifacts: ["ipynb"]
+      notes:     ""
+  The words about being executed and including outputs describe the NOTEBOOK,
+  which is produced for you after the code runs. They are not instructions to
+  the person writing the code, and putting them in notes makes the solver try
+  to build the notebook itself.
+- notes: ONLY the parts of their request that should change the CODE you write
+  -- a library to use, a style, a constraint, a value to assume. This is the
+  only part of their request the solver will ever see, so a coding instruction
+  left out here is lost entirely.
+  Do NOT repeat file formats or task selection here. Those are already handled
+  by `artifacts` and `tasks_wanted`, and repeating them makes the solver try to
+  produce the files itself in Python instead of just solving the task.
+  Empty if there is nothing.
+
 Return ONLY a JSON object matching this schema exactly:
 
 {schema}
+
+The student's request (may be empty):
+
+{request}
 
 Document:
 
@@ -91,11 +151,34 @@ class ExtractedTask(BaseModel):
     anchor_quote: str = Field(description="first 40 chars at anchor_idx, verbatim")
 
 
+class ExtractedIntent(BaseModel):
+    """What the student asked for, resolved against the tasks just read.
+
+    Resolving it inside the extraction call is what makes it trustworthy: the
+    model picks task numbers from the list it is producing in the same breath,
+    so it cannot name a task that does not exist. Same self-verification idea as
+    the anchor quote.
+    """
+
+    tasks_wanted: list[int] = Field(default_factory=list, description="empty = all")
+    artifacts: list[str] = Field(default_factory=list, description="empty = default")
+    notes: str = ""
+
+
 class ExtractedLab(BaseModel):
-    lab_number: str
-    title: str
+    # NULLABLE ON PURPOSE. A document that is not a lab has no lab number and
+    # no lab title, and the model correctly answers `null` for both. Typing
+    # them as plain `str` made Pydantic reject that entirely correct reply --
+    # so a confidently-classified CV failed validation, burned all three
+    # retries, and surfaced as a parse error instead of "this is a CV".
+    lab_number: str | None = ""
+    title: str | None = ""
     course: str | None = None
-    tasks: list[ExtractedTask]
+    tasks: list[ExtractedTask] = Field(default_factory=list)
+    document_kind: str = "lab"
+    confidence: float = 1.0
+    what_this_is: str = ""
+    intent: ExtractedIntent = Field(default_factory=ExtractedIntent)
 
 
 @dataclass
@@ -149,21 +232,31 @@ def _reconcile_anchor(
     )
 
 
-def to_labspec(extracted: ExtractedLab, manual: RawManual) -> tuple[LabSpec, list[AnchorRepair]]:
+def to_labspec(
+    extracted: ExtractedLab, manual: RawManual
+) -> tuple[LabSpec, dict[str, int], list[AnchorRepair]]:
+    """Returns the spec, the anchor side table, and any repairs made.
+
+    Anchors come back separately rather than on each `Task` because they are a
+    coordinate into one specific .docx -- meaningless for a PDF, a notebook or
+    a pasted lab, and needed only by the DOCX emitter.
+    """
     tasks: list[Task] = []
+    anchors: dict[str, int] = {}
     repairs: list[AnchorRepair] = []
 
     for item in sorted(extracted.tasks, key=lambda t: t.task_number):
         anchor, repair = _reconcile_anchor(item, manual)
         if repair:
             repairs.append(repair)
+        task_id = f"task{item.task_number}"
+        anchors[task_id] = anchor
         tasks.append(
             Task(
-                id=f"task{item.task_number}",
+                id=task_id,
                 title=item.title,
                 statement=item.statement,
                 sample_inputs=list(item.sample_inputs),
-                anchor_idx=anchor,
                 wants_explanation=item.wants_explanation,
             )
         )
@@ -172,16 +265,31 @@ def to_labspec(extracted: ExtractedLab, manual: RawManual) -> tuple[LabSpec, lis
         raise SpecError(f"no tasks found in {manual.path.name}")
 
     spec = LabSpec(
-        lab_number=extracted.lab_number,
-        title=extracted.title,
+        lab_number=extracted.lab_number or "",
+        title=extracted.title or "",
         course=extracted.course,
         tasks=tasks,
         skipped_images=list(manual.image_names),
     )
-    return spec, repairs
+
+    # ANCHORS ONLY MEAN SOMETHING FOR A .docx. A line index into a .txt, or a
+    # cell index in a notebook, is not a Word paragraph index -- but it looks
+    # exactly like one, so the DOCX emitter cheerfully took the annotate-in-
+    # place branch and tried to open a plain text file as a Word document.
+    #
+    # The reconciliation above still runs for every format, because verifying
+    # the model's quote against the document is a quality check worth having
+    # regardless. Only the coordinates are dropped.
+    if not produces_anchors(manual.path):
+        anchors = {}
+
+    return spec, anchors, repairs
 
 
 SCHEMA_HINT = """{
+  "document_kind": "lab | notebook_lab | other",
+  "confidence": 0.9,
+  "what_this_is": "short phrase describing the document",
   "lab_number": "03",
   "title": "string",
   "course": "string or null",
@@ -195,17 +303,71 @@ SCHEMA_HINT = """{
       "anchor_idx": 8,
       "anchor_quote": "first 40 chars of the paragraph at anchor_idx"
     }
-  ]
+  ],
+  "intent": {
+    "tasks_wanted": [],
+    "artifacts": [],
+    "notes": ""
+  }
 }"""
 
 
 INGEST_ATTEMPTS = 3
 
 
-def extract_labspec(
-    manual: RawManual, model
-) -> tuple[LabSpec, list[AnchorRepair], Usage]:
-    """One constrained call.
+@dataclass
+class Reading:
+    """The result of looking at an upload once.
+
+    Everything the one ingest call learned: what the document is, how sure we
+    are, the tasks if there are any, where they sit in the source .docx, and
+    what the student asked to be done with them. `spec` is None when the
+    document is not an assignment at all -- which is an answer, not a failure.
+    """
+
+    kind: str
+    confidence: float
+    what_this_is: str
+    intent: Intent
+    usage: Usage
+    spec: LabSpec | None = None
+    anchors: dict[str, int] = dataclass_field(default_factory=dict)
+    repairs: list[AnchorRepair] = dataclass_field(default_factory=list)
+
+    @property
+    def is_lab(self) -> bool:
+        return self.spec is not None and bool(self.spec.tasks)
+
+
+def _intent_from(extracted: ExtractedLab, known_ids: list[str], request: str = "") -> Intent:
+    """Fold the model's `intent` block into the typed request object."""
+    wanted = [f"task{n}" for n in extracted.intent.tasks_wanted]
+    wanted = [t for t in wanted if t in known_ids]
+    artifacts = [a.strip().lower().lstrip(".") for a in extracted.intent.artifacts]
+    artifacts = [a for a in artifacts if a]
+
+    # BACKSTOP. Observed in the wild: given "provide the completed lab as an
+    # executed .ipynb notebook file", the model filed the whole sentence under
+    # `notes` -- a CODE instruction -- and left `artifacts` empty, so the run
+    # produced a .docx and told the solver to write the notebook itself. A
+    # literal ".ipynb" is not a judgement call, so when the model expressed no
+    # preference at all we read the request directly. A preference it DID
+    # express is never overridden.
+    if not artifacts:
+        artifacts = detect_formats(request)
+    return Intent(
+        kind=extracted.document_kind if extracted.document_kind in
+        ("lab", "notebook_lab", "other") else "lab",
+        confidence=max(0.0, min(1.0, float(extracted.confidence))),
+        what_this_is=extracted.what_this_is.strip(),
+        task_ids=wanted or None,
+        artifacts=artifacts,
+        notes=extracted.intent.notes.strip(),
+    )
+
+
+def extract_labspec(manual: RawManual, model, request: str = "") -> Reading:
+    """One constrained call that classifies, extracts and resolves the request.
 
     NOTE ON METHOD. DeepSeek V4.1 runs in thinking mode and rejects a forced
     `tool_choice`, so both `function_calling` and `json_schema` fail with
@@ -216,10 +378,17 @@ def extract_labspec(
     So enforcement moves to us: the schema goes in the prompt, and Pydantic is
     the real validator. That is the trade with json_mode everywhere, not just
     here -- know which of the three you are getting.
+
+    WHY THREE JOBS IN ONE CALL. Classifying the document, listing its tasks and
+    resolving "only task 3, as a notebook" are all the same act of reading it.
+    Splitting them across calls would pay for that reading more than once, and
+    would let the request name a task the extraction never found.
     """
     structured = model.with_structured_output(ExtractedLab, method="json_mode")
     prompt = EXTRACTION_PROMPT.format(
-        schema=SCHEMA_HINT, document=manual.as_numbered_text()
+        schema=SCHEMA_HINT,
+        request=(request or "").strip() or "(no request given)",
+        document=manual.as_numbered_text(),
     )
 
     # with_structured_output swallows the AIMessage, so usage_metadata never
@@ -240,11 +409,35 @@ def extract_labspec(
         except Exception as exc:  # noqa: BLE001 - classified below, then re-raised
             last = exc
             continue
+
         if extracted.tasks:
-            spec, repairs = to_labspec(extracted, manual)
-            return spec, repairs, _usage_from_handler(handler)
-        # Well-formed but empty is still a failed extraction, not a lab with
-        # zero tasks -- treat it as a retryable miss rather than shipping it.
+            spec, anchors, repairs = to_labspec(extracted, manual)
+            return Reading(
+                kind=extracted.document_kind,
+                confidence=extracted.confidence,
+                what_this_is=extracted.what_this_is,
+                intent=_intent_from(extracted, [t.id for t in spec.tasks], request),
+                usage=_usage_from_handler(handler),
+                spec=spec,
+                anchors=anchors,
+                repairs=repairs,
+            )
+
+        # NO TASKS. Which of the two reasons matters, and they used to be
+        # conflated: "this is not an assignment" was retried three times and
+        # then raised `SpecError`, so uploading a CV cost three extractions and
+        # produced a stack-trace string in the chat. A confident "other" is a
+        # finished answer -- return it and let the caller say so kindly.
+        if extracted.document_kind == "other":
+            return Reading(
+                kind="other",
+                confidence=extracted.confidence,
+                what_this_is=extracted.what_this_is,
+                intent=_intent_from(extracted, [], request),
+                usage=_usage_from_handler(handler),
+            )
+
+        # Claimed to be a lab but listed nothing: a failed extraction, retry.
         last = SpecError(f"attempt {attempt} returned no tasks")
 
     raise SpecError(f"extraction failed for {manual.path.name}: {last}") from last

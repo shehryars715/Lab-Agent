@@ -38,25 +38,25 @@ def test_numbered_view_is_indexed_for_the_model(manual):
 
 
 def test_correct_anchor_needs_no_repair(manual):
-    spec, repairs = to_labspec(_lab(anchor_idx=8), manual)
+    spec, anchors, repairs = to_labspec(_lab(anchor_idx=8), manual)
 
-    assert spec.tasks[0].anchor_idx == 8
+    assert anchors["task1"] == 8
     assert repairs == []
 
 
 def test_miscounted_anchor_is_corrected_by_its_quote(manual):
     """The whole point of the redundant field: models miscount, but quote well."""
-    spec, repairs = to_labspec(_lab(anchor_idx=6), manual)
+    spec, anchors, repairs = to_labspec(_lab(anchor_idx=6), manual)
 
-    assert spec.tasks[0].anchor_idx == 8, "quote should have overridden the bad index"
+    assert anchors["task1"] == 8, "quote should have overridden the bad index"
     assert len(repairs) == 1
     assert repairs[0].claimed == 6 and repairs[0].corrected == 8
 
 
 def test_out_of_range_anchor_is_recovered_from_its_quote(manual):
-    spec, repairs = to_labspec(_lab(anchor_idx=999), manual)
+    spec, anchors, repairs = to_labspec(_lab(anchor_idx=999), manual)
 
-    assert spec.tasks[0].anchor_idx == 8
+    assert anchors["task1"] == 8
     assert "out of range" in repairs[0].reason
 
 
@@ -67,11 +67,11 @@ def test_unusable_anchor_fails_loudly(manual):
 
 def test_fuzzy_quote_still_recovers(manual):
     """A near-miss quote (model paraphrased slightly) should still land."""
-    spec, repairs = to_labspec(
+    spec, anchors, repairs = to_labspec(
         _lab(anchor_idx=2, anchor_quote="Sample run: n=5, m=3 gives Sum=8"), manual
     )
 
-    assert spec.tasks[0].anchor_idx == 8
+    assert anchors["task1"] == 8
     assert repairs and "fuzzy" in repairs[0].reason
 
 
@@ -86,7 +86,7 @@ def test_tasks_are_ordered_by_number(manual):
                           anchor_quote="Sample run: n = 5, m = 3"),
         ],
     )
-    spec, _ = to_labspec(lab, manual)
+    spec, _, _ = to_labspec(lab, manual)
 
     assert [t.id for t in spec.tasks] == ["task1", "task2"]
 
@@ -94,3 +94,15 @@ def test_tasks_are_ordered_by_number(manual):
 def test_empty_task_list_is_an_error(manual):
     with pytest.raises(SpecError, match="no tasks"):
         to_labspec(ExtractedLab(lab_number="03", title="Lab 03", tasks=[]), manual)
+
+
+def test_anchors_are_dropped_for_a_non_docx_source(manual):
+    """A .txt line index is not a Word paragraph index. Keeping the quote
+    reconciliation but dropping the coordinate is the whole distinction."""
+    from dataclasses import replace as dc_replace
+
+    as_text = dc_replace(manual, path=manual.path.with_suffix(".txt"))
+    spec, anchors, repairs = to_labspec(_lab(anchor_idx=8), as_text)
+
+    assert spec.tasks, "the tasks still come through"
+    assert anchors == {}, "but the document coordinates do not"

@@ -30,7 +30,6 @@ Four decisions are encoded here, each deliberate:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,20 +47,21 @@ from labsagent.runstore import RunStore, pending_tasks
 from labsagent.sandbox.local import LocalSandbox
 from labsagent.usage import RunUsage
 
-TASK_REF = re.compile(r"\btask\s*(\d+)\b", re.IGNORECASE)
-
-
-def referenced_task_ids(task: Task) -> set[str]:
-    """Task ids this statement points at, excluding itself."""
-    own = task.id.removeprefix("task")
-    return {
-        f"task{n}" for n in TASK_REF.findall(task.statement) if n != own
-    }
+# Moved to `intent.py`, which needs the same scan to work out what a scoped
+# request secretly depends on. Re-exported here so existing importers -- and
+# anyone reading this module top to bottom -- still find it.
+from labsagent.intent import TASK_REF, referenced_task_ids  # noqa: F401
 
 
 def build_task_prompt(task: Task, done: dict[str, TaskOutcome]) -> str:
     """The user message for one task, plus any task it explicitly references."""
     parts = [task.statement]
+
+    # Solver-only steering. It rides on the Task so a resume re-asks the same
+    # question, but it is deliberately NOT part of `statement`, which is what
+    # the exporters print into the file you hand in.
+    if task.instruction:
+        parts.append(task.instruction)
 
     if task.sample_inputs:
         parts.append(f"\nTest it with these inputs, in order: {task.sample_inputs}")
@@ -155,7 +155,18 @@ def solve_task(
             # so it is known to exist; `entry_file` is only what the agent says
             # it ran, and an agent that wrote to "workspace/task3.py" will still
             # cheerfully report "task3.py".
-            if recorder.last_ok and recorder.last_transcript:
+            # AND THE AGENT MUST NOT HAVE DECLARED DEFEAT. `last_ok` only says
+            # the most recent run_solution exited 0 with output -- so an agent
+            # that gave up and ran a diagnostic probe as its last action left
+            # `last_ok` true and its task was marked PASSED, with the probe's
+            # output pasted into the report as the result. Two instances of
+            # exactly that are on record.
+            #
+            # Tested as `!= "failed"` rather than `== "passed"` on purpose: an
+            # agent that simply forgets its final record_task_result call has
+            # not lied about anything, and demoting those to failures would
+            # trade a rare false pass for a common false fail.
+            if recorder.last_ok and recorder.last_transcript and recorder.status != "failed":
               try:
                 entry = recorder.last_entry_file or recorder.entry_file or f"{task.id}.py"
                 code_text = sandbox.read_file(entry)

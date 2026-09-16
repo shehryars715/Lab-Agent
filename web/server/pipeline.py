@@ -24,8 +24,8 @@ the dialog can say "Found 3 tasks" instead of asking blind.
 
 from __future__ import annotations
 
-import zipfile
 from dataclasses import asdict, dataclass, replace
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -34,15 +34,14 @@ from labsagent.agent.build import build_explainer, build_model
 from labsagent.capture.rendered import RenderedBackend
 from labsagent.config import PROJECT_ROOT, Settings
 from labsagent.ingest.cover import extract_cover_facts
-from labsagent.ingest.docx_reader import read_manual
+from labsagent.ingest.readers import read_document, read_pasted
+from labsagent.emit import DEFAULT_ARTIFACTS, REGISTRY, EmitContext, emit_all
 from labsagent.ingest.labspec import extract_labspec
+from labsagent.intent import Intent, detect_formats, scope
 from labsagent.models import LabSpec, TaskOutcome
 from labsagent.orchestrator import run_lab
-from labsagent.package.notebook import write_notebook
-from labsagent.package.zipper import build_submission
 from labsagent.profile import ASK_ORDER, StudentProfile
 from labsagent.report.cover import cover_from
-from labsagent.report.docx_builder import annotate_manual
 from labsagent.runstore import RunStore
 from labsagent.usage import RunUsage
 
@@ -80,8 +79,50 @@ NARRATION = (
 )
 
 
-def apply_instructions(spec: LabSpec, instructions: str) -> LabSpec:
-    """Fold narration and the student's extra instructions into every task.
+#: Answer keys that describe the student, not the work. Everything else the
+#: pause collects is an answer to a question the AGENT asked, and has to reach
+#: the solver -- which, until now, it did not.
+IDENTITY_KEYS = {k for k, _ in ASK_ORDER} | {"section", "program"}
+
+#: Answers the pipeline consumes structurally rather than passing to the
+#: solver as prose.
+RESERVED_KEYS = IDENTITY_KEYS | {"artifacts"}
+
+
+def answered_notes(questions: list[dict], answers: dict[str, str]) -> str:
+    """The agent's own questions and what the student replied, as prose.
+
+    WHY THIS EXISTS. The pause was theatre for everything except identity.
+    `job.ask` collected the answers, `profile_from` kept `name`, `cms_id`,
+    `section` and `program`, and every other reply -- the answer to the
+    question the AGENT chose to ask, the one the pause was moved before the
+    solve in order to honour -- was dropped on the floor. Asking a question and
+    discarding the answer is worse than not asking.
+    """
+    labels = {q.get("key"): q.get("label", q.get("key", "")) for q in questions}
+    lines = [
+        f"- {labels.get(key, key)}: {str(value).strip()}"
+        for key, value in answers.items()
+        if key not in RESERVED_KEYS and str(value).strip()
+    ]
+    return "You asked, and the student answered:" + chr(10) + chr(10).join(lines) if lines else ""
+
+
+def apply_instructions(spec: LabSpec, notes: str = "") -> LabSpec:
+    """Fold narration and the code-shaping part of the request into every task.
+
+    NOTES, NOT THE RAW REQUEST. This used to take the student's whole message
+    and staple it onto every task statement. Once formats became requestable,
+    that turned into a real bug: "give me the word report, the notebook, a
+    markdown copy and a zip" reached the SOLVER as if it were part of the
+    task, and the agent dutifully wrote a Python program that generated a
+    notebook, a .docx and a zip itself -- doing the emitters' job, in the
+    solution. A 5,996-byte answer to "read two integers and print their sum".
+
+    One instruction, one channel. The ingest call already splits the request
+    three ways -- `tasks_wanted` for scope, `artifacts` for what to produce,
+    `notes` for what should change the code -- and only the last of those has
+    any business in a solver prompt.
 
     WHY `replace` AND NOT MUTATION. `Task` and `LabSpec` are frozen
     dataclasses -- the codebase's way of saying "a parsed spec is a fact, not a
@@ -97,14 +138,21 @@ def apply_instructions(spec: LabSpec, instructions: str) -> LabSpec:
     produce a mixed result. Putting it in the spec we hand to `run_lab` means
     the question is frozen at the moment it is first asked.
     """
-    extra = (instructions or "").strip()
+    extra = (notes or "").strip()
     note = NARRATION
     if extra:
         note += (
             "\n\nAdditional instructions from the student. Follow these; where they "
             f"conflict with the task text above, these win:\n{extra}"
         )
-    return replace(spec, tasks=[replace(t, statement=t.statement + note) for t in spec.tasks])
+    # ON `instruction` AND NOT `statement`. These two used to be concatenated,
+    # which was invisible while the only deliverable annotated the manual in
+    # place. The moment .py, .md and .ipynb became first-class, the leak showed:
+    # every one of them prints `statement`, so a submitted file opened with
+    # "As you work: before your first tool call, say in ONE short sentence..."
+    # `statement` is what the student hands in; `instruction` is what steers the
+    # solver. Both still ride in the manifest, so a resume is unchanged.
+    return replace(spec, tasks=[replace(t, instruction=note) for t in spec.tasks])
 
 
 def wire_event(event: ev.Event) -> dict[str, Any]:
@@ -129,6 +177,32 @@ def wire_event(event: ev.Event) -> dict[str, Any]:
     payload["kind"] = event.kind
     payload["at"] = event.at.isoformat()
     return payload
+
+
+def _not_a_lab(reading) -> str:
+    """What to say when the upload is not an assignment.
+
+    Naming the document is the whole point. "SpecError: extraction failed for
+    cv.docx" tells the student nothing; "this looks like a two-page CV" tells
+    them exactly what happened and that the tool is not broken. The confidence
+    split matters too -- a hedged guess should read as a question, not a
+    verdict, because the cost of wrongly refusing a real lab is high.
+    """
+    what = (reading.what_this_is or "").strip()
+    if reading.intent.uncertain:
+        return (
+            (f"I am not certain what this is -- my best guess is {what}. " if what
+             else "I could not tell what this document is. ")
+            + "I did not find anything to solve in it. If it is a lab, re-send it "
+            "and tell me which tasks you mean; if it is not, tell me what you "
+            "would like done with it."
+        )
+    return (
+        (f"This looks like {what}, not a lab manual. " if what
+         else "This does not look like a lab manual. ")
+        + "There are no tasks in it to solve. Upload a lab, or tell me what you "
+        "want done with this file and I will have a go."
+    )
 
 
 def profile_from(values: dict[str, str]) -> StudentProfile:
@@ -247,24 +321,41 @@ class RunContext:
     plan: Any
     manual_path: Path
     settings: Settings
+    #: Only a .docx upload produces these; the DOCX emitter is the sole reader.
+    anchors: dict[str, int] = dataclass_field(default_factory=dict)
+    #: What the student asked for, so a revision emits the same set of files.
+    intent: Intent = dataclass_field(default_factory=Intent)
 
 
-def _emit_report_and_package(
+def _emit(
     job: Job, context: RunContext, outcomes: list[TaskOutcome], usage: RunUsage
-) -> None:
-    """Build the report and the archive, and register every download.
+) -> list[str]:
+    """Produce whatever was asked for, and register each file as it lands.
 
-    Shared by the first run and by every revision. A revision calls this again
-    with the amended outcomes, so the report and the zip are rebuilt from the
-    same code path -- there is no second implementation to drift.
+    Shared by the first run and by every revision, so there is no second
+    implementation to drift -- which is exactly what went wrong before: this
+    sequence also existed in `examples/solve_lab.py`, and the two had already
+    diverged on which artifacts they honoured and which events they emitted.
+
+    WHY EACH EMITTER IS ISOLATED. This step used to be all-or-nothing. A bad
+    anchor raised `IndexError` inside the DOCX writer, the catch-all in
+    `run_job` turned it into a job error, and not a single artifact was
+    registered -- even though every task had been solved and paid for, and
+    `manifest.json` on disk held all of it. Now one format failing costs you
+    that format and nothing else, and the chat says which one and why.
+
+    Returns the emitter names that failed, so the caller can mention them.
     """
     store, spec, profile = context.store, context.spec, context.profile
+    wanted = list(context.intent.artifacts or DEFAULT_ARTIFACTS)
 
-    job.phase("building", "Building the report")
-    report = annotate_manual(
-        context.manual_path,
-        store.report_dir / f"Lab{spec.lab_number}_Report.docx",
-        outcomes,
+    job.phase("emitting", "Producing your files")
+
+    ctx = EmitContext(
+        spec=spec,
+        outcomes=outcomes,
+        out_dir=store.report_dir,
+        profile=profile,
         cover=cover_from(
             spec,
             profile,
@@ -272,26 +363,23 @@ def _emit_report_and_package(
             layout=context.plan.layout,
             tagline=context.plan.tagline,
         ),
+        manual_path=context.manual_path,
+        anchors=context.anchors,
     )
-    job.register("report", report, label="Report", kind="report")
 
-    job.phase("packaging", "Packaging")
-    roll = profile.slug()
-    notebook = write_notebook(
-        store.report_dir / f"Lab{spec.lab_number}_{roll}.ipynb",
-        spec,
-        outcomes,
-        student=profile.as_display(),
-    )
-    archive = build_submission(
-        store.report_dir / f"Lab{spec.lab_number}_{roll}.zip",
-        report,
-        outcomes,
-    )
-    with zipfile.ZipFile(archive, "a") as zf:
-        zf.write(notebook, arcname=notebook.name)
+    failed: list[tuple[str, str]] = []
 
-    # Code files are registered last so they appear after the two headline
+    def landed(emitter, path: Path) -> None:
+        job.register(emitter.name, path, label=emitter.label, kind=emitter.kind)
+
+    def broke(name: str, exc: Exception) -> None:
+        reason = f"{type(exc).__name__}: {exc}"[:200]
+        failed.append((name, reason))
+        job.publish({"type": "emit_failed", "format": name, "reason": reason})
+
+    emit_all(ctx, wanted, on_file=landed, on_error=broke)
+
+    # Code files are registered last so they appear after the headline
     # downloads in the UI, in task order.
     for outcome in outcomes:
         if outcome.code_path and Path(outcome.code_path).exists():
@@ -302,13 +390,29 @@ def _emit_report_and_package(
                 kind="code",
             )
 
-    job.register("package", archive, label="Complete package", kind="package")
+    # SAY WHY, NOT JUST WHAT. This line used to read "Could not produce: docx.
+    # Everything else is above." -- which tells you a file is missing and gives
+    # you no way to find out why. The reason was already in the `emit_failed`
+    # frame, visible only in devtools. A failure you cannot diagnose from the
+    # thread is a failure you have to come and ask about.
+    if failed:
+        job.publish(
+            {
+                "type": "narration",
+                "text": " ".join(
+                    f"Could not produce the {name} file ({reason})."
+                    for name, reason in failed
+                )
+                + " Everything else is above.",
+            }
+        )
+    return [name for name, _ in failed]
 
 
 def run_job(
     job: Job,
     *,
-    manual_path: Path,
+    manual_path: Path | None,
     instructions: str,
     profile_seed: dict[str, str],
     settings: Settings,
@@ -328,31 +432,42 @@ def run_job(
         usage = RunUsage(model=settings.model_name)
 
         # -- 1. read ------------------------------------------------------
-        job.phase("reading", "Reading the manual")
-        manual = read_manual(manual_path)
+        job.phase("reading", "Reading what you sent")
+        # No file means the message IS the document. It is then passed as the
+        # request as well: a pasted lab usually carries its own instructions
+        # ("just task 1"), and pasted labs are short enough that reading them
+        # twice costs little.
+        manual = read_document(manual_path) if manual_path else read_pasted(instructions)
         facts = extract_cover_facts([p.text for p in manual.paragraphs])
         job.publish({"type": "manual_read", "paragraphs": len(manual.paragraphs)})
 
         # -- 2. understand -------------------------------------------------
         job.phase("planning", "Working out the tasks")
-        spec, repairs, ingest_usage = extract_labspec(
-            manual, build_model(settings, phase="ingest")
+        # The request goes INTO the ingest call, so the model resolves "only
+        # task 3" against the task list it is reading in the same breath and
+        # cannot name a task that does not exist.
+        reading = extract_labspec(
+            manual, build_model(settings, phase="ingest"), instructions
         )
-        usage.phase("ingest").merge(ingest_usage)
+        usage.phase("ingest").merge(reading.usage)
 
-        if not spec.tasks:
-            job.finish(
-                error=(
-                    "No tasks could be found in this manual. It may use a layout the "
-                    "reader does not recognise -- try adding the tasks as extra "
-                    "instructions."
-                )
-            )
+        # NOT EVERY UPLOAD IS A LAB. This used to be a hallucination path: the
+        # extraction prompt opened by asserting the document WAS a lab manual,
+        # so a CV or an invoice was read with that framing and the model
+        # obligingly invented tasks, which were then solved, annotated and
+        # zipped. The guard that lived here was unreachable -- extraction
+        # raised rather than returning an empty list -- so the honest failure
+        # surfaced as a raw "SpecError: ..." string in the chat.
+        if not reading.is_lab:
+            job.finish(error=_not_a_lab(reading))
             return
 
-        # The extra-instructions seam. Everything downstream sees the augmented
-        # spec; the original manual is never touched.
-        spec = apply_instructions(spec, instructions)
+        spec, repairs, intent = reading.spec, reading.repairs, reading.intent
+
+        # Narrow to what was asked for. Prerequisites come along, because an
+        # artifact that cannot run is not a deliverable -- and they are named,
+        # because arriving with more than you asked for should never be silent.
+        spec, pulled = scope(spec, intent)
 
         job.publish(
             {
@@ -363,8 +478,22 @@ def run_job(
                 "task_count": len(spec.tasks),
                 "tasks": [{"id": t.id, "title": t.title} for t in spec.tasks],
                 "anchor_repairs": len(repairs),
+                "scoped": intent.task_ids is not None,
+                "pulled_in": pulled,
             }
         )
+        if pulled:
+            job.publish(
+                {
+                    "type": "narration",
+                    "text": (
+                        f"You asked for {', '.join(intent.task_ids)}. "
+                        f"{'It needs' if len(pulled) == 1 else 'They need'} "
+                        f"{', '.join(pulled)} to run, so I am including "
+                        f"{'that' if len(pulled) == 1 else 'those'} too."
+                    ),
+                }
+            )
 
         # -- 3. brief: decide what to ask, and how the cover should look ----
         #
@@ -397,14 +526,43 @@ def run_job(
         )
 
         questions, known = build_questions(profile_seed, facts, plan.questions)
-        job.publish({"type": "questions_ready", "known": known})
+
+        # WHAT I WILL PRODUCE, offered as one more field in the pause that
+        # already exists rather than as a new control. Decision 3: the agent
+        # proposes, you confirm or redirect, once, before anything is spent.
+        # An explicit request in the chat wins over the agent's proposal.
+        proposed = list(intent.artifacts or plan.artifacts or DEFAULT_ARTIFACTS)
+        questions.append(
+            {
+                "key": "artifacts",
+                "label": "Files to produce",
+                "value": ", ".join(proposed),
+                "required": False,
+                "hint": plan.artifacts_reason
+                or "Any of: docx, ipynb, py, md, zip. Edit if you want something else.",
+            }
+        )
+        job.publish(
+            {"type": "questions_ready", "known": known, "proposed_artifacts": proposed}
+        )
         answers = job.ask(questions, timeout_s=ASK_TIMEOUT_S) if questions else {}
         profile = profile_from({**profile_seed, **answers})
 
-        # The extra-instructions seam, applied AFTER the pause so anything the
-        # student typed while the agent was thinking is included. Everything
-        # downstream sees the augmented spec; the manual is never touched.
-        spec = apply_instructions(spec, instructions)
+        # The agent's own answers fold into the intent, and the intent reaches
+        # the solver. The pause was moved before the solve so replies could
+        # shape the code; this is the wire that finally makes that true.
+        intent = intent.with_notes(answered_notes(questions, answers))
+
+        chosen = [
+            a.strip().lower().lstrip(".")
+            for a in str(answers.get("artifacts", "")).replace(",", " ").split()
+        ]
+        intent = replace(intent, artifacts=[a for a in chosen if a in REGISTRY] or proposed)
+
+        # ONE application, not two. This ran at ingest AND again here, on the
+        # accumulating spec, so every task statement carried the narration
+        # block and the student's instructions twice on every web run.
+        spec = apply_instructions(spec, intent.notes)
 
         # -- 4. solve ------------------------------------------------------
         job.phase("solving", "Solving each task")
@@ -452,9 +610,11 @@ def run_job(
             plan=plan,
             manual_path=manual_path,
             settings=settings,
+            anchors=reading.anchors,
+            intent=intent,
         )
 
-        _emit_report_and_package(job, job.context, manifest.outcomes, usage)
+        _emit(job, job.context, manifest.outcomes, usage)
 
         recorder_events = recorder.events
         store.write_log(
@@ -517,6 +677,21 @@ def revise_job(job: Job, feedback: str) -> None:
         )
         usage.phase("revise").merge(rev_usage)
 
+        # A REVISION MAY CHANGE THE FORMAT. It could not before: `_emit` reads
+        # `context.intent.artifacts`, frozen at the first run, so "actually
+        # give me a notebook" re-solved every targeted task and handed back the
+        # same .docx. `read_revision` only ever extracted task ids and an
+        # instruction, so there was no path from the feedback to the emitters.
+        wanted = detect_formats(feedback)
+        if wanted and wanted != list(context.intent.artifacts):
+            context.intent = replace(context.intent, artifacts=wanted)
+            job.publish(
+                {
+                    "type": "narration",
+                    "text": f"Switching the output to: {', '.join(wanted)}.",
+                }
+            )
+
         targets = revision.task_ids
         if revision.everything:
             job.publish(
@@ -577,7 +752,7 @@ def revise_job(job: Job, feedback: str) -> None:
                 explainer=build_explainer(settings, usage),
             )
 
-        _emit_report_and_package(job, context, resumed.outcomes, usage)
+        _emit(job, context, resumed.outcomes, usage)
 
         passed = sum(1 for o in resumed.outcomes if o.status == "passed")
         job.finish(

@@ -61,6 +61,14 @@ export const Archive = ({ size = 17 }) => (
   </svg>
 )
 
+export const Notebook = ({ size = 17 }) => (
+  <svg {...base} width={size} height={size}>
+    <rect x="5" y="3" width="14" height="18" rx="2" />
+    <path d="M5 8h14M5 14h14" />
+    <path d="M9 3v18" />
+  </svg>
+)
+
 export const CodeFile = ({ size = 17 }) => (
   <svg {...base} width={size} height={size}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />

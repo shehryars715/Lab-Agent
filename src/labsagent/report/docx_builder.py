@@ -113,6 +113,7 @@ def annotate_manual(
     out_path: Path,
     outcomes: list[TaskOutcome],
     cover: CoverInfo | None = None,
+    anchors: dict[str, int] | None = None,
 ) -> Path:
     """Copy the manual and insert each task's work beneath its anchor.
 
@@ -133,10 +134,10 @@ def annotate_manual(
     # stay valid across sibling inserts.
     resolved: list[tuple[Paragraph, TaskOutcome]] = []
     for outcome in outcomes:
-        idx = outcome.task.anchor_idx
+        idx = (anchors or {}).get(outcome.task.id, -1)
         if not (0 <= idx < len(paragraphs)):
             raise IndexError(
-                f"{outcome.task.id}: anchor_idx {idx} outside document "
+                f"{outcome.task.id}: anchor {idx} outside document "
                 f"(0..{len(paragraphs) - 1})"
             )
         anchor = paragraphs[idx]

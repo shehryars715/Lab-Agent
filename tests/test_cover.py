@@ -133,3 +133,48 @@ class TestCoverFrom:
         spec = LabSpec(lab_number="1", title="T", tasks=[])
         info = cover_from(spec, StudentProfile(name="S", cms_id="1"), CoverFacts(section="BSDS-02A"))
         assert info.section == "BSDS-02A"
+
+
+def test_cover_works_on_a_manual_that_lacks_the_table_grid_style(tmp_path):
+    """REGRESSION. The cover used to do `table.style = "Table Grid"`, which
+    only works if the HOST document defines that style -- and Word writes only
+    the styles a document actually uses. A real lab in this repo (Lab 13, 21
+    styles) does not have it; another (Lab 10, 57 styles) does. On Lab 13 the
+    KeyError cost the entire Word report after every task had been solved.
+
+    Built here by deleting the style from a fresh document, so the test does
+    not depend on a binary that git ignores anyway.
+    """
+    import docx
+
+    from labsagent.report.cover import CoverInfo, build_cover
+
+    doc = docx.Document()
+    grid = doc.styles["Table Grid"]
+    grid.element.getparent().remove(grid.element)
+    assert "Table Grid" not in {st.name for st in doc.styles}
+
+    build_cover(doc, CoverInfo(lab_number="13", lab_title="K-Means", student_name="A Student"))
+
+    out = tmp_path / "cover.docx"
+    doc.save(str(out))
+    assert out.stat().st_size > 0
+    text = " ".join(p.text for p in docx.Document(str(out)).paragraphs)
+    assert "K-Means" in text
+
+
+def test_the_field_table_is_bordered_without_a_named_style(tmp_path):
+    """The borders must be real, not merely non-fatal."""
+    import docx
+    from docx.oxml.ns import qn
+
+    from labsagent.report.cover import CoverInfo, build_cover
+
+    doc = docx.Document()
+    build_cover(doc, CoverInfo(lab_number="03", lab_title="Loops", student_name="A Student"))
+
+    tables = doc.tables
+    assert tables, "the classic cover lays its details out in a table"
+    borders = tables[0]._tbl.tblPr.find(qn("w:tblBorders"))
+    assert borders is not None, "borders are written directly, not via a style"
+    assert borders.find(qn("w:insideH")) is not None

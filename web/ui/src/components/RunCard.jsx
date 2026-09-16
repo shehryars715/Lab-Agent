@@ -1,6 +1,7 @@
 import { formatBytes, formatElapsed, formatUsd, downloadUrl } from '../api'
 import DownloadRow from './DownloadRow'
-import { Archive, Check, Close, CodeFile, Doc } from './Icons'
+import { Check, Close } from './Icons'
+import { iconFor, ordered } from '../lib/artifacts'
 import Working, { useElapsed } from './Working'
 
 /** One card that starts as "working" and becomes the result.
@@ -52,9 +53,12 @@ function TaskList({ run }) {
 function Result({ run, jobId, elapsed }) {
   const s = run.summary
   const perfect = s.failed === 0
-  const report = run.artifacts.find((a) => a.kind === 'report')
-  const pkg = run.artifacts.find((a) => a.kind === 'package')
-  const code = run.artifacts.filter((a) => a.kind === 'code')
+  // WHATEVER CAME BACK, not two named slots. This used to look for exactly
+  // kind 'report' and kind 'package', which is why the notebook -- built on
+  // every run -- had nowhere to appear and could only be reached by unzipping
+  // the archive. Asking for a .py now yields a .py row, not an archive
+  // containing one file.
+  const artifacts = ordered(run.artifacts)
 
   return (
     <div className="result">
@@ -74,35 +78,20 @@ function Result({ run, jobId, elapsed }) {
       </div>
 
       <div className="downloads">
-        {report && (
-          <DownloadRow
-            href={downloadUrl(jobId, report.key)}
-            icon={<Doc />}
-            name="Report"
-            sub={`${report.filename} · ${formatBytes(report.bytes)}`}
-            primary
-            delay={0}
-          />
-        )}
-        {pkg && (
-          <DownloadRow
-            href={downloadUrl(jobId, pkg.key)}
-            icon={<Archive />}
-            name="Complete package"
-            sub={`Report, code, screenshots, notebook · ${formatBytes(pkg.bytes)}`}
-            delay={50}
-          />
-        )}
-        {code.map((a, i) => (
-          <DownloadRow
-            key={a.key}
-            href={downloadUrl(jobId, a.key)}
-            icon={<CodeFile />}
-            name={a.label}
-            sub={`${a.filename} · ${formatBytes(a.bytes)}`}
-            delay={90 + i * 40}
-          />
-        ))}
+        {artifacts.map((a, i) => {
+          const Icon = iconFor(a.kind)
+          return (
+            <DownloadRow
+              key={a.key}
+              href={downloadUrl(jobId, a.key)}
+              icon={<Icon />}
+              name={a.label}
+              sub={`${a.filename} · ${formatBytes(a.bytes)}`}
+              primary={i === 0}
+              delay={i * 40}
+            />
+          )
+        })}
       </div>
     </div>
   )

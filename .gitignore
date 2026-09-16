@@ -49,3 +49,9 @@ htmlcov/
 *.swp
 .DS_Store
 Thumbs.db
+
+# --- generated test inputs and their results ----------------------------------
+# `web/fixtures/make_inputs.py` rebuilds these on demand, and `*.docx` above
+# already excludes one of them -- keeping the rest would be half a fixture set.
+web/fixtures/inputs/
+web/fixtures/matrix_out/

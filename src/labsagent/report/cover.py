@@ -43,7 +43,7 @@ from docx.oxml.ns import qn
 from docx.oxml.parser import OxmlElement
 from docx.shared import Pt, RGBColor
 
-from labsagent.report.docx_utils import shade, tighten
+from labsagent.report.docx_utils import shade, table_borders, tighten
 
 FIELD_LABEL_WIDTH_IN = 1.9
 TITLE_SIZE_PT = 22
@@ -159,7 +159,9 @@ def _rule(doc, *, thick: bool = False, before: float = 4, after: float = 10):
 def _field_table(doc, rows: list[tuple[str, str]], *, bordered: bool = True):
     table = doc.add_table(rows=0, cols=2)
     if bordered:
-        table.style = "Table Grid"
+        # NOT `table.style = "Table Grid"` -- see `table_borders`. This runs
+        # against the student's own manual, which may not define that style.
+        table_borders(table)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for label, value in rows:
         cells = table.add_row().cells

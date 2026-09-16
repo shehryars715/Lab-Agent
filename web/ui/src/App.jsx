@@ -59,7 +59,9 @@ export default function App() {
 
   const start = useCallback(
     async (instructions = '') => {
-      if (!file) return
+      // A file is no longer required -- a lab can be pasted straight into
+      // the message. One of the two must exist, though.
+      if (!file && !instructions.trim()) return
       setBusy(true)
       setError(null)
       try {

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
@@ -109,6 +110,24 @@ particular lab actually does. It appears under the title. It must be specific
 to this lab's contents, not a restatement of the course. Example:
 "A single-layer perceptron, trained from scratch without a framework."
 
+PART THREE -- WHAT TO PRODUCE.
+
+Say which files this lab should come back as, in `artifacts`, from exactly this
+set:
+  docx   a Word report: the manual itself, annotated in place under each task
+  ipynb  a Jupyter/Colab notebook with the outputs already in it
+  py     a plain Python script, just the code
+  md     a markdown write-up
+  zip    an archive of the above
+
+Follow the manual's own submission instructions when it gives any -- "submit
+only the .ipynb on LMS" means ["ipynb"]. Follow the student's request when they
+made one. When neither says anything, ["docx", "ipynb", "zip"] is the sensible
+default for a lab that wants a written report.
+
+In `artifacts_reason`, say in ONE short line why -- the student sees it and can
+redirect you before you start. Quote the manual if it told you.
+
 Return ONLY a JSON object matching this schema exactly:
 
 {schema}
@@ -127,7 +146,9 @@ SCHEMA_HINT = """{
       "reason": "Determines whether I generate data or read a file."
     }
   ],
-  "cover": { "layout": "rule", "tagline": "Perceptron training, no framework." }
+  "cover": { "layout": "rule", "tagline": "Perceptron training, no framework." },
+  "artifacts": ["docx", "zip"],
+  "artifacts_reason": "The manual asks for a Word report."
 }"""
 
 _SLUG = re.compile(r"[^a-z0-9_]+")
@@ -148,6 +169,8 @@ class CoverChoice(BaseModel):
 class Briefing(BaseModel):
     questions: list[ProposedQuestion] = Field(default_factory=list)
     cover: CoverChoice = Field(default_factory=CoverChoice)
+    artifacts: list[str] = Field(default_factory=list)
+    artifacts_reason: str = ""
 
 
 @dataclass
@@ -157,6 +180,10 @@ class Plan:
     questions: list[dict[str, Any]]
     layout: str
     tagline: str
+    #: Formats the agent thinks this lab wants, shown at the pause so the
+    #: student can redirect once, before any solving money is spent.
+    artifacts: list[str] = dataclass_field(default_factory=list)
+    artifacts_reason: str = ""
 
     @property
     def asked(self) -> bool:
@@ -231,10 +258,14 @@ def _to_plan(briefing: Briefing, taken: set[str]) -> Plan:
 
     layout = (briefing.cover.layout or "").strip().lower()
     tagline = (briefing.cover.tagline or "").strip()
+    known = {"docx", "ipynb", "py", "md", "zip"}
+    artifacts = [a.strip().lower().lstrip(".") for a in briefing.artifacts]
     return Plan(
         questions=questions,
         layout=layout if layout in LAYOUTS else "classic",
         tagline=tagline[:160],
+        artifacts=[a for a in artifacts if a in known],
+        artifacts_reason=(briefing.artifacts_reason or "").strip()[:160],
     )
 
 
@@ -266,7 +297,7 @@ def read_briefing(spec, facts, profile, instructions: str, model) -> tuple[Plan,
     # A run that cannot plan is still a run. The cover falls back to classic,
     # the tagline is empty, and no questions are asked -- all of which are the
     # behaviour of the tool before this module existed.
-    return Plan(questions=[], layout="classic", tagline=""), _usage(handler)
+    return Plan(questions=[], layout="classic", tagline="", artifacts=[]), _usage(handler)
 
 
 def _usage(handler) -> Usage:

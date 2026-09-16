@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { formatBytes, formatUsd, historyDownloadUrl, loadHistoryRun } from '../api'
 import DownloadRow from './DownloadRow'
-import { Archive, Check, Close, CodeFile, Doc } from './Icons'
+import { Check, Close } from './Icons'
+import { iconFor, ordered } from '../lib/artifacts'
 
 /** A run you already paid for.
  *
@@ -11,7 +12,7 @@ import { Archive, Check, Close, CodeFile, Doc } from './Icons'
  *  in memory.
  */
 
-const ICONS = { report: Doc, package: Archive, code: CodeFile }
+
 
 function when(iso) {
   if (!iso) return ''
@@ -64,8 +65,8 @@ export default function HistoryView({ runId, onBack }) {
   }
 
   const perfect = run.failed === 0
-  const report = run.artifacts.find((a) => a.kind === 'report')
-  const pkg = run.artifacts.find((a) => a.kind === 'package')
+  // Same generic list as the live result card -- see lib/artifacts.js.
+  const files = ordered(run.artifacts).filter((a) => a.kind !== 'code')
   const code = run.artifacts.filter((a) => a.kind === 'code')
 
   return (
@@ -84,27 +85,21 @@ export default function HistoryView({ runId, onBack }) {
       </div>
 
       <div className="dl-group">
-        {report && (
-          <DownloadRow
-            href={historyDownloadUrl(runId, report.key)}
-            icon={<Doc />}
-            name="Report"
-            sub={`${report.filename} · ${formatBytes(report.bytes)}`}
-            primary
-            delay={0}
-          />
-        )}
-        {pkg && (
-          <div style={{ marginTop: 10 }}>
-            <DownloadRow
-              href={historyDownloadUrl(runId, pkg.key)}
-              icon={<Archive />}
-              name="Complete package"
-              sub={`Report, code, screenshots and notebook · ${formatBytes(pkg.bytes)}`}
-              delay={60}
-            />
-          </div>
-        )}
+        {files.map((a, i) => {
+          const Icon = iconFor(a.kind)
+          return (
+            <div key={a.key} style={i === 0 ? undefined : { marginTop: 10 }}>
+              <DownloadRow
+                href={historyDownloadUrl(runId, a.key)}
+                icon={<Icon />}
+                name={a.label}
+                sub={`${a.filename} · ${formatBytes(a.bytes)}`}
+                primary={i === 0}
+                delay={i * 60}
+              />
+            </div>
+          )
+        })}
       </div>
 
       {code.length > 0 && (
@@ -114,7 +109,7 @@ export default function HistoryView({ runId, onBack }) {
           </p>
           <div className="code-list">
             {code.map((a, i) => {
-              const Icon = ICONS[a.kind] ?? CodeFile
+              const Icon = iconFor(a.kind)
               return (
                 <DownloadRow
                   key={a.key}

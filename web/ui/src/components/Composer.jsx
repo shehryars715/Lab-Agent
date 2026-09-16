@@ -2,17 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { formatBytes } from '../api'
 import { ArrowUp, Paperclip, Close } from './Icons'
 
-const ACCEPT = '.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+const ACCEPT = '.docx,.pdf,.ipynb,.md,.txt,.py,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const MAX_BYTES = 25 * 1024 * 1024
 
 /** The input, and the gate on it.
  *
- *  UPLOAD IS REQUIRED BEFORE CHATTING, and the composer says so rather than
- *  silently refusing. Everything this tool does is downstream of one document,
- *  so a message typed into an empty chat would have nothing to act on -- and a
- *  disabled button with no explanation is the most annoying possible way to
- *  communicate that. The placeholder states the requirement and the attach
- *  button is the only enabled control.
+ *  A DOCUMENT IS REQUIRED, BUT NOT A FILE. Everything downstream starts from
+ *  something to read, so an empty message with no attachment has nothing to
+ *  act on -- but that something can equally be pasted into the box. The
+ *  composer therefore invites both and refuses neither, which is why the
+ *  textarea is live in 'need-file' where it used to be disabled.
  *
  *  After a run, typing means something different: it is a change request. The
  *  placeholder changes with it, because the same box doing two jobs needs to
@@ -47,14 +46,14 @@ export default function Composer({
   }
 
   const placeholder = {
-    'need-file': 'Attach a lab manual to begin…',
+    'need-file': 'Attach a lab, or paste the tasks here…',
     brief: 'Anything else I should know?  (optional)',
     working: 'I’m working — you can add notes for the next run…',
     waiting: 'Answer in the card above…',
     revise: 'Describe a change — “redo task 3 with pandas”',
   }[mode]
 
-  const canSend = text.trim().length > 0 && !busy && mode !== 'need-file' && mode !== 'waiting'
+  const canSend = text.trim().length > 0 && !busy && mode !== 'waiting'
 
   function send() {
     if (!canSend) return
@@ -112,9 +111,9 @@ export default function Composer({
           <button
             className="composer-attach"
             onClick={() => inputRef.current?.click()}
-            aria-label="Attach a lab manual"
+            aria-label="Attach a lab document"
             type="button"
-            title="Attach a .docx lab manual"
+            title="Attach a lab: .docx, .pdf, .ipynb, .md, .txt or .py"
           >
             <Paperclip />
           </button>
@@ -124,7 +123,7 @@ export default function Composer({
             rows={1}
             value={text}
             placeholder={placeholder}
-            disabled={mode === 'need-file' || mode === 'waiting'}
+            disabled={mode === 'waiting'}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               // Enter sends, Shift+Enter breaks the line -- the convention
@@ -149,7 +148,7 @@ export default function Composer({
       </div>
       <p className="composer-note">
         {mode === 'need-file'
-          ? 'A .docx lab manual is required — everything I do starts from your document.'
+          ? 'Attach a .docx, .pdf, .ipynb or .md — or just paste the tasks here.'
           : mode === 'revise'
             ? 'I’ll redo only the tasks your change affects.'
             : 'A run takes one to three minutes and costs about a fifth of a cent.'}

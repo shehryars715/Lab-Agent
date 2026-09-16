@@ -24,6 +24,10 @@ BUILD = Path("build/demo")
 ROLL_NO = "22F-1234"
 
 # Hardcoded for Phase 0. Phase 2 derives all of this from the manual.
+# Anchors are a side table now -- a paragraph index belongs to the document,
+# not to the task.
+ANCHORS = {"task1": 8, "task2": 10, "task3": 13}
+
 HARDCODED = [
     (
         Task(
@@ -31,7 +35,6 @@ HARDCODED = [
             title="Sum of Two Numbers",
             statement="Read two integers and print their sum.",
             sample_inputs=["5", "3"],
-            anchor_idx=8,
         ),
         'n = int(input("Enter n: "))\n'
         'm = int(input("Enter m: "))\n'
@@ -45,7 +48,6 @@ HARDCODED = [
             title="Even Numbers",
             statement="Print even numbers from 1 to n.",
             sample_inputs=["10"],
-            anchor_idx=10,
         ),
         'limit = int(input("Enter limit: "))\n'
         "evens = [str(i) for i in range(2, limit + 1, 2)]\n"
@@ -59,7 +61,6 @@ HARDCODED = [
             title="Reverse a List",
             statement="Read 5 integers and print the list reversed.",
             sample_inputs=["1", "2", "3", "4", "5"],
-            anchor_idx=13,
             wants_explanation=True,
         ),
         "values = []\n"
@@ -137,7 +138,9 @@ def main() -> int:
             )
             print(f"  {task.id}: {outcomes[-1].status} ({len(shots)} screenshot(s))")
 
-    report = annotate_manual(MANUAL, BUILD / f"Lab{spec.lab_number}_Report.docx", outcomes)
+    report = annotate_manual(
+        MANUAL, BUILD / f"Lab{spec.lab_number}_Report.docx", outcomes, anchors=ANCHORS
+    )
     archive = build_submission(
         BUILD / f"Lab{spec.lab_number}_{ROLL_NO}.zip", report, outcomes
     )

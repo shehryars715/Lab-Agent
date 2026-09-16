@@ -13,8 +13,10 @@ dependencies = [
     "matplotlib>=3.11.2",
     "nbformat>=5.11.1",
     "numpy>=2.5.3",
+    "pandas>=3.0.5",
     "pillow>=12.3.0",
     "pydantic-settings>=2.15.0",
+    "pypdf>=6.19.0",
     "python-docx>=1.2.0",
     "scikit-learn>=1.9.1",
     "scipy>=1.18.1",
@@ -32,3 +34,15 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+# WHY THIS IS PINNED. pytest's default `python_files` is `test_*.py *_test.py`,
+# so without this it walks the whole repo and imports anything matching --
+# including `web/smoke_test.py` and `web/matrix_test.py`, neither of which
+# contains a unit test. Importing them is not free: a module-level error in a
+# collected file does not skip that file, it prints "Interrupted: N errors
+# during collection" and you lose the entire suite.
+#
+# Both live-test scripts are written to be import-safe anyway. This is the
+# second guard, and the one that does not depend on anyone remembering.
+testpaths = ["tests"]

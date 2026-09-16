@@ -35,6 +35,8 @@ from labsagent.config import PROJECT_ROOT, load_settings
 
 from . import history
 from .jobs import HEARTBEAT_S, JobRegistry
+from labsagent.ingest.readers import ACCEPTED_SUFFIXES
+
 from .pipeline import UPLOADS_ROOT, revise_job, run_job
 
 # The upload ceiling. A lab manual is tens of kilobytes; this exists to turn a
@@ -45,6 +47,12 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 # Checking this and not just the extension is the difference between validating
 # a file and validating a filename -- an .exe renamed to .docx passes the
 # second check and fails the first.
+#
+# This is still applied, but only to .docx. It used to be the gate for EVERY
+# upload, which had it backwards in both directions: a PDF or a notebook lab
+# was refused for not being a ZIP, while any .xlsx, .pptx or renamed .zip
+# sailed through and failed deeper in. The extension now picks the reader, and
+# the magic bytes verify the one format whose container they describe.
 ZIP_MAGIC = b"PK"
 
 app = FastAPI(title="Labs-Agent", docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -86,36 +94,61 @@ def health() -> dict:
 
 @app.post("/api/runs", status_code=202)
 async def create_run(
-    manual: UploadFile = File(...),
+    manual: UploadFile | None = File(None),
     instructions: str = Form(""),
     name: str = Form(""),
     cms_id: str = Form(""),
     section: str = Form(""),
     program: str = Form(""),
 ) -> dict:
-    data = await manual.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"File is larger than {MAX_UPLOAD_BYTES // 1024 // 1024} MB.")
-    if not data.startswith(ZIP_MAGIC):
-        raise HTTPException(
-            415,
-            "That does not look like a .docx. Word documents are ZIP containers, and "
-            "this file does not start like one -- if it is a .doc, open it in Word and "
-            "save as .docx.",
+    # NO FILE IS A VALID RUN. The lab can simply be typed or pasted into the
+    # composer, in which case the message is the document.
+    if manual is None or not (manual.filename or "").strip():
+        if not instructions.strip():
+            raise HTTPException(
+                422,
+                "Nothing to work from. Attach a lab file, or paste the tasks into "
+                "the message and I will read them from there.",
+            )
+        job = registry.create()
+        job.publish({"type": "accepted", "filename": None, "bytes": 0})
+        manual_path = None
+    else:
+        data = await manual.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                413, f"File is larger than {MAX_UPLOAD_BYTES // 1024 // 1024} MB."
+            )
+
+        name = Path(manual.filename or "manual.docx").name
+        suffix = Path(name).suffix.lower()
+        if suffix not in ACCEPTED_SUFFIXES:
+            raise HTTPException(
+                415,
+                f"I cannot read {suffix or 'a file with no extension'}. "
+                f"Try one of: {', '.join(ACCEPTED_SUFFIXES)} -- or paste the tasks "
+                "into the message instead.",
+            )
+        if suffix == ".docx" and not data.startswith(ZIP_MAGIC):
+            raise HTTPException(
+                415,
+                "That is named .docx but is not one. Word documents are ZIP "
+                "containers and this file does not start like one -- if it is a "
+                ".doc, open it in Word and save as .docx.",
+            )
+
+        job = registry.create()
+
+        # Path(...).name strips any directory component the client sent, so a
+        # filename like "../../.env" lands as ".env" inside the job's own folder.
+        upload_dir = UPLOADS_ROOT / job.id
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        manual_path = upload_dir / name
+        manual_path.write_bytes(data)
+
+        job.publish(
+            {"type": "accepted", "filename": manual_path.name, "bytes": len(data)}
         )
-
-    job = registry.create()
-
-    # Path(...).name strips any directory component the client sent, so a
-    # filename like "../../.env" lands as ".env" inside the job's own folder.
-    upload_dir = UPLOADS_ROOT / job.id
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    manual_path = upload_dir / (Path(manual.filename or "manual.docx").name)
-    manual_path.write_bytes(data)
-
-    job.publish(
-        {"type": "accepted", "filename": manual_path.name, "bytes": len(data)}
-    )
 
     threading.Thread(
         target=run_job,

@@ -22,8 +22,9 @@ export const PHASES = [
   { key: 'reading', label: 'Reading', hue: 210 },
   { key: 'planning', label: 'Planning', hue: 265 },
   { key: 'solving', label: 'Solving', hue: 285 },
-  { key: 'building', label: 'Report', hue: 190 },
-  { key: 'packaging', label: 'Packaging', hue: 160 },
+  // One phase, because there is no longer a fixed report-then-package pair --
+  // a run emits whatever was asked for, and how many files that is varies.
+  { key: 'emitting', label: 'Producing files', hue: 175 },
 ]
 
 const NARRATION_MAX = 400
