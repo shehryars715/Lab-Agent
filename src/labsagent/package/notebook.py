@@ -24,6 +24,19 @@ COLAB_SETUP = (
 )
 
 
+def _leading_prose(outcome):
+    """Prose blocks the caller put BEFORE the first code block, if any."""
+    blocks = getattr(outcome, "blocks", None)
+    if not blocks:
+        return []
+    out = []
+    for block in blocks:
+        if block.kind != "prose":
+            break
+        out.append(block)
+    return out
+
+
 def _image_output(path: Path) -> nbf.NotebookNode:
     data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
     return nbf.v4.new_output(
@@ -53,6 +66,22 @@ def build_notebook(
         task = outcome.task
         heading = [f"## {task.title}", "", task.statement]
         cells.append(nbf.v4.new_markdown_cell("\n".join(heading)))
+
+        # PROSE THAT COMES BEFORE THE CODE, as its own markdown cell.
+        #
+        # This module reads TaskOutcome's named fields rather than the block
+        # list, which is why it is the one emitter a `blocks`-only addition
+        # does not reach for free. The provenance line -- "Data used: iris.csv
+        # (from Kaggle dataset uciml/iris)" -- is exactly that kind of
+        # addition, and a notebook that calls read_csv without saying where the
+        # file came from is the least reproducible of the four formats.
+        #
+        # Deliberately narrow: only LEADING prose, and only when the caller set
+        # `blocks` explicitly. `blocks_for()` synthesises a list whose prose
+        # (the explanation) comes last, so calling it here would duplicate the
+        # explanation cell at the bottom of every task.
+        for block in _leading_prose(outcome):
+            cells.append(nbf.v4.new_markdown_cell(block.text))
 
         if outcome.status != "passed":
             cells.append(

@@ -37,6 +37,10 @@ Rules that matter:
   display attached, so plt.show() produces nothing. Save one file per figure the
   task asks for, and call plt.close() between figures.
 - numpy, matplotlib, scipy, scikit-learn and pandas are available.
+- When the task lists data files, they are already saved in your workspace.
+  Open them by name -- pd.read_csv("sales.csv"), not a full path and not a
+  URL. Never download anything, never invent substitute data, and never open
+  a data file with read_file: the task already gives you its columns.
 - Never read an image file. You cannot see images, and a plot read as text is
   tens of thousands of tokens of noise. If run_solution exits 0, any figure the
   program saved was saved correctly -- there is nothing to check.

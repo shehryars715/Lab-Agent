@@ -35,6 +35,7 @@ from labsagent.config import PROJECT_ROOT, load_settings
 
 from . import history
 from .jobs import HEARTBEAT_S, JobRegistry
+from labsagent.data import DATA_SUFFIXES
 from labsagent.ingest.readers import ACCEPTED_SUFFIXES
 
 from .pipeline import UPLOADS_ROOT, revise_job, run_job
@@ -42,6 +43,15 @@ from .pipeline import UPLOADS_ROOT, revise_job, run_job
 # The upload ceiling. A lab manual is tens of kilobytes; this exists to turn a
 # wrong-file-selected mistake into a fast error rather than a slow one.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+# Data gets its own, larger ceiling, because the two are different kinds of
+# mistake. A 30 MB "manual" is the wrong file; a 30 MB CSV is Tuesday. The real
+# cap lives in Settings, so the CLI and the server cannot disagree about it.
+MAX_DATA_BYTES = load_settings().max_dataset_bytes
+
+# At most this many data files in one run. The same number bounds the upload
+# handler, the prompt block and the per-task copy.
+MAX_DATA_FILES = 8
 
 # A .docx is a ZIP container, so it starts with the ZIP local file header.
 # Checking this and not just the extension is the difference between validating
@@ -92,9 +102,53 @@ def health() -> dict:
 # --------------------------------------------------------------------- runs
 
 
+async def _save_datasets(uploads, upload_dir: Path) -> list[Path]:
+    """Validate and store attached data files. Returns where they landed.
+
+    Checked by SUFFIX and SIZE only. The .docx gets its magic bytes verified
+    because it claims to be a ZIP container and either is one or is not; a CSV
+    has no signature to check. Its real validation is `data.preview`, which
+    either parses the file into a table or says plainly that it could not.
+    """
+    saved: list[Path] = []
+    real = [u for u in (uploads or []) if u is not None and (u.filename or "").strip()]
+    if not real:
+        return saved
+
+    if len(real) > MAX_DATA_FILES:
+        raise HTTPException(
+            413,
+            f"That is {len(real)} data files; I take at most {MAX_DATA_FILES}. "
+            "Attach the ones the lab actually uses, or zip them together.",
+        )
+
+    for upload in real:
+        # Path(...).name strips any directory component the client sent, so a
+        # filename like "../../.env" lands as ".env" inside the job's own folder.
+        filename = Path(upload.filename or "data.csv").name
+        suffix = Path(filename).suffix.lower()
+        if suffix not in DATA_SUFFIXES:
+            raise HTTPException(
+                415,
+                f"I cannot read {filename} as data. Data files can be: "
+                f"{', '.join(DATA_SUFFIXES)}.",
+            )
+        blob = await upload.read()
+        if len(blob) > MAX_DATA_BYTES:
+            raise HTTPException(
+                413, f"{filename} is larger than {MAX_DATA_BYTES // 1024 // 1024} MB."
+            )
+        target = upload_dir / filename
+        target.write_bytes(blob)
+        saved.append(target)
+
+    return saved
+
+
 @app.post("/api/runs", status_code=202)
 async def create_run(
     manual: UploadFile | None = File(None),
+    datasets: list[UploadFile] | None = File(None),
     instructions: str = Form(""),
     name: str = Form(""),
     cms_id: str = Form(""),
@@ -103,25 +157,29 @@ async def create_run(
 ) -> dict:
     # NO FILE IS A VALID RUN. The lab can simply be typed or pasted into the
     # composer, in which case the message is the document.
-    if manual is None or not (manual.filename or "").strip():
-        if not instructions.strip():
-            raise HTTPException(
-                422,
-                "Nothing to work from. Attach a lab file, or paste the tasks into "
-                "the message and I will read them from there.",
-            )
-        job = registry.create()
-        job.publish({"type": "accepted", "filename": None, "bytes": 0})
-        manual_path = None
-    else:
-        data = await manual.read()
-        if len(data) > MAX_UPLOAD_BYTES:
+    has_manual = manual is not None and bool((manual.filename or "").strip())
+    if not has_manual and not instructions.strip():
+        raise HTTPException(
+            422,
+            "Nothing to work from. Attach a lab file, or paste the tasks into "
+            "the message and I will read them from there.",
+        )
+
+    manual_bytes = b""
+    manual_name = ""
+    if has_manual:
+        manual_bytes = await manual.read()
+        if len(manual_bytes) > MAX_UPLOAD_BYTES:
             raise HTTPException(
                 413, f"File is larger than {MAX_UPLOAD_BYTES // 1024 // 1024} MB."
             )
 
-        name = Path(manual.filename or "manual.docx").name
-        suffix = Path(name).suffix.lower()
+        # A LOCAL NAME, not the `name` form field. This used to assign straight
+        # over it -- so any run started with a file attached filed its report
+        # under "lab03_manual.docx" instead of under whoever sent it, and the
+        # browser's remembered identity was silently discarded.
+        manual_name = Path(manual.filename or "manual.docx").name
+        suffix = Path(manual_name).suffix.lower()
         if suffix not in ACCEPTED_SUFFIXES:
             raise HTTPException(
                 415,
@@ -129,7 +187,7 @@ async def create_run(
                 f"Try one of: {', '.join(ACCEPTED_SUFFIXES)} -- or paste the tasks "
                 "into the message instead.",
             )
-        if suffix == ".docx" and not data.startswith(ZIP_MAGIC):
+        if suffix == ".docx" and not manual_bytes.startswith(ZIP_MAGIC):
             raise HTTPException(
                 415,
                 "That is named .docx but is not one. Word documents are ZIP "
@@ -137,24 +195,35 @@ async def create_run(
                 ".doc, open it in Word and save as .docx.",
             )
 
-        job = registry.create()
+    job = registry.create()
 
-        # Path(...).name strips any directory component the client sent, so a
-        # filename like "../../.env" lands as ".env" inside the job's own folder.
-        upload_dir = UPLOADS_ROOT / job.id
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        manual_path = upload_dir / name
-        manual_path.write_bytes(data)
+    # Made unconditionally now: data can arrive with a pasted lab and no file,
+    # and it still needs somewhere of its own to land.
+    upload_dir = UPLOADS_ROOT / job.id
+    upload_dir.mkdir(parents=True, exist_ok=True)
 
-        job.publish(
-            {"type": "accepted", "filename": manual_path.name, "bytes": len(data)}
-        )
+    manual_path = None
+    if has_manual:
+        manual_path = upload_dir / manual_name
+        manual_path.write_bytes(manual_bytes)
+
+    dataset_paths = await _save_datasets(datasets, upload_dir)
+
+    job.publish(
+        {
+            "type": "accepted",
+            "filename": manual_path.name if manual_path else None,
+            "bytes": len(manual_bytes),
+            "datasets": [p.name for p in dataset_paths],
+        }
+    )
 
     threading.Thread(
         target=run_job,
         kwargs={
             "job": job,
             "manual_path": manual_path,
+            "dataset_paths": dataset_paths,
             "instructions": instructions,
             "profile_seed": {
                 "name": name.strip(),

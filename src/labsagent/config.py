@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     )
 
     deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
+
+    # Optional. Only a lab that says "download the dataset from Kaggle" needs
+    # these, and the failure without them is a sentence telling you to add them
+    # -- not a crash, and not a silently wrong run on invented data.
+    kaggle_username: str = Field(default="", alias="KAGGLE_USERNAME")
+    kaggle_key: str = Field(default="", alias="KAGGLE_KEY")
+    #: Per dataset file. Turns "you attached the wrong thing" into a fast error
+    #: rather than a full disk, and bounds the per-task copy.
+    max_dataset_mb: int = 100
+
     model_name: str = "deepseek-flash"
     temperature: float = 0.0
     timeout_s: int = 30
@@ -58,6 +68,14 @@ class Settings(BaseSettings):
     @property
     def configured(self) -> bool:
         return bool(self.deepseek_api_key)
+
+    @property
+    def max_dataset_bytes(self) -> int:
+        return self.max_dataset_mb * 1024 * 1024
+
+    @property
+    def kaggle_configured(self) -> bool:
+        return bool(self.kaggle_username and self.kaggle_key)
 
 
 def load_settings() -> Settings:

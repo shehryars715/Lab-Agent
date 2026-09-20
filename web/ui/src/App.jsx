@@ -9,6 +9,7 @@ import { lastRun } from './lib/thread'
 
 export default function App() {
   const [file, setFile] = useState(null)
+  const [data, setData] = useState([])
   const [jobId, setJobId] = useState(null)
   const [revision, setRevision] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -67,6 +68,7 @@ export default function App() {
       try {
         const { job_id } = await createRun({
           file,
+          data,
           instructions,
           seed: seedRef.current,
         })
@@ -79,7 +81,7 @@ export default function App() {
         setBusy(false)
       }
     },
-    [file, dispatch],
+    [file, data, dispatch],
   )
 
   const send = useCallback(
@@ -156,14 +158,19 @@ export default function App() {
 
       <Composer
         file={file}
+        data={data}
         onFile={(f) => {
           setFile(f)
+          setError(null)
+        }}
+        onData={(d) => {
+          setData(d)
           setError(null)
         }}
         onSend={send}
         mode={mode}
         busy={busy}
-        disabled={Boolean(state.entries.length) && !file}
+        disabled={Boolean(state.entries.length) && !file && !data.length}
       />
     </div>
   )

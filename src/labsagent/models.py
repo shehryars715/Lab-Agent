@@ -123,3 +123,8 @@ class RunManifest:
     #: task id -> paragraph index in the source .docx. Empty for every other
     #: input type. Persisted so a revision can still rebuild the Word report.
     anchors: dict[str, int] = field(default_factory=dict)
+    #: Data files this run was given, as `Dataset.as_dict()`. Persisted so a
+    #: revision reuses the CSV that is already on disk instead of downloading
+    #: it a second time -- and so the record says what the code was run against,
+    #: which is the difference between a reproducible result and a number.
+    datasets: list[dict] = field(default_factory=list)

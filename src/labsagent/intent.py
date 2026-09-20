@@ -104,6 +104,14 @@ class Intent:
     task_ids: list[str] | None = None
     artifacts: list[str] = field(default_factory=list)
     notes: str = ""
+    #: Data the MANUAL referred to and did not supply: a URL, a Kaggle slug, or
+    #: a bare filename. Unresolved on purpose -- these are references the ingest
+    #: call read out of the document, not files. `labsagent.data` turns them
+    #: into files, and only after the student has had a chance to correct them.
+    #:
+    #: Empty means the manual named no data, which is the common case and must
+    #: stay the cheap one: no network, no question, no change to the prompt.
+    datasets: list[str] = field(default_factory=list)
 
     @property
     def is_lab(self) -> bool:
@@ -112,6 +120,19 @@ class Intent:
     @property
     def uncertain(self) -> bool:
         return self.confidence < ASK_BELOW
+
+    @property
+    def wants_data(self) -> bool:
+        return bool(self.datasets)
+
+    def with_datasets(self, refs) -> "Intent":
+        """Add references, keeping order and dropping duplicates."""
+        merged = list(self.datasets)
+        for ref in refs:
+            ref = str(ref or "").strip()
+            if ref and ref not in merged:
+                merged.append(ref)
+        return replace(self, datasets=merged)
 
     def with_notes(self, extra: str) -> "Intent":
         extra = (extra or "").strip()

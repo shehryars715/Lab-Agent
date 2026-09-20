@@ -31,7 +31,10 @@ from typing import Any
 
 from labsagent import events as ev
 from labsagent.agent.build import build_explainer, build_model
+from labsagent.blocks import blocks_for
 from labsagent.capture.rendered import RenderedBackend
+from labsagent.data import provenance_block
+from labsagent.data.sources import acquire, classify
 from labsagent.config import PROJECT_ROOT, Settings
 from labsagent.ingest.cover import extract_cover_facts
 from labsagent.ingest.readers import read_document, read_pasted
@@ -86,7 +89,7 @@ IDENTITY_KEYS = {k for k, _ in ASK_ORDER} | {"section", "program"}
 
 #: Answers the pipeline consumes structurally rather than passing to the
 #: solver as prose.
-RESERVED_KEYS = IDENTITY_KEYS | {"artifacts"}
+RESERVED_KEYS = IDENTITY_KEYS | {"artifacts", "datasets"}
 
 
 def answered_notes(questions: list[dict], answers: dict[str, str]) -> str:
@@ -106,6 +109,38 @@ def answered_notes(questions: list[dict], answers: dict[str, str]) -> str:
         if key not in RESERVED_KEYS and str(value).strip()
     ]
     return "You asked, and the student answered:" + chr(10) + chr(10).join(lines) if lines else ""
+
+
+def dataset_refs_in(answers: dict[str, str]) -> list[str]:
+    """Dataset references the student typed into ANY answer, not just ours.
+
+    WHY SCAN EVERYTHING. The dataset question we add below only appears when
+    there is something concrete to confirm. The agent, meanwhile, writes its
+    own questions, and `briefing.py` has always listed "data that is referenced
+    but not supplied ('which CSV?')" as a good one -- so the reply naming a
+    dataset routinely arrives under a key we did not choose and cannot predict.
+
+    Treating that reply as prose only is what the whole feature is trying to
+    stop: the student answers "https://.../sales.csv", the solver is told the
+    student said that, and nothing downloads anything.
+
+    `classify` is the test rather than a regex, so this accepts exactly what
+    the resolver accepts -- a URL, a Kaggle slug, or a path that exists.
+    """
+    found: list[str] = []
+    for key, value in (answers or {}).items():
+        if key in RESERVED_KEYS:
+            continue
+        for token in str(value or "").replace(",", " ").split():
+            token = token.strip().strip(".;\"'")
+            if not token or token in found:
+                continue
+            try:
+                classify(token)
+            except Exception:  # noqa: BLE001 -- not a reference is the normal answer
+                continue
+            found.append(token)
+    return found
 
 
 def apply_instructions(spec: LabSpec, notes: str = "") -> LabSpec:
@@ -153,6 +188,110 @@ def apply_instructions(spec: LabSpec, notes: str = "") -> LabSpec:
     # `statement` is what the student hands in; `instruction` is what steers the
     # solver. Both still ride in the manifest, so a resume is unchanged.
     return replace(spec, tasks=[replace(t, instruction=note) for t in spec.tasks])
+
+
+def _acquire(
+    job: Job,
+    *,
+    uploads: list[Path],
+    answers: dict[str, str],
+    intent: Intent,
+    store: RunStore,
+    settings: Settings,
+) -> list:
+    """Turn every dataset reference into a file on disk. Never raises.
+
+    WHAT WINS. If the student saw the "Data to use" field, whatever is in it
+    when they submit is the answer -- including an empty field, which means
+    "none, pick something sensible yourself". That is the same rule the rest of
+    the pause follows: the agent proposes, you confirm or redirect. If the
+    field was never shown, the uploads and the manual references stand.
+
+    A FAILURE HERE IS NOT A FAILED RUN. One dead link must not cost you the
+    four tasks that never needed it -- the policy `emit_all` already applies to
+    a format that will not render. The chat says which reference failed and
+    why, and the solve proceeds.
+    """
+    # An answer names an attached file ("sales.csv"), not its path on disk.
+    by_name = {Path(u).name.lower(): Path(u) for u in uploads}
+
+    if "datasets" in answers:
+        raw = str(answers.get("datasets") or "")
+        refs = [t.strip() for t in raw.replace(",", " ").split() if t.strip()]
+    else:
+        refs = [str(u) for u in uploads] + list(intent.datasets)
+
+    # References typed into the AGENT's own questions, which have keys we did
+    # not choose. See `dataset_refs_in`.
+    refs += [r for r in dataset_refs_in(answers) if r not in refs]
+
+    # ONLY A BARE FILENAME IS LOOKED UP. Mapping every reference by its last
+    # path segment would resolve "https://example.com/sales.csv" to an upload
+    # that happens to be called sales.csv -- silently substituting a different
+    # file for the one that was asked for. A name with no separator and no
+    # scheme is the only thing that can mean "the file I attached".
+    def as_path(ref: str) -> str:
+        if "/" in ref or "\\" in ref or ":" in ref:
+            return ref
+        return str(by_name.get(ref.lower(), ref))
+
+    refs = [as_path(r) for r in refs]
+
+    if not refs:
+        return []
+
+    # Reuses `planning` rather than introducing a fifth phase: the progress bar
+    # has four segments for every run, and a run with no data must not look
+    # like it skipped a step.
+    job.phase("planning", "Getting the data")
+    job.publish({"type": "data_started", "refs": refs})
+
+    result = acquire(
+        refs,
+        store.data_dir,
+        max_bytes=settings.max_dataset_bytes,
+        kaggle_username=settings.kaggle_username,
+        kaggle_key=settings.kaggle_key,
+        on_progress=lambda ref: job.publish({"type": "data_fetching", "ref": ref}),
+    )
+
+    for dataset in result.datasets:
+        job.publish(
+            {
+                "type": "data_ready",
+                "name": dataset.name,
+                "origin": dataset.origin,
+                "ref": dataset.ref,
+                "bytes": dataset.bytes,
+            }
+        )
+
+    if result.datasets:
+        names = ", ".join(d.name for d in result.datasets)
+        job.publish(
+            {
+                "type": "narration",
+                "text": f"Data ready: {names}. Every task gets a copy in its workspace.",
+            }
+        )
+
+    # SAY WHY, NOT JUST WHAT -- the same lesson `_emit` records. A missing file
+    # the student cannot diagnose from the thread is one they have to come and
+    # ask about.
+    for ref, reason in result.failures:
+        job.publish({"type": "data_failed", "ref": ref, "reason": reason})
+        job.publish(
+            {
+                "type": "narration",
+                "text": (
+                    f"I could not get {ref}: {reason} "
+                    "I will carry on without it -- attach the file and ask me to "
+                    "redo the tasks that need it."
+                ),
+            }
+        )
+
+    return result.datasets
 
 
 def wire_event(event: ev.Event) -> dict[str, Any]:
@@ -325,6 +464,9 @@ class RunContext:
     anchors: dict[str, int] = dataclass_field(default_factory=dict)
     #: What the student asked for, so a revision emits the same set of files.
     intent: Intent = dataclass_field(default_factory=Intent)
+    #: Already-resolved data files. Held so a revision re-solves against the
+    #: same CSV instead of downloading it again -- and gets the same answer.
+    datasets: list = dataclass_field(default_factory=list)
 
 
 def _emit(
@@ -350,6 +492,18 @@ def _emit(
     wanted = list(context.intent.artifacts or DEFAULT_ARTIFACTS)
 
     job.phase("emitting", "Producing your files")
+
+    # WHAT THE CODE WAS RUN AGAINST, stated once in the report. A result
+    # computed from a dataset nobody names is not reproducible, and the grader
+    # cannot tell "clustered the supplied data" from "clustered something".
+    #
+    # Added as a BLOCK rather than to each emitter, which is what the block IR
+    # is for: every format renders it, each in its own idiom -- a paragraph in
+    # the .docx and .md, a comment at the top of the .py.
+    note = provenance_block(context.datasets)
+    if note is not None and outcomes:
+        first = outcomes[0]
+        first.blocks = [note, *blocks_for(first)]
 
     ctx = EmitContext(
         spec=spec,
@@ -416,6 +570,7 @@ def run_job(
     instructions: str,
     profile_seed: dict[str, str],
     settings: Settings,
+    dataset_paths: list[Path] | None = None,
 ) -> None:
     """Do the work. Runs on a worker thread; never raises.
 
@@ -504,7 +659,12 @@ def run_job(
         job.phase("planning", "Working out what to ask")
         seed_profile = profile_from(profile_seed)
         plan, brief_usage = read_briefing(
-            spec, facts, seed_profile, instructions, build_model(settings, phase="ingest")
+            spec,
+            facts,
+            seed_profile,
+            instructions,
+            build_model(settings, phase="ingest"),
+            data=[Path(d).name for d in (dataset_paths or [])],
         )
         usage.phase("briefing").merge(brief_usage)
 
@@ -526,6 +686,30 @@ def run_job(
         )
 
         questions, known = build_questions(profile_seed, facts, plan.questions)
+
+        # WHAT DATA I WILL USE, in the pause that already exists. Shown only
+        # when there is something concrete to confirm -- files you attached, or
+        # a reference the manual named. A lab that needs no data must not be
+        # asked about data, which is the same discipline `build_questions`
+        # applies to identity: ask for what cannot be derived, and nothing else.
+        attached = [Path(d).name for d in (dataset_paths or [])]
+        proposed_data = attached + [
+            r for r in intent.datasets if r not in attached
+        ]
+        if proposed_data:
+            questions.append(
+                {
+                    "key": "datasets",
+                    "label": "Data to use",
+                    "value": ", ".join(proposed_data),
+                    "required": False,
+                    "hint": (
+                        "A file you attached, a https:// link, or a Kaggle dataset "
+                        "like owner/name. Clear this and I will pick a suitable "
+                        "built-in dataset instead."
+                    ),
+                }
+            )
 
         # WHAT I WILL PRODUCE, offered as one more field in the pause that
         # already exists rather than as a new control. Decision 3: the agent
@@ -564,9 +748,24 @@ def run_job(
         # block and the student's instructions twice on every web run.
         spec = apply_instructions(spec, intent.notes)
 
-        # -- 4. solve ------------------------------------------------------
-        job.phase("solving", "Solving each task")
+        # -- 4. data -------------------------------------------------------
+        #
+        # AFTER the pause and BEFORE the solve, which is the only place it can
+        # go. Before the pause, a download commits to whichever dataset the
+        # manual happened to name, with no chance to correct it. Inside the
+        # solve, it runs once per attempt, and `max_retries_per_task` is 3.
         store = RunStore.create(spec.lab_number, root=RUNS_ROOT)
+        datasets = _acquire(
+            job,
+            uploads=dataset_paths or [],
+            answers=answers,
+            intent=intent,
+            store=store,
+            settings=settings,
+        )
+
+        # -- 5. solve ------------------------------------------------------
+        job.phase("solving", "Solving each task")
 
         # Two consumers, and the core knows about neither. `Emitter` fans out
         # and swallows a failing consumer's exception, so a bug in the web
@@ -596,6 +795,7 @@ def run_job(
                 usage=usage,
                 model=build_model(settings),
                 explainer=build_explainer(settings, usage),
+                datasets=datasets,
             )
 
         # Remember what a revision would need. A re-run has to reach the same
@@ -612,6 +812,7 @@ def run_job(
             settings=settings,
             anchors=reading.anchors,
             intent=intent,
+            datasets=datasets,
         )
 
         _emit(job, job.context, manifest.outcomes, usage)
@@ -750,6 +951,11 @@ def revise_job(job: Job, feedback: str) -> None:
                 model=build_model(settings),
                 resume=True,
                 explainer=build_explainer(settings, usage),
+                # The same files, not a fresh download. A revision that
+                # re-fetched would also risk re-solving against DIFFERENT data
+                # -- a live URL is not guaranteed to serve the same bytes twice
+                # -- and the report would then describe two different runs.
+                datasets=context.datasets,
             )
 
         _emit(job, context, resumed.outcomes, usage)

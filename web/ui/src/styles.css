@@ -1012,6 +1012,26 @@ input.invalid {
   flex: none;
 }
 
+/* A data chip reads as a variant of the document chip, not a second control:
+   same shape, one tag, dimmer. The lab is the subject; its data is an
+   accessory, and the visual weight should say so. */
+.attach-data {
+  background: var(--surface-1, var(--surface-2));
+  box-shadow: inset 0 0 0 1px var(--surface-2);
+}
+
+.attach-kind {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .attach-x {
   margin-left: auto;
   border: 0;

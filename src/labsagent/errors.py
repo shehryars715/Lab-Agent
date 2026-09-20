@@ -25,6 +25,16 @@ class AnchorError(SpecError):
     """No insertion anchors found -- often means tasks live in table cells."""
 
 
+class DataError(LabsAgentError):
+    """A dataset could not be obtained.
+
+    Deliberately NOT a subclass of the execution errors. Failing to fetch a
+    CSV is not a failed task and must never consume a solver attempt -- the
+    acquisition step catches this, says which reference failed and why, and
+    lets every task that does not need that file run anyway.
+    """
+
+
 class SandboxError(LabsAgentError):
     """Infrastructure failure. Retry with backoff; does NOT consume an attempt."""
 

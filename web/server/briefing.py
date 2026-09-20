@@ -212,7 +212,7 @@ def _task_block(spec) -> str:
     return "\n".join(lines)
 
 
-def _known_block(facts, profile, instructions: str) -> str:
+def _known_block(facts, profile, instructions: str, data: list[str] | None = None) -> str:
     bits = [
         ("Course", facts.course),
         ("Section", facts.section),
@@ -230,6 +230,13 @@ def _known_block(facts, profile, instructions: str) -> str:
         lines.append(f"  Student section: {profile.section}")
     if instructions.strip():
         lines.append(f"  The student has already added these instructions: {instructions.strip()}")
+    # THE POINT OF LISTING DATA HERE. "data that is referenced but not supplied
+    # (which CSV?)" is the first example of a good question in the prompt above,
+    # and it was a good question precisely because nothing could answer it. Now
+    # something can -- so when the file is already in hand, asking for it again
+    # is the formality this block exists to prevent.
+    for name in data or []:
+        lines.append(f"  Data file already supplied and loaded: {name}")
     return "\n".join(lines) if lines else "  (nothing beyond the tasks below)"
 
 
@@ -269,8 +276,14 @@ def _to_plan(briefing: Briefing, taken: set[str]) -> Plan:
     )
 
 
-def read_briefing(spec, facts, profile, instructions: str, model) -> tuple[Plan, Usage]:
-    """One structured call. Never raises -- a failed briefing costs the questions."""
+def read_briefing(
+    spec, facts, profile, instructions: str, model, data: list[str] | None = None
+) -> tuple[Plan, Usage]:
+    """One structured call. Never raises -- a failed briefing costs the questions.
+
+    `data` is the names of files the student already attached. Passed so the
+    model stops asking which dataset to use when it is looking at one.
+    """
     structured = model.with_structured_output(Briefing, method="json_mode")
     tasks = _task_block(spec)
     prompt = PROMPT.format(
@@ -278,7 +291,7 @@ def read_briefing(spec, facts, profile, instructions: str, model) -> tuple[Plan,
         title=spec.title,
         course=spec.course or "(not stated)",
         tasks=tasks,
-        known=_known_block(facts, profile, instructions),
+        known=_known_block(facts, profile, instructions, data),
         max_questions=MAX_QUESTIONS,
         schema=SCHEMA_HINT,
     )

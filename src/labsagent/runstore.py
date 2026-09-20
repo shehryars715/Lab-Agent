@@ -140,6 +140,7 @@ def manifest_to_dict(manifest: RunManifest) -> dict[str, Any]:
         "token_usage": dict(manifest.token_usage),
         "cost_usd": manifest.cost_usd,
         "anchors": dict(manifest.anchors),
+        "datasets": [dict(d) for d in manifest.datasets],
     }
 
 
@@ -152,6 +153,10 @@ def manifest_from_dict(data: dict[str, Any]) -> RunManifest:
         token_usage=dict(data.get("token_usage", {})),
         cost_usd=data.get("cost_usd", 0.0),
         anchors={str(k): int(v) for k, v in (data.get("anchors") or {}).items()},
+        # `.get` with a default, like every field added after the first
+        # manifest was written: a run recorded before datasets existed must
+        # still load, or resuming it becomes impossible.
+        datasets=[dict(d) for d in (data.get("datasets") or [])],
     )
 
 
@@ -205,6 +210,16 @@ class RunStore:
         return self.dir / "logs"
 
     @property
+    def data_dir(self) -> Path:
+        """Datasets, downloaded or uploaded once and copied into each workspace.
+
+        Beside the workspace rather than inside it: a task workspace is wiped
+        and rebuilt per attempt, and re-downloading 90 MB because attempt one
+        hit a syntax error is the failure this directory exists to prevent.
+        """
+        return self.dir / "data"
+
+    @property
     def manifest_path(self) -> Path:
         return self.dir / MANIFEST_NAME
 
@@ -224,6 +239,7 @@ class RunStore:
             store.shots_dir,
             store.report_dir,
             store.logs_dir,
+            store.data_dir,
         ):
             sub.mkdir(parents=True, exist_ok=True)
         return store

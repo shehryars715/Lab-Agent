@@ -2,8 +2,37 @@ import { useEffect, useRef, useState } from 'react'
 import { formatBytes } from '../api'
 import { ArrowUp, Paperclip, Close } from './Icons'
 
-const ACCEPT = '.docx,.pdf,.ipynb,.md,.txt,.py,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-const MAX_BYTES = 25 * 1024 * 1024
+// The lab itself. Mirrors `ingest.readers.ACCEPTED_SUFFIXES`.
+const DOC_EXT = ['.docx', '.pdf', '.ipynb', '.md', '.txt', '.rst', '.py']
+// Data the lab works on. Mirrors `labsagent.data.DATA_SUFFIXES`.
+const DATA_EXT = [
+  '.csv', '.tsv', '.tab', '.data', '.dat',
+  '.json', '.jsonl', '.ndjson',
+  '.xlsx', '.xls', '.xlsm',
+  '.parquet', '.zip', '.gz',
+]
+const ACCEPT = [...DOC_EXT, ...DATA_EXT].join(',')
+const MAX_DATA = 8
+
+const extOf = (name) => {
+  const dot = String(name ?? '').lastIndexOf('.')
+  return dot < 0 ? '' : String(name).slice(dot).toLowerCase()
+}
+
+/** Which slot a dropped file belongs in.
+ *
+ *  ONE PAPERCLIP, NOT TWO. A second "attach data" button would make you decide
+ *  which control to use before you have thought about it, and would be wrong
+ *  the first time someone drags both files in at once. The extension already
+ *  says which is which, and `.txt` is the only genuinely ambiguous one -- it
+ *  goes to the document side, because a lab pasted into a .txt is common and a
+ *  dataset saved as .txt is not.
+ */
+export function classifyFile(file) {
+  const ext = extOf(file?.name)
+  if (DATA_EXT.includes(ext) && !DOC_EXT.includes(ext)) return 'data'
+  return 'doc'
+}
 
 /** The input, and the gate on it.
  *
@@ -19,7 +48,9 @@ const MAX_BYTES = 25 * 1024 * 1024
  */
 export default function Composer({
   file,
+  data = [],
   onFile,
+  onData,
   onSend,
   mode, // 'need-file' | 'brief' | 'working' | 'waiting' | 'revise'
   busy,
@@ -40,9 +71,26 @@ export default function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [text])
 
-  function pick(candidate) {
-    if (!candidate) return
-    onFile(candidate)
+  function pick(candidates) {
+    const chosen = Array.from(candidates ?? []).filter(Boolean)
+    if (!chosen.length) return
+
+    // Last one wins for the document -- picking a second lab replaces the
+    // first, which is what the single `file` prop has always meant. Data
+    // accumulates, because a lab can legitimately use several files.
+    const docs = chosen.filter((f) => classifyFile(f) === 'doc')
+    const datas = chosen.filter((f) => classifyFile(f) === 'data')
+
+    if (docs.length) onFile(docs[docs.length - 1])
+    if (datas.length) {
+      const merged = [...data]
+      for (const item of datas) {
+        if (!merged.some((d) => d.name === item.name && d.size === item.size)) {
+          merged.push(item)
+        }
+      }
+      onData(merged.slice(0, MAX_DATA))
+    }
   }
 
   const placeholder = {
@@ -83,16 +131,17 @@ export default function Composer({
           e.preventDefault()
           depth.current = 0
           setOver(false)
-          pick(e.dataTransfer.files?.[0])
+          pick(e.dataTransfer.files)
         }}
       >
         <input
           ref={inputRef}
           type="file"
           accept={ACCEPT}
+          multiple
           hidden
           onChange={(e) => {
-            pick(e.target.files?.[0])
+            pick(e.target.files)
             e.target.value = ''
           }}
         />
@@ -107,13 +156,29 @@ export default function Composer({
           </div>
         )}
 
+        {data.map((item) => (
+          <div className="attach attach-data" key={`${item.name}:${item.size}`}>
+            <span className="attach-kind">data</span>
+            <span className="attach-name">{item.name}</span>
+            <span className="attach-size">{formatBytes(item.size)}</span>
+            <button
+              className="attach-x"
+              onClick={() => onData(data.filter((d) => d !== item))}
+              aria-label={`Remove ${item.name}`}
+              type="button"
+            >
+              <Close size={13} />
+            </button>
+          </div>
+        ))}
+
         <div className="composer-row">
           <button
             className="composer-attach"
             onClick={() => inputRef.current?.click()}
-            aria-label="Attach a lab document"
+            aria-label="Attach a lab document or a dataset"
             type="button"
-            title="Attach a lab: .docx, .pdf, .ipynb, .md, .txt or .py"
+            title="Attach a lab (.docx, .pdf, .ipynb, .md) or data (.csv, .xlsx, .zip)"
           >
             <Paperclip />
           </button>
@@ -148,7 +213,7 @@ export default function Composer({
       </div>
       <p className="composer-note">
         {mode === 'need-file'
-          ? 'Attach a .docx, .pdf, .ipynb or .md — or just paste the tasks here.'
+          ? 'Attach a .docx, .pdf, .ipynb or .md — plus a .csv if the lab needs data — or just paste the tasks here.'
           : mode === 'revise'
             ? 'I’ll redo only the tasks your change affects.'
             : 'A run takes one to three minutes and costs about a fifth of a cent.'}

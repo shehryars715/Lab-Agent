@@ -53,11 +53,15 @@ export function saveIdentity(values) {
   }
 }
 
-export async function createRun({ file, instructions, seed }) {
+export async function createRun({ file, data, instructions, seed }) {
   const form = new FormData()
   // No file is a valid run: the message is then the document. Appending a
   // null would post the string "null" as a filename, so it is omitted.
   if (file) form.append('manual', file)
+  // Repeated under ONE field name, which is how multipart expresses a list and
+  // what FastAPI's `list[UploadFile]` reads. Sending data1/data2/... instead
+  // would need the server to guess how many to look for.
+  for (const item of data ?? []) form.append('datasets', item)
   form.append('instructions', instructions ?? '')
   form.append('name', seed?.name ?? '')
   form.append('cms_id', seed?.cms_id ?? '')

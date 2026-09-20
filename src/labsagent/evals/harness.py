@@ -209,6 +209,7 @@ def run_sample(
     phase is worse than no measurement, because it looks complete.
     """
     from labsagent.ingest.docx_reader import read_manual
+    from labsagent.errors import SpecError
     from labsagent.ingest.labspec import extract_labspec
 
     result = SampleResult(
@@ -220,8 +221,15 @@ def run_sample(
 
     try:
         manual = read_manual(case.manual_path)
-        spec, _repairs, ingest_usage = extract_labspec(manual, model_factory("ingest"))
-        usage.phase("ingest").merge(ingest_usage)
+        # `extract_labspec` returns a `Reading`, not a tuple. This still
+        # unpacked three values, so EVERY case died with "cannot unpack
+        # non-iterable Reading object" and the eval reported 0 tasks found --
+        # a broken gate that looked like a broken pipeline.
+        reading = extract_labspec(manual, model_factory("ingest"))
+        usage.phase("ingest").merge(reading.usage)
+        if reading.spec is None:
+            raise SpecError(f"not read as a lab: {reading.what_this_is or 'unrecognised'}")
+        spec = reading.spec
         result.tasks_found = len(spec.tasks)
 
         store = RunStore.create(spec.lab_number, root=runs_root)

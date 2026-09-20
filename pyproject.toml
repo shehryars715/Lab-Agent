@@ -9,6 +9,11 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "deepagents>=0.7.13",
+    # Only used when a lab says to download its data from Kaggle. The
+    # import is guarded anyway (see data/sources.py), so a stripped
+    # install still runs -- a Kaggle reference just fails with a
+    # sentence instead of a file.
+    "kagglehub>=1.0.2",
     "langchain-deepseek>=1.1.0",
     "matplotlib>=3.11.2",
     "nbformat>=5.11.1",

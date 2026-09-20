@@ -27,6 +27,9 @@ from labsagent.ingest.labspec import extract_labspec  # noqa: E402
 from labsagent.ingest.readers import read_document  # noqa: E402
 from labsagent.intent import scope  # noqa: E402
 from labsagent.orchestrator import run_lab  # noqa: E402
+from labsagent.blocks import blocks_for  # noqa: E402
+from labsagent.data import provenance_block  # noqa: E402
+from labsagent.data.sources import acquire  # noqa: E402
 from labsagent.probe import TokenProbe, probing  # noqa: E402
 from labsagent.profile import resolve_profile  # noqa: E402
 from labsagent.report.cover import cover_from  # noqa: E402
@@ -52,6 +55,8 @@ def ensure_fixture(path: Path) -> Path:
 
 USAGE = """usage: solve_lab.py [manual.docx] [options]
 
+  --data=REF      data for the lab to work on: a file, a https:// link, or a
+                  Kaggle dataset like owner/name. Repeatable.
   --want=a,b,c    which formats to produce: docx, ipynb, py, md, zip
   --probe         attribute every token to a bucket and write probe.json
   --no-explain    skip the per-task explanation pass (slightly cheaper)
@@ -68,6 +73,11 @@ during ingest, so it can narrow what gets solved as well as what gets written.
 The artifact flags save DISK and wall-clock, not tokens: every exporter runs
 locally after the model work is finished and costs nothing to produce. Only
 --no-think and --fat-tools change what you are billed.
+
+--data is resolved BEFORE solving and the files are copied into every task
+workspace, so the solution opens them by bare name. Whatever the manual itself
+names is picked up too, so the flag is for adding or overriding, not for
+repeating what the document already says.
 """
 
 
@@ -86,6 +96,7 @@ def main() -> int:
     want = next(
         (a.split("=", 1)[1].split(",") for a in flags if a.startswith("--want=")), None
     )
+    data_refs = [a.split("=", 1)[1] for a in argv if a.startswith("--data=")]
     settings = load_settings()
     if "--no-think" in flags:
         settings.reasoning_effort = "none"
@@ -135,8 +146,29 @@ def main() -> int:
     if pulled:
         print(f"    also solving {', '.join(pulled)} -- the tasks you asked for need them")
 
-    # 2. Solve every task
+    # 2. Data, before any solving. The flag and whatever the manual itself named
+    #    are the same kind of thing by the time they get here -- a reference --
+    #    so they go through one resolver and arrive as files.
     store = RunStore.create(spec.lab_number)
+    refs = data_refs + [r for r in reading.intent.datasets if r not in data_refs]
+    datasets = []
+    if refs:
+        print(f"    data: resolving {len(refs)} reference(s)")
+        got = acquire(
+            refs,
+            store.data_dir,
+            max_bytes=settings.max_dataset_bytes,
+            kaggle_username=settings.kaggle_username,
+            kaggle_key=settings.kaggle_key,
+        )
+        datasets = got.datasets
+        for dataset in datasets:
+            print(f"      {dataset.name}  ({dataset.source_note})")
+        # Never fatal: a task that does not need the missing file still runs.
+        for ref, reason in got.failures:
+            print(f"      could not get {ref}: {reason}")
+
+    # 3. Solve every task
     probe_ctx = probing(probe) if probe is not None else contextlib.nullcontext()
     with probe_ctx:
         manifest = run_lab(
@@ -147,15 +179,23 @@ def main() -> int:
             explainer=(
                 None if "--no-explain" in flags else build_explainer(settings, usage)
             ),
+            datasets=datasets,
         )
 
-    # 3. Emit whatever was asked for. Explicit --want beats the request, which
+    # 4. Emit whatever was asked for. Explicit --want beats the request, which
     #    beats the default; the --no-* flags subtract from whichever won.
     artifacts = list(want or reading.intent.artifacts or DEFAULT_ARTIFACTS)
     if "--no-notebook" in flags:
         artifacts = [a for a in artifacts if a != "ipynb"]
     if "--no-zip" in flags:
         artifacts = [a for a in artifacts if a != "zip"]
+
+    # What the code was run against, stated once. A block, so every emitter
+    # renders it in its own idiom -- prose in the report, a comment in the .py.
+    note = provenance_block(datasets)
+    if note is not None and manifest.outcomes:
+        first = manifest.outcomes[0]
+        first.blocks = [note, *blocks_for(first)]
 
     ctx = EmitContext(
         spec=spec,

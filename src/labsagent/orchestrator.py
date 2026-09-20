@@ -40,6 +40,7 @@ from labsagent import events as ev
 from labsagent.agent.build import build_solver
 from labsagent.agent.explainer import Explainer
 from labsagent.capture.base import ScreenshotBackend
+from labsagent.data import describe as describe_datasets, materialize
 from labsagent.config import Settings
 from labsagent.errors import SandboxError
 from labsagent.models import LabSpec, RunManifest, Task, TaskOutcome
@@ -53,7 +54,7 @@ from labsagent.usage import RunUsage
 from labsagent.intent import TASK_REF, referenced_task_ids  # noqa: F401
 
 
-def build_task_prompt(task: Task, done: dict[str, TaskOutcome]) -> str:
+def build_task_prompt(task: Task, done: dict[str, TaskOutcome], datasets=()) -> str:
     """The user message for one task, plus any task it explicitly references."""
     parts = [task.statement]
 
@@ -76,6 +77,14 @@ def build_task_prompt(task: Task, done: dict[str, TaskOutcome]) -> str:
             f"Your solution was:\n```python\n{prior.code_text}```"
         )
 
+    # AFTER everything describing the work, BEFORE the filename line. PLAN.md
+    # records the ordering rule this follows: recency is the cheapest ranking,
+    # so the structural invariant -- "write it to task3.py" -- is stated last
+    # and narrowly. The data block is context, not the instruction.
+    data_block = describe_datasets(datasets)
+    if data_block:
+        parts.append(data_block)
+
     parts.append(f"\nWrite your solution to a file named {task.id}.py")
     return "\n".join(parts)
 
@@ -96,10 +105,24 @@ def solve_task(
     done: dict[str, TaskOutcome],
     model=None,
     explainer: Explainer | None = None,
+    datasets=(),
 ) -> SolveResult:
     """One task, bounded attempts, isolated workspace."""
     workspace = store.workspace / task.id
     workspace.mkdir(parents=True, exist_ok=True)
+
+    # The data lands BEFORE the agent is built, so the file is simply there
+    # when the first tool call happens. Two reasons it is not a tool the agent
+    # calls: a download inside the attempt loop runs up to `max_retries_per_task`
+    # times, and the sandbox inherits the full environment, so a Kaggle key
+    # placed there is readable by model-written code.
+    #
+    # Copied once per task, not per attempt: `materialize` skips a file already
+    # present at the same size, so three attempts do not recopy a 90 MB CSV.
+    try:
+        materialize(datasets, workspace)
+    except Exception as exc:  # noqa: BLE001 -- data is an input, not the run
+        emitter.emit(ev.AttemptFailed(task_id=task.id, attempt=0, error=f"data: {exc}"[:300]))
 
     phase = usage.phase("solve")
     # Measured on the TOTAL, not on the solve phase alone. The explain call
@@ -126,7 +149,7 @@ def solve_task(
             agent, recorder = build_solver(sandbox, settings, model=model)
             try:
                 result = agent.invoke(
-                    {"messages": [{"role": "user", "content": build_task_prompt(task, done)}]}
+                    {"messages": [{"role": "user", "content": build_task_prompt(task, done, datasets)}]}
                 )
             except SandboxError as exc:
                 # Infrastructure, not the agent. Does not consume the budget.
@@ -272,8 +295,16 @@ def run_lab(
     model=None,
     resume: bool = False,
     explainer: Explainer | None = None,
+    datasets=(),
 ) -> RunManifest:
-    """Solve every task. Failures are recorded, never fatal."""
+    """Solve every task. Failures are recorded, never fatal.
+
+    `datasets` are already-resolved local files (see `labsagent.data`). They are
+    copied into every task's workspace and described in every task's prompt --
+    not filtered per task, because working out which of five tasks needs the CSV
+    is a judgement the manual rarely states and a wrong answer is a task that
+    cannot run. The cost of being generous is one file copy.
+    """
     emitter = emitter or ev.Emitter()
     usage = usage or RunUsage(model=settings.model_name)
 
@@ -285,6 +316,10 @@ def run_lab(
             run_id=store.run_id, started_at=datetime.now(timezone.utc), spec=spec
         )
         todo = list(spec.tasks)
+
+    # Recorded on the manifest, so the run says what it was run against and a
+    # revision can reuse the files instead of fetching them again.
+    manifest.datasets = [d.as_dict() for d in datasets]
 
     emitter.emit(
         ev.RunStarted(
@@ -310,6 +345,7 @@ def run_lab(
             done,
             model=model,
             explainer=explainer,
+            datasets=datasets,
         )
         manifest.outcomes.append(result.outcome)
         done[task.id] = result.outcome

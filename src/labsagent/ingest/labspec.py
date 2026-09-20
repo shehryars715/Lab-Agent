@@ -126,6 +126,16 @@ may be empty, is quoted below.
   by `artifacts` and `tasks_wanted`, and repeating them makes the solver try to
   produce the files itself in Python instead of just solving the task.
   Empty if there is nothing.
+- datasets: data the DOCUMENT tells the student to obtain, which is not in the
+  document itself. Copy each reference exactly as written, one per entry:
+    a link            "https://example.edu/data/sales.csv"
+    a Kaggle dataset  "uciml/iris"  or the full kaggle.com URL as written
+    a named file      "housing.csv", when the manual says to use a file by name
+  Leave EMPTY when the manual supplies its data inline, generates it in code,
+  uses a library's built-in dataset, or says the student may pick any dataset.
+  "Use any dataset of your choice" is NOT a reference -- it names nothing.
+  Do not invent a URL, do not guess a Kaggle slug, and do not put a description
+  here: only text the document actually contains.
 
 Return ONLY a JSON object matching this schema exactly:
 
@@ -163,6 +173,9 @@ class ExtractedIntent(BaseModel):
     tasks_wanted: list[int] = Field(default_factory=list, description="empty = all")
     artifacts: list[str] = Field(default_factory=list, description="empty = default")
     notes: str = ""
+    datasets: list[str] = Field(
+        default_factory=list, description="data the DOCUMENT names and does not supply"
+    )
 
 
 class ExtractedLab(BaseModel):
@@ -307,7 +320,8 @@ SCHEMA_HINT = """{
   "intent": {
     "tasks_wanted": [],
     "artifacts": [],
-    "notes": ""
+    "notes": "",
+    "datasets": []
   }
 }"""
 
@@ -363,6 +377,7 @@ def _intent_from(extracted: ExtractedLab, known_ids: list[str], request: str = "
         task_ids=wanted or None,
         artifacts=artifacts,
         notes=extracted.intent.notes.strip(),
+        datasets=[r.strip() for r in extracted.intent.datasets if str(r).strip()],
     )
 
 

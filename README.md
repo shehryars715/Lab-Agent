@@ -11,8 +11,25 @@ everything as a zip.
 uv run python examples/solve_lab.py path/to/manual.docx   # the CLI
 ```
 
-Or use it in a browser — a chat interface where you attach the manual, answer one
-question partway through, and download the result:
+**Labs that work on data.** If the lab uses a dataset, give it one — or let it fetch
+the one the manual names. A file, a link and a Kaggle slug are all the same kind of
+thing here:
+
+```bash
+uv run python examples/solve_lab.py lab.docx --data=customers.csv
+uv run python examples/solve_lab.py lab.docx --data=https://example.edu/sales.csv
+uv run python examples/solve_lab.py lab.docx --data=uciml/iris     # Kaggle
+```
+
+A manual that says *"download the Iris dataset from Kaggle: uciml/iris"* needs no flag
+at all — that reference is read during ingest and fetched before any code is written.
+The file lands in each task's workspace and its **columns, types and first rows go into
+the prompt**, so the solution opens it by bare name and never guesses a column. Kaggle
+needs `KAGGLE_USERNAME` and `KAGGLE_KEY` in `.env`; without them you get a message
+saying so, and the run continues.
+
+Or use it in a browser — a chat interface where you attach the manual (and any data),
+answer one question partway through, and download the result:
 
 ```bash
 cd web/ui && npm install && npm run build && cd ../..
