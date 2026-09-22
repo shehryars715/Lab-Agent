@@ -3,7 +3,6 @@ import { createRun, listHistory, reviseRun, saveIdentity, submitAnswers } from '
 import Chat from './components/Chat'
 import Composer from './components/Composer'
 import HistoryView from './components/HistoryView'
-import { Check } from './components/Icons'
 import { useRunStream } from './hooks/useRunStream'
 import { lastRun } from './lib/thread'
 
@@ -130,19 +129,20 @@ export default function App() {
   if (historyRun) {
     return (
       <div className="app">
-        <TopBar />
+        <Header />
         <div className="thread">
-          <div className="thread-inner">
+          <div className="rail">
             <HistoryView runId={historyRun} onBack={() => setHistoryRun(null)} />
           </div>
         </div>
+        <div />
       </div>
     )
   }
 
   return (
     <div className="app">
-      <TopBar />
+      <Header />
       <Chat
         entries={state.entries}
         jobId={jobId}
@@ -154,7 +154,11 @@ export default function App() {
         onOpenRun={setHistoryRun}
       />
 
-      {error && <div className="toast">{error}</div>}
+      {error && (
+        <div className="toast" role="status">
+          {error}
+        </div>
+      )}
 
       <Composer
         file={file}
@@ -176,14 +180,17 @@ export default function App() {
   )
 }
 
-function TopBar() {
+/** The header carries the name and nothing else.
+ *
+ *  It used to carry a badge tile and a tagline. Neither survives the question
+ *  "what does a person do with this" -- the tagline is answered by the empty
+ *  state one scroll below it, in a larger size, and the badge was an icon in a
+ *  rounded square standing in for an identity.
+ */
+function Header() {
   return (
-    <header className="topbar">
-      <span className="mark">
-        <Check size={13} strokeWidth={3} />
-      </span>
+    <header className="header">
       <span className="wordmark">Labs-Agent</span>
-      <span className="tagline">lab manual in, submission out</span>
     </header>
   )
 }

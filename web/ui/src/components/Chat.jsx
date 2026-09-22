@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import { Check } from './Icons'
 import QuestionCard from './QuestionCard'
 import RunCard from './RunCard'
 
@@ -10,6 +9,42 @@ import RunCard from './RunCard'
  *  is the single most annoying thing a streaming interface can do, and it is
  *  the default behaviour of every naive implementation.
  */
+/** Reading order, which is not append order.
+ *
+ *  The reducer appends the run entry the moment a run OPENS, so everything the
+ *  agent then says lands underneath it. That puts the finished block -- and
+ *  therefore the downloads, which are the whole point -- above a screen of
+ *  narration, while the auto-scroll drops the reader at the bottom on an
+ *  already-answered question. You would have to scroll up to reach your files.
+ *
+ *  So a run renders at the END of the stretch it belongs to: after its own
+ *  narration and questions, and before the next thing the user said. The live
+ *  block is then always the thing nearest the composer, and a finished one
+ *  hands over its downloads exactly where the reader already is.
+ *
+ *  Presentation only. The reducer still appends in event order, which is what
+ *  its tests assert and what replay depends on.
+ */
+export function readingOrder(entries) {
+  const out = []
+  let held = null
+  for (const entry of entries) {
+    if (entry.kind === 'run') {
+      if (held) out.push(held)
+      held = entry
+      continue
+    }
+    // A new message from the user closes the previous run's stretch.
+    if (entry.kind === 'user-text' && held) {
+      out.push(held)
+      held = null
+    }
+    out.push(entry)
+  }
+  if (held) out.push(held)
+  return out
+}
+
 export default function Chat({
   entries,
   jobId,
@@ -24,12 +59,6 @@ export default function Chat({
   const scrollerRef = useRef(null)
   const pinned = useRef(true)
   const count = entries.length
-
-  // Which sentence is the current one. Computed rather than left to
-  // `:last-child`, which never matches here: the thread ends with a scroll
-  // sentinel, and `.say` elements are interleaved with run and question cards,
-  // so "last child" and "last thing the agent said" are different elements.
-  const latestSay = [...entries].reverse().find((e) => e.kind === 'agent-text')?.id
 
   useEffect(() => {
     const el = scrollerRef.current
@@ -47,23 +76,23 @@ export default function Chat({
 
   return (
     <div className="thread" ref={scrollerRef}>
-      <div className="thread-inner">
-        {entries.map((entry) => {
+      <div className="rail">
+        {readingOrder(entries).map((entry) => {
           if (entry.kind === 'user-text') {
             return (
-              <div className="bubble user" key={entry.id}>
+              <div className="entry msg-user" key={entry.id}>
                 {entry.text}
               </div>
             )
           }
           if (entry.kind === 'agent-text') {
+            // The agent's own sentences, at reading size and capped to a real
+            // measure. No avatar and no speech mark: there is exactly one
+            // other voice in this thread, so marking it is redundant chrome.
             return (
-              <div className={`say ${entry.id === latestSay ? 'is-latest' : ''}`} key={entry.id}>
-                {/* A resting version of the working orb, so the thing that
-                    spoke and the thing that is working read as one speaker. */}
-                <span className="say-mark" aria-hidden />
-                <p className="say-body">{entry.text}</p>
-              </div>
+              <p className="entry say prose" key={entry.id}>
+                {entry.text}
+              </p>
             )
           }
           if (entry.kind === 'question') {
@@ -77,53 +106,63 @@ export default function Chat({
               />
             )
           }
-          return <RunCard key={entry.id} entry={entry} jobId={jobId} />
+          return (
+            <RunCard
+              key={entry.id}
+              entry={entry}
+              jobId={jobId}
+              // A run that is parked on a question is not working, and must not
+              // say that it is.
+              waiting={Boolean(awaiting)}
+            />
+          )
         })}
 
-        {entries.length === 0 && <Welcome recent={recent} onOpenRun={onOpenRun} />}
-        <div ref={endRef} />
+        {entries.length === 0 && <Empty recent={recent} onOpenRun={onOpenRun} />}
+        <div ref={endRef} className="thread-end" />
       </div>
     </div>
   )
 }
 
-function Welcome({ recent, onOpenRun }) {
+function Empty({ recent, onOpenRun }) {
   return (
-    <div className="welcome">
-      <span className="mark big">
-        <Check size={20} strokeWidth={3} />
-      </span>
-      <h1>Turn a lab manual into a finished submission</h1>
-      <p>
+    <div className="entry empty">
+      {/* "finished submission" is the one claim this product may not make:
+          PRODUCT.md binds the output to a draft the student reviews and owns,
+          said plainly rather than buried. */}
+      <h1 className="empty-title">Turn a lab manual into a draft submission</h1>
+      <p className="empty-body prose">
         Attach the Word document below. I read the tasks, work out what I still need to
         ask you, write and run a program for each one, screenshot the output, and fill
         the answers into a copy of your manual.
       </p>
-      <p className="welcome-dim">
-        I’ll pause once before the code, to ask anything the manual doesn’t settle.
+      <p className="empty-note prose">
+        I pause once before writing any code, so an answer changes what gets built rather
+        than what gets labelled. Read the report before you submit it — nothing here
+        checks that an answer is correct, only that it runs.
       </p>
 
       {recent?.length > 0 && (
-        <div className="recent">
-          <p className="eyebrow">Previous runs</p>
-          <div className="recent-list">
-            {recent.map((r, i) => (
-              <button
-                key={r.run_id}
-                type="button"
-                className="run-link"
-                style={{ animationDelay: `${i * 40}ms` }}
-                onClick={() => onOpenRun(r.run_id)}
-              >
-                <span className={`run-dot ${r.failed === 0 ? 'ok' : 'warn'}`} />
-                <span className="run-title">{r.title || `Lab ${r.lab_number}`}</span>
-                <span className="run-meta">
-                  {r.passed}/{r.total}
-                </span>
-              </button>
+        <section className="recent">
+          <h2 className="recent-head">Previous runs</h2>
+          <ul>
+            {recent.map((r) => (
+              <li key={r.run_id}>
+                <button type="button" className="recent-row" onClick={() => onOpenRun(r.run_id)}>
+                  <span
+                    className={`recent-dot ${r.failed === 0 ? '' : 'warn'}`}
+                    aria-hidden="true"
+                  />
+                  <span className="recent-name">{r.title || `Lab ${r.lab_number}`}</span>
+                  <span className="recent-meta num">
+                    {r.passed}/{r.total}
+                  </span>
+                </button>
+              </li>
             ))}
-          </div>
-        </div>
+          </ul>
+        </section>
       )}
     </div>
   )

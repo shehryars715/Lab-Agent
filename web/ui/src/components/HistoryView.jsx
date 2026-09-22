@@ -6,13 +6,11 @@ import { iconFor, ordered } from '../lib/artifacts'
 
 /** A run you already paid for.
  *
- *  Re-downloading beats re-running: the artifacts are on disk, the model
- *  calls are not. This view is the same set of files the result screen offers,
- *  read back from `runs/<id>/` rather than from a job this process still holds
- *  in memory.
+ *  Re-downloading beats re-running: the artifacts are on disk, the model calls
+ *  are not. This is the same set of files the live result offers, read back
+ *  from `runs/<id>/` rather than from a job this process still holds in
+ *  memory -- so it deliberately wears the same block as a finished run.
  */
-
-
 
 function when(iso) {
   if (!iso) return ''
@@ -42,73 +40,87 @@ export default function HistoryView({ runId, onBack }) {
 
   if (error) {
     return (
-      <div className="card" style={{ animation: 'riseIn .45s var(--ease) both' }}>
-        <h1 className="headline" style={{ fontSize: 21 }}>
-          That run could not be read
-        </h1>
-        <p className="subhead">{error}</p>
-        <button className="btn btn-secondary btn-wide" onClick={onBack} type="button">
-          Back
-        </button>
-      </div>
+      <article className="entry run">
+        <div className="run-error">
+          <span className="mark-bad" aria-hidden="true">
+            <Close size={13} />
+          </span>
+          <div className="run-error-body">
+            <h2 className="run-error-title">That run could not be read</h2>
+            <p className="run-error-detail">{error}</p>
+            <p className="run-error-detail">
+              Its folder may have been moved or deleted. Everything else in the list still
+              opens.
+            </p>
+          </div>
+        </div>
+        <div className="downloads">
+          <button className="btn btn-secondary" onClick={onBack} type="button">
+            Back
+          </button>
+        </div>
+      </article>
     )
   }
 
   if (!run) {
     return (
-      <div className="card" style={{ animation: 'riseIn .45s var(--ease) both' }}>
-        <p className="subhead" style={{ margin: 0 }}>
-          Loading…
-        </p>
-      </div>
+      <article className="entry run">
+        <header className="run-head">
+          <div className="run-head-main">
+            <h2 className="run-title">Opening that run…</h2>
+            <p className="run-sub">Reading it back from disk</p>
+          </div>
+        </header>
+      </article>
     )
   }
 
   const perfect = run.failed === 0
-  // Same generic list as the live result card -- see lib/artifacts.js.
+  // Same generic list as the live result -- see lib/artifacts.js.
   const files = ordered(run.artifacts).filter((a) => a.kind !== 'code')
   const code = run.artifacts.filter((a) => a.kind === 'code')
 
   return (
-    <div className="card" style={{ animation: 'riseIn .45s var(--ease) both' }}>
-      <div className="result-head">
-        <div className={`seal ${perfect ? '' : 'warn'}`}>
-          {perfect ? <Check size={26} strokeWidth={2.6} /> : <Close size={26} />}
+    <article className="entry run">
+      <header className="run-head">
+        <div className="run-head-main">
+          <h2 className="run-title">{run.title || `Lab ${run.lab_number}`}</h2>
+          <p className="run-sub">
+            {run.passed} of {run.total} tasks solved · {formatUsd(run.cost_usd)} ·{' '}
+            {when(run.started_at)}
+          </p>
         </div>
-        <h1 className="headline" style={{ marginBottom: 6 }}>
-          {run.title || `Lab ${run.lab_number}`}
-        </h1>
-        <p className="subhead" style={{ marginBottom: 0 }}>
-          {run.passed} of {run.total} tasks solved · {formatUsd(run.cost_usd)} ·{' '}
-          {when(run.started_at)}
-        </p>
-      </div>
+        <span className={`task-mark ${perfect ? 'is-ok' : 'is-bad'}`} aria-hidden="true">
+          {perfect ? <Check size={15} strokeWidth={3} /> : <Close size={15} />}
+        </span>
+      </header>
 
-      <div className="dl-group">
-        {files.map((a, i) => {
-          const Icon = iconFor(a.kind)
-          return (
-            <div key={a.key} style={i === 0 ? undefined : { marginTop: 10 }}>
+      {files.length > 0 && (
+        <div className="downloads">
+          {files.map((a, i) => {
+            const Icon = iconFor(a.kind)
+            return (
               <DownloadRow
+                key={a.key}
                 href={historyDownloadUrl(runId, a.key)}
                 icon={<Icon />}
                 name={a.label}
                 sub={`${a.filename} · ${formatBytes(a.bytes)}`}
                 primary={i === 0}
-                delay={i * 60}
               />
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       {code.length > 0 && (
-        <div className="dl-group">
-          <p className="eyebrow" style={{ marginBottom: 12 }}>
+        <section className="code-group">
+          <h2 className="code-head">
             Code — {code.length} file{code.length === 1 ? '' : 's'}
-          </p>
+          </h2>
           <div className="code-list">
-            {code.map((a, i) => {
+            {code.map((a) => {
               const Icon = iconFor(a.kind)
               return (
                 <DownloadRow
@@ -117,17 +129,23 @@ export default function HistoryView({ runId, onBack }) {
                   icon={<Icon />}
                   name={a.label}
                   sub={`${a.filename} · ${formatBytes(a.bytes)}`}
-                  delay={120 + i * 55}
                 />
               )
             })}
           </div>
-        </div>
+          <button className="btn btn-secondary btn-wide" onClick={onBack} type="button">
+            Back
+          </button>
+        </section>
       )}
 
-      <button className="btn btn-secondary btn-wide" onClick={onBack} type="button">
-        Back
-      </button>
-    </div>
+      {code.length === 0 && (
+        <div className="code-group">
+          <button className="btn btn-secondary btn-wide" onClick={onBack} type="button">
+            Back
+          </button>
+        </div>
+      )}
+    </article>
   )
 }

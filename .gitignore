@@ -8,6 +8,18 @@
 PLAN.md
 INTERNAL.md
 
+# The product record written by `/impeccable init`. Same reason as PLAN.md, plus
+# one of its own: it states that real submissions from this tool have been
+# handed in and graded, and it restates the institution's constraints. That is
+# context for design work on this machine, not something to publish beside the
+# code.
+PRODUCT.md
+
+# Deep-dive write-ups about how this project works, written to learn from rather
+# than to ship. They quote internals freely and go stale as the code moves, so
+# they are local notes, not documentation anyone else should find.
+Learning/
+
 # Course material: the institution's, often carries identifying details.
 labs/
 

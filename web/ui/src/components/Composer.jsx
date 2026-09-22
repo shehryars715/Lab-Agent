@@ -95,10 +95,24 @@ export default function Composer({
 
   const placeholder = {
     'need-file': 'Attach a lab, or paste the tasks here…',
-    brief: 'Anything else I should know?  (optional)',
-    working: 'I’m working — you can add notes for the next run…',
+    brief: 'Anything else I should know? (optional)',
+    // Kept short on purpose: a placeholder that wraps to two lines at 390px
+    // pushes the paperclip and the send button out of alignment, and the run
+    // block already says that work is in progress.
+    working: 'Add a note for the next run…',
     waiting: 'Answer in the card above…',
-    revise: 'Describe a change — “redo task 3 with pandas”',
+    revise: 'Describe a change…',
+  }[mode]
+
+  const note = {
+    'need-file':
+      'A .docx, .pdf, .ipynb or .md — plus a .csv if the lab needs data. Or paste the tasks straight in.',
+    brief: 'A run takes one to three minutes and costs about a fifth of a cent.',
+    working: 'A run takes one to three minutes and costs about a fifth of a cent.',
+    waiting: 'A run takes one to three minutes and costs about a fifth of a cent.',
+    // The example moved out of the placeholder and down here, where there is
+    // room for it on a phone.
+    revise: 'Something like “redo task 3 with pandas”. I redo only the tasks your change affects, so a revision costs a fraction of a run.',
   }[mode]
 
   const canSend = text.trim().length > 0 && !busy && mode !== 'waiting'
@@ -112,7 +126,7 @@ export default function Composer({
   return (
     <div className="composer-wrap">
       <div
-        className={`composer ${over ? 'over' : ''} ${disabled ? 'muted' : ''}`}
+        className={`composer ${over ? 'is-over' : ''} ${disabled ? 'is-muted' : ''}`}
         onDragEnter={(e) => {
           e.preventDefault()
           depth.current += 1
@@ -148,19 +162,25 @@ export default function Composer({
 
         {file && (
           <div className="attach">
+            <span className="attach-kind">lab</span>
             <span className="attach-name">{file.name}</span>
-            <span className="attach-size">{formatBytes(file.size)}</span>
-            <button className="attach-x" onClick={() => onFile(null)} aria-label="Remove file" type="button">
+            <span className="attach-size num">{formatBytes(file.size)}</span>
+            <button
+              className="attach-x"
+              onClick={() => onFile(null)}
+              aria-label={`Remove ${file.name}`}
+              type="button"
+            >
               <Close size={13} />
             </button>
           </div>
         )}
 
         {data.map((item) => (
-          <div className="attach attach-data" key={`${item.name}:${item.size}`}>
+          <div className="attach" key={`${item.name}:${item.size}`}>
             <span className="attach-kind">data</span>
             <span className="attach-name">{item.name}</span>
-            <span className="attach-size">{formatBytes(item.size)}</span>
+            <span className="attach-size num">{formatBytes(item.size)}</span>
             <button
               className="attach-x"
               onClick={() => onData(data.filter((d) => d !== item))}
@@ -174,7 +194,7 @@ export default function Composer({
 
         <div className="composer-row">
           <button
-            className="composer-attach"
+            className="icon-btn"
             onClick={() => inputRef.current?.click()}
             aria-label="Attach a lab document or a dataset"
             type="button"
@@ -188,6 +208,7 @@ export default function Composer({
             rows={1}
             value={text}
             placeholder={placeholder}
+            aria-label={placeholder}
             disabled={mode === 'waiting'}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -201,7 +222,7 @@ export default function Composer({
           />
 
           <button
-            className="composer-send"
+            className="send"
             onClick={send}
             disabled={!canSend}
             aria-label="Send"
@@ -211,13 +232,7 @@ export default function Composer({
           </button>
         </div>
       </div>
-      <p className="composer-note">
-        {mode === 'need-file'
-          ? 'Attach a .docx, .pdf, .ipynb or .md — plus a .csv if the lab needs data — or just paste the tasks here.'
-          : mode === 'revise'
-            ? 'I’ll redo only the tasks your change affects.'
-            : 'A run takes one to three minutes and costs about a fifth of a cent.'}
-      </p>
+      <p className="composer-note">{note}</p>
     </div>
   )
 }

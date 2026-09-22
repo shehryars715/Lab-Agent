@@ -1,20 +1,19 @@
 import { useMemo, useState } from 'react'
-import { Check } from './Icons'
 
 /** The mid-run question, inline in the thread.
  *
  *  A MODAL WOULD BE THE WRONG SHAPE HERE. It blocks the whole screen, so you
- *  lose the conversation that explains why you are being asked, and it has to
- *  be dismissed before you can read anything. Inline, the question sits under
- *  the agent's narration where it belongs and the thread above stays visible.
+ *  lose the sentences that explain why you are being asked, and it has to be
+ *  dismissed before you can read anything. Inline, the question sits under the
+ *  agent's narration where it belongs and the thread above stays visible.
  *
- *  It is also why asking twice in one run is acceptable now. The old modal
- *  asked once, after the work was done, because interrupting a progress screen
- *  costs the whole screen. A card in a conversation costs nothing.
+ *  It is also why asking twice in one run is acceptable. The old modal asked
+ *  once, after the work was done, because interrupting a progress screen costs
+ *  the whole screen. A card in a thread costs nothing.
  *
- *  Once answered, the card does NOT disappear. It stays in the transcript
- *  showing what was asked and what was said, which is the difference between a
- *  conversation and a form.
+ *  Once answered the card does NOT disappear. It stays showing what was asked
+ *  and what was said, which is the difference between a conversation and a
+ *  form.
  */
 export default function QuestionCard({ entry, onSubmit, submitting, error }) {
   const [values, setValues] = useState(() =>
@@ -33,25 +32,27 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
   if (entry.answers) {
     const answered = (entry.questions ?? []).filter((q) => (entry.answers[q.key] ?? '').trim())
     return (
-      <div className="card question-card answered">
-        <div className="q-answered-head">
-          <Check size={13} strokeWidth={3} />
-          Answered
-        </div>
-        {answered.map((q) => (
-          <div className="q-answer" key={q.key}>
-            <span className="q-answer-label">{q.label}</span>
-            <span className="q-answer-value">{entry.answers[q.key]}</span>
-          </div>
-        ))}
+      <div className="entry q q-done">
+        <h2 className="q-title">Answered</h2>
+        <dl className="answers">
+          {answered.map((q) => (
+            <div className="answer" key={q.key}>
+              <dt>{q.label}</dt>
+              <dd>{entry.answers[q.key]}</dd>
+            </div>
+          ))}
+        </dl>
       </div>
     )
   }
 
   if (entry.timedOut) {
     return (
-      <div className="card question-card timedout">
-        <div className="q-answered-head">No answer — carried on with defaults</div>
+      <div className="entry q q-done">
+        <h2 className="q-title">No answer — carried on with defaults</h2>
+        <p className="q-intro">
+          Ask for a change below and I will redo only the tasks it affects.
+        </p>
       </div>
     )
   }
@@ -70,21 +71,18 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
   }
 
   return (
-    <form className="card question-card" onSubmit={submit} noValidate>
-      <div className="q-head">
-        <span className="q-pulse" />
-        <span>Before I carry on</span>
-      </div>
-      <p className="q-intro">
+    <form className="entry q" onSubmit={submit} noValidate>
+      <h2 className="q-title">Before I write any code</h2>
+      <p className="q-intro prose">
         {entry.questions?.some((q) => q.reason)
-          ? "Things the manual doesn't settle, and that would change the code."
+          ? 'These are the things your manual does not settle, and each one would change the program I write.'
           : 'The details that go on the cover page.'}
       </p>
 
       {entry.known?.length > 0 && (
-        <div className="chips">
-          {entry.known.map((k, i) => (
-            <span className="chip" key={k.label} style={{ animationDelay: `${i * 40}ms` }}>
+        <div className="known">
+          {entry.known.map((k) => (
+            <span className="known-item" key={k.label}>
               <b>{k.label}</b>
               <span>{k.value}</span>
             </span>
@@ -92,33 +90,39 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
         </div>
       )}
 
-      {entry.questions?.map((q, i) => {
+      {entry.questions?.map((q) => {
         const invalid = touched[q.key] && q.required && !(values[q.key] ?? '').trim()
         return (
-          <div className="q-field" key={q.key} style={{ animationDelay: `${90 + i * 55}ms` }}>
-            <label className="q-label" htmlFor={`f-${entry.id}-${q.key}`}>
+          <div className="field" key={q.key}>
+            <label className="field-label" htmlFor={`f-${entry.id}-${q.key}`}>
               {q.label}
-              {!q.required && <span className="opt">optional</span>}
+              {!q.required && <span className="field-optional">optional</span>}
             </label>
-            {q.reason && <p className="q-reason">{q.reason}</p>}
+            {q.reason && <p className="field-reason prose">{q.reason}</p>}
             <input
               id={`f-${entry.id}-${q.key}`}
               type="text"
-              className={invalid ? 'invalid' : ''}
+              className={invalid ? 'is-invalid' : ''}
               value={values[q.key] ?? ''}
               autoFocus={q.key === focusKey}
               autoComplete="off"
               spellCheck={false}
+              aria-invalid={invalid || undefined}
+              aria-describedby={invalid ? `e-${entry.id}-${q.key}` : undefined}
               onChange={(e) => setValues((v) => ({ ...v, [q.key]: e.target.value }))}
               onBlur={() => setTouched((t) => ({ ...t, [q.key]: true }))}
             />
-            {q.hint && !invalid && <p className="q-hint">{q.hint}</p>}
-            {invalid && <p className="err-text">This one is needed.</p>}
+            {q.hint && !invalid && <p className="field-hint">{q.hint}</p>}
+            {invalid && (
+              <p className="field-err" id={`e-${entry.id}-${q.key}`}>
+                {q.label} is needed before I can carry on.
+              </p>
+            )}
           </div>
         )
       })}
 
-      {error && <p className="err-text">{error}</p>}
+      {error && <p className="field-err">{error}</p>}
 
       <button className="btn btn-primary q-submit" type="submit" disabled={submitting}>
         {submitting ? 'Sending…' : 'Answer and continue'}

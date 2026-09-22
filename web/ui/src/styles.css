@@ -1,90 +1,129 @@
 /* ---------------------------------------------------------------------------
-   Tokens.
+   Labs-Agent web client.
 
-   Everything visual is expressed once here and referenced by role, never by
-   value. The payoff is the dark block at the end of this section: the whole
-   theme switches by redefining ~18 variables, with no component knowing it
-   happened.
+   Everything visual is expressed once here as a token and referenced by role.
+   The payoff is the dark block below: the theme switches by redefining about
+   twenty variables and no component knows it happened.
 
-   Three theme states are possible: an explicit stamp on the root element, and
-   the absence of one, where only `prefers-color-scheme` can tell us. Both are
-   handled, and the explicit stamp wins in both directions.
+   The theme follows the operating system and nothing else. An explicit
+   `data-theme` stamp lived here for a while with nothing in the app able to
+   write one, which is a rulebook rather than a feature; it is gone. A toggle
+   would need a home in the header, and the header carries the wordmark only.
+
+   DARK IS NOT THE AFTERTHOUGHT HERE. The person using this is at their own
+   desk near midnight with the manual already open in a second window throwing
+   white light at them; this surface should not be the second glare source.
+   Dark was designed first and light was built to match, rather than the usual
+   way round.
 --------------------------------------------------------------------------- */
 
 :root {
-  --bg: #fbfbfd;
-  --bg-2: #f4f5f8;
+  color-scheme: light dark;
+
+  /* Ground and surfaces ---------------------------------------------------- */
+  --bg: #ffffff;
+  --bg-sunken: #f5f5f7;
   --surface: #ffffff;
-  --surface-2: #f4f5f8;
-  --surface-3: #eceef3;
+  --surface-2: #f5f5f7;
+  --surface-3: #ececf0;
 
-  --border: #e6e8ee;
-  --border-strong: #d3d7e0;
+  /* Hairlines. Expressed as alpha, not as a grey, so they sit correctly on
+     whatever surface they land on instead of only on the one they were
+     sampled against. */
+  --line: rgba(0, 0, 0, 0.11);
+  --line-strong: rgba(0, 0, 0, 0.19);
 
-  --text: #14161b;
-  --text-muted: #5f6673;
-  --text-faint: #979eac;
+  /* Ink. Every level here clears 4.5:1 on --bg, including the one used for
+     placeholders, which is the level that usually fails. */
+  --text: #1d1d1f;
+  --text-2: #5a5a5f;
+  --text-3: #6e6e73;
 
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef0fe;
+  --accent: #0071e3;
+  --accent-fill: #0062cc;
+  --accent-fill-hover: #0055b3;
+  --accent-wash: rgba(0, 113, 227, 0.09);
+  --accent-ring: rgba(0, 113, 227, 0.4);
 
-  --ok: #059669;
-  --ok-soft: #e7f7f0;
-  --warn: #c2740c;
-  --warn-soft: #fdf3e3;
-  --danger: #dc2626;
-  --danger-soft: #fdecec;
+  --ok: #1f7a3d;
+  --warn: #8a5300;
+  --danger: #c4162a;
 
-  --shadow-sm: 0 1px 2px rgba(16, 18, 24, 0.05);
-  --shadow-md: 0 4px 16px -6px rgba(16, 18, 24, 0.12), 0 1px 3px rgba(16, 18, 24, 0.05);
-  --shadow-lg: 0 20px 50px -20px rgba(16, 18, 24, 0.22);
+  /* Depth carries an offset and a soft blur. A zero-offset coloured halo is
+     decoration, not elevation, so there isn't one anywhere in this file. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 1px rgba(0, 0, 0, 0.03);
+  --shadow-2: 0 6px 20px -8px rgba(0, 0, 0, 0.16), 0 2px 4px rgba(0, 0, 0, 0.05);
+  --shadow-3: 0 12px 40px -12px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.07);
 
-  --r-sm: 9px;
-  --r-md: 13px;
-  --r-lg: 18px;
-  --rail: 800px;
+  --r-1: 7px;
+  --r-2: 11px;
+  --r-3: 16px;
+  --r-pill: 999px;
 
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* The column. Prose inside it is capped separately -- the rail is wide
+     enough for a task row with numbers on the right, which is wider than
+     anything you should ask someone to read a paragraph across. */
+  --rail: 45rem;
+  --measure: 38rem;
 
-  --font: "Segoe UI Variable Display", "Segoe UI", -apple-system,
-    BlinkMacSystemFont, "Inter", "Helvetica Neue", Arial, sans-serif;
-  --mono: "Cascadia Code", "JetBrains Mono", ui-monospace, "SF Mono", Menlo,
-    Consolas, monospace;
+  --gutter: 20px;
+  --header-h: 52px;
+
+  /* One easing for everything that enters, one for everything that swaps.
+     Two curves is a system; six is a habit. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-swap: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-display:
+    -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI",
+    system-ui, "Helvetica Neue", Arial, sans-serif;
+  --mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+    monospace;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0a0b0e;
-    --bg-2: #101216;
-    --surface: #14161b;
-    --surface-2: #1a1d23;
-    --surface-3: #23272f;
+  :root {
+    --bg: #0c0c0e;
+    --bg-sunken: #08080a;
+    --surface: #151518;
+    --surface-2: #1b1b1f;
+    --surface-3: #232328;
 
-    --border: #262a32;
-    --border-strong: #363b45;
+    --line: rgba(255, 255, 255, 0.11);
+    --line-strong: rgba(255, 255, 255, 0.2);
 
-    --text: #eceef2;
-    --text-muted: #9ba2b0;
-    --text-faint: #6c7382;
+    --text: #f5f5f7;
+    --text-2: #a6a6ad;
+    --text-3: #8e8e97;
 
-    --accent: #818cf8;
-    --accent-hover: #a5b0ff;
-    --accent-soft: #1c1d38;
+    --accent: #0a84ff;
+    --accent-fill: #0b66c6;
+    --accent-fill-hover: #0a5aae;
+    --accent-wash: rgba(10, 132, 255, 0.16);
+    --accent-ring: rgba(10, 132, 255, 0.5);
 
-    --ok: #34d399;
-    --ok-soft: #10291f;
-    --warn: #fbbf24;
-    --warn-soft: #2a2110;
-    --danger: #f87171;
-    --danger-soft: #2b1414;
+    --ok: #32d158;
+    --warn: #ffd426;
+    --danger: #ff5f57;
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 4px 16px -6px rgba(0, 0, 0, 0.55);
-    --shadow-lg: 0 20px 50px -20px rgba(0, 0, 0, 0.7);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-2: 0 6px 20px -8px rgba(0, 0, 0, 0.7), 0 2px 4px rgba(0, 0, 0, 0.4);
+    --shadow-3: 0 12px 40px -12px rgba(0, 0, 0, 0.8), 0 2px 8px rgba(0, 0, 0, 0.5);
   }
 }
+
+
+/* ---------------------------------------------------------------------------
+   Reset, and the browser surfaces nobody themes.
+
+   Selection, the caret, scrollbars, focus rings and the numerals in changing
+   data all ship with defaults that belong to no design system. They are the
+   cheapest signal that a page was built rather than assembled.
+--------------------------------------------------------------------------- */
 
 *,
 *::before,
@@ -93,850 +132,901 @@
 }
 
 html,
-body {
-  margin: 0;
-  height: 100%;
-}
-
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font);
-  font-size: 15px;
-  line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-}
-
+body,
 #root {
   height: 100%;
 }
 
-button {
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-optical-sizing: auto;
+  font-synthesis-weight: none;
+}
+
+::selection {
+  background: var(--accent-wash);
+  color: var(--text);
+}
+
+:where(input, textarea) {
+  caret-color: var(--accent);
+}
+
+/* Firefox and the modern standard. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--r-pill);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+  background-clip: content-box;
+}
+
+/* One ring, from the palette, and only for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+button,
+input,
+textarea {
   font: inherit;
   color: inherit;
 }
 
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+dl,
+dd,
+figure {
+  margin: 0;
+  padding: 0;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+/* Every number that changes in place is tabular, so a digit turning over does
+   not shift the ones beside it. This is the difference between a stat that
+   ticks and a stat that twitches. */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.prose {
+  max-width: var(--measure);
+}
+
+/* A task's state is drawn, not written, so the word that names it has to
+   reach a screen reader some other way. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---------------------------------------------------------------------------
    Shell: a fixed header, a scrolling thread, a pinned composer.
+
    Grid rather than nested flexbox so the thread is the only thing that
-   scrolls -- `min-height: 0` on the row is what makes that true, and is the
-   single most-missed line in this layout.
+   scrolls and the composer never leaves the bottom of the viewport. `min-height
+   0` on the middle row is what actually lets it scroll -- a grid child's
+   default `min-height: auto` refuses to shrink below its content.
+
+   THE COLUMN NEEDS THE SAME TREATMENT, and for a less obvious reason. A single
+   implicit `auto` column takes its minimum from the widest item's min-content,
+   so at 390px the composer's attachment row -- a file name, its size and a
+   remove button that cannot wrap -- demanded 412px and the whole grid grew to
+   match. Every descendant then inherited a 412px world inside a 390px
+   viewport, which reads as "the design overflows on mobile" when in fact one
+   row refused to shrink. `minmax(0, 1fr)` caps the track at its share and
+   sends the pressure back to the row, where the ellipsis already handles it.
 --------------------------------------------------------------------------- */
 
 .app {
-  height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: var(--header-h) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  background: var(--bg);
 }
 
-.topbar {
+.header,
+.thread,
+.composer-wrap {
+  min-width: 0;
+}
+
+.header {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 14px 22px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(12px);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.mark {
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
-  background: linear-gradient(145deg, var(--accent), #7c6cf0);
-  display: grid;
-  place-items: center;
-  color: #fff;
-  flex: none;
-  box-shadow: 0 2px 8px -2px var(--accent);
-}
-
-.mark.big {
-  width: 44px;
-  height: 44px;
-  border-radius: 13px;
+  gap: 10px;
+  padding: 0 var(--gutter);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
 }
 
 .wordmark {
-  font-size: 13.5px;
-  font-weight: 620;
-  letter-spacing: -0.012em;
-}
-
-.tagline {
-  font-size: 12.5px;
-  color: var(--text-faint);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.014em;
+  color: var(--text);
 }
 
 .thread {
   overflow-y: auto;
-  scroll-behavior: smooth;
-  padding: 30px 22px 12px;
+  overscroll-behavior-y: contain;
+  scroll-padding-bottom: 24px;
 }
 
-.thread-inner {
-  max-width: var(--rail);
+.rail {
+  width: min(var(--rail), 100% - var(--gutter) * 2);
   margin: 0 auto;
+  min-height: 100%;
+  padding: 32px 0 8px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
+}
+
+.thread-end {
+  height: 1px;
+}
+
+/* The one authored entrance. Every entry uses it, nothing else animates in,
+   and the element's resting style is already visible -- `backwards` only
+   applies during a delay, so with animations off nothing is left hidden. */
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+}
+
+.entry {
+  animation: enter 240ms var(--ease-out) backwards;
 }
 
 /* ---------------------------------------------------------------------------
    Messages
 --------------------------------------------------------------------------- */
 
-.bubble {
+.msg-user {
   align-self: flex-end;
-  max-width: 82%;
-  padding: 10px 15px;
-  border-radius: 16px 16px 4px 16px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 14.5px;
-  box-shadow: var(--shadow-sm);
-  animation: rise 0.34s var(--ease) both;
+  max-width: min(32rem, 100%);
+  padding: 9px 14px;
+  border-radius: var(--r-3) var(--r-3) var(--r-1) var(--r-3);
+  background: var(--surface-2);
+  color: var(--text);
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
-/* The agent's voice.
-
-   A soft card with the corner nearest its own mark squared off, mirroring the
-   user bubble's squared bottom-right -- so the two sides of the conversation
-   are distinguishable at a glance without either one shouting. The mark is a
-   still version of the working orb, which is what makes the sentence and the
-   spinner read as the same speaker rather than two unrelated widgets.
-*/
 .say {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  max-width: 88%;
-  animation: sayIn 0.5s var(--ease) both;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.say-mark {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  flex: none;
-  margin-top: 4px;
-  background: radial-gradient(circle at 35% 30%,
-    hsl(258 92% 74%),
-    hsl(258 78% 54%));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+/* ---------------------------------------------------------------------------
+   Empty state.
+
+   Type leads. No badge tile, no icon in a rounded square, and no label above
+   the heading -- the heading carries its own weight.
+--------------------------------------------------------------------------- */
+
+.empty {
+  /* The only entry that centres: with nothing else in the thread, top-aligning
+     it leaves the first viewport looking unfinished. */
+  margin-block: auto;
 }
 
-.say-body {
-  margin: 0;
-  padding: 11px 15px;
-  border-radius: 4px 15px 15px 15px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
-  font-size: 14.5px;
-  line-height: 1.6;
+.empty-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 1.2rem + 1.6vw, 2rem);
+  line-height: 1.16;
+  letter-spacing: -0.022em;
+  font-weight: 600;
+  text-wrap: balance;
+  max-width: 22ch;
   color: var(--text);
 }
 
-/* The most recent sentence says what is happening now, so it holds a faint
-   tint until the next one arrives. Subtle enough to read as emphasis rather
-   than as a state change. */
-.say.is-latest .say-body {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 6%, var(--surface)),
-    var(--surface)
-  );
+.empty-body {
+  margin-top: 14px;
+  font-size: 16px;
+  line-height: 1.62;
+  color: var(--text-2);
 }
 
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-md);
-  overflow: hidden;
-  animation: rise 0.42s var(--ease) both;
-}
-
-/* ---------------------------------------------------------------------------
-   Welcome
---------------------------------------------------------------------------- */
-
-.welcome {
-  padding: 40px 4px 0;
-  animation: rise 0.5s var(--ease) both;
-}
-
-.welcome .mark.big {
-  margin-bottom: 18px;
-}
-
-.welcome h1 {
-  font-size: 26px;
-  font-weight: 640;
-  letter-spacing: -0.028em;
-  line-height: 1.25;
-  margin: 0 0 10px;
-}
-
-.welcome p {
-  color: var(--text-muted);
-  margin: 0 0 8px;
-  max-width: 58ch;
-}
-
-.welcome-dim {
-  color: var(--text-faint) !important;
-  font-size: 13.5px;
+.empty-note {
+  margin-top: 10px;
+  font-size: 15px;
+  color: var(--text-3);
 }
 
 .recent {
-  margin-top: 34px;
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
 }
 
-.eyebrow {
-  font-size: 10.5px;
-  font-weight: 620;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-  margin: 0 0 10px;
+.recent-head {
+  font-size: 13px;
+  font-weight: 590;
+  letter-spacing: -0.003em;
+  color: var(--text-2);
+  margin-bottom: 6px;
 }
 
-.recent-list {
-  display: grid;
-  gap: 6px;
-}
-
-.run-link {
+.recent-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
+  padding: 9px 10px;
+  margin-left: -10px;
+  border: 0;
+  border-radius: var(--r-2);
+  background: none;
   text-align: left;
-  padding: 9px 13px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
   cursor: pointer;
-  transition: transform 0.15s var(--ease), border-color 0.2s var(--ease);
-  animation: rise 0.4s var(--ease) both;
+  transition: background 140ms var(--ease-swap);
 }
 
-.run-link:hover {
-  transform: translateX(2px);
-  border-color: var(--accent);
+.recent-row:hover {
+  background: var(--surface-2);
 }
 
-.run-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
+.recent-dot {
+  width: 6px;
+  height: 6px;
   flex: none;
-}
-
-.run-dot.ok {
+  border-radius: 50%;
   background: var(--ok);
 }
 
-.run-dot.warn {
+.recent-dot.warn {
   background: var(--warn);
 }
 
+.recent-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.recent-meta {
+  flex: none;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* ---------------------------------------------------------------------------
+   The run block.
+
+   ONE BLOCK, NOT TWO. It starts as the thing that is working and becomes the
+   thing that is finished, in place. A second block would claim the user did
+   two things when they did one.
+--------------------------------------------------------------------------- */
+
+.run {
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.run.is-superseded {
+  opacity: 0.58;
+}
+
+.run-superseded {
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.run-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 18px;
+}
+
+.run-head-main {
+  flex: 1;
+  min-width: 0;
+}
+
 .run-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 13.5px;
-  font-weight: 520;
+  font-size: 16px;
+  font-weight: 590;
+  letter-spacing: -0.012em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.run-sub {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.run-meta {
-  font-size: 11.5px;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---------------------------------------------------------------------------
-   The orb -- the ambient "something is happening" indicator.
-
-   Two rotating dashed rings and two expanding ripples. Motion that says work
-   is in progress without claiming a specific amount, which is the honest thing
-   for a stage that is one model call with no measurable percentage. The hue
-   comes from the real phase; the amber is reserved for genuinely waiting on a
-   human.
---------------------------------------------------------------------------- */
-
-.orb {
-  position: relative;
-  width: 34px;
-  height: 34px;
+.run-stats {
   flex: none;
-  display: grid;
-  place-items: center;
-  --hue: 225;
-}
-
-.orb-core {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%,
-    hsl(var(--hue) 92% 72%),
-    hsl(var(--hue) 78% 52%));
-  box-shadow: 0 0 14px -1px hsl(var(--hue) 85% 60% / 0.55);
-  animation: breathe 2.4s var(--ease-in-out) infinite;
-}
-
-.orb-ring,
-.orb-ripple {
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  border: 1.5px solid hsl(var(--hue) 80% 60% / 0.5);
-}
-
-.orb-ring {
-  border-style: dashed;
-  animation: spin 7s linear infinite;
-}
-
-.orb-ring.d2 {
-  inset: 8px;
-  border-style: solid;
-  border-color: hsl(var(--hue) 80% 62% / 0.35);
-  animation: spin 5s linear infinite reverse;
-}
-
-.orb-ripple {
-  inset: 12px;
-  animation: ripple 2.6s var(--ease-in-out) infinite;
-}
-
-.orb-ripple.d2 {
-  animation-delay: 1.3s;
-}
-
-/* ---------------------------------------------------------------------------
-   Working card
---------------------------------------------------------------------------- */
-
-.working-card {
-  padding: 16px 18px 14px;
-}
-
-.working-top {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 12px;
+  font-size: 13px;
+  color: var(--text-2);
+  padding-top: 2px;
 }
 
-.working-head {
-  flex: 1;
-  min-width: 0;
+.run-stats .dim {
+  color: var(--text-3);
 }
 
-.working-status {
-  font-size: 14.5px;
-  font-weight: 570;
-  letter-spacing: -0.01em;
-}
-
-.working-lab {
-  font-size: 12.5px;
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.working-stats {
+/* Real progress, from tasks actually finished. There is no invented
+   percentage anywhere in this file; when the count is unknown the rule shows
+   the phase instead and claims nothing about how much is left. */
+.progress {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 1px;
-  flex: none;
+  gap: 3px;
+  padding: 0 18px 14px;
 }
 
-.num {
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 540;
-}
-
-.num.dim {
-  color: var(--text-faint);
-  font-weight: 450;
-}
-
-.phasebar {
-  display: flex;
-  gap: 4px;
-  margin-top: 14px;
-}
-
-.seg {
-  flex: 1;
+.progress-seg {
   height: 3px;
-  border-radius: 99px;
+  flex: 1;
+  border-radius: var(--r-pill);
   background: var(--surface-3);
-  transition: background 0.5s var(--ease);
+  transition: background 200ms var(--ease-swap);
 }
 
-.seg.done {
+.progress-seg.is-done {
   background: var(--accent);
 }
 
-.seg.active {
+.progress-seg.is-active {
   background: var(--accent);
-  animation: segPulse 1.6s var(--ease-in-out) infinite;
+  opacity: 0.45;
 }
+
+/* ---------------------------------------------------------------------------
+   Task rows -- the signature interaction.
+
+   A row changes state by weight, ink AND a drawn mark, never by colour alone,
+   so it survives a colour-blind reader and a greyscale screenshot. The row
+   height is fixed and the right-hand slot swaps its contents in place, so a
+   live activity line arriving never reflows the column under someone's eyes.
+--------------------------------------------------------------------------- */
 
 .tasks {
-  margin-top: 14px;
-  border-top: 1px solid var(--border);
-  padding-top: 4px;
+  border-top: 1px solid var(--line);
 }
 
 .task {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 7px 0;
-  font-size: 13.5px;
-  animation: rise 0.34s var(--ease) both;
+  gap: 12px;
+  min-height: 42px;
+  padding: 6px 18px;
+  border-bottom: 1px solid var(--line);
 }
 
-.task-pip {
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
+.task:last-child {
+  border-bottom: 0;
+}
+
+.task-mark {
   display: grid;
   place-items: center;
   flex: none;
-  border: 1.5px solid var(--border-strong);
-  color: transparent;
-  transition: background 0.3s var(--ease), border-color 0.3s var(--ease);
+  width: 16px;
+  height: 16px;
+  color: var(--text-3);
 }
 
-.task.running .task-pip {
-  border-color: var(--accent);
-  border-top-color: transparent;
-  animation: spin 0.85s linear infinite;
+/* The same mark serves a finished run's headline, where it summarises the
+   whole thing rather than one row. */
+.task-mark.is-ok {
+  color: var(--ok);
 }
 
-.task.passed .task-pip {
-  background: var(--ok);
-  border-color: var(--ok);
-  color: #fff;
+.task-mark.is-bad {
+  color: var(--danger);
 }
 
-.task.failed .task-pip {
-  background: var(--danger);
-  border-color: var(--danger);
-  color: #fff;
+/* Pending is a hollow ring: present, not yet anything. */
+.task-mark-pending {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  opacity: 0.65;
 }
 
-.task-title {
-  flex: 1;
+/* Running is solid, and the only mark that moves -- a two-step opacity breath,
+   because something genuinely is in progress. */
+.task-mark-running {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: breathe 1.6s var(--ease-swap) infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.task.is-running .task-mark,
+.task.is-running .task-name {
+  color: var(--accent);
+}
+
+.task.is-running .task-name {
+  font-weight: 590;
+}
+
+.task.is-passed .task-mark {
+  color: var(--ok);
+}
+
+.task.is-failed .task-mark {
+  color: var(--danger);
+}
+
+.task.is-pending .task-name {
+  color: var(--text-2);
+}
+
+.task-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text);
 }
 
-.task-meta {
-  font-size: 11.5px;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-  flex: none;
+.task-side {
+  justify-self: end;
+  max-width: 17rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text-3);
+  animation: swap 140ms var(--ease-swap);
 }
 
-.task-live {
+@keyframes swap {
+  from {
+    opacity: 0;
+  }
+}
+
+.task-side.is-live {
   font-family: var(--mono);
-  font-size: 11px;
-  color: var(--accent);
-  flex: none;
-  max-width: 22ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  animation: fade 0.3s var(--ease) both;
+  font-size: 11.5px;
+  letter-spacing: -0.01em;
+  color: var(--text-2);
 }
 
-.task-err {
-  font-size: 11.5px;
+.task-side.is-error {
   color: var(--danger);
-  flex: none;
-  max-width: 26ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------------
-   Result
+   Result and downloads
 --------------------------------------------------------------------------- */
 
-.result-card {
-  padding: 20px;
-}
-
-.result-card.superseded {
-  opacity: 0.55;
-  filter: saturate(0.6);
-}
-
-.superseded-note {
-  font-size: 11.5px;
-  color: var(--text-faint);
-  font-style: italic;
-  margin-bottom: 12px;
-}
-
-.result-top {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.badge {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  flex: none;
-  animation: pop 0.5s var(--ease) both;
-}
-
-.badge.ok {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-.badge.warn {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
-.badge.bad {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.result-title {
-  font-size: 16px;
-  font-weight: 620;
-  letter-spacing: -0.018em;
-}
-
-.result-sub {
-  font-size: 12.5px;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-}
-
 .downloads {
-  margin-top: 16px;
-  display: grid;
-  gap: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px 14px;
+  border-top: 1px solid var(--line);
 }
 
-.dl-primary,
-.dl-secondary {
+/* The one line that has to be read before a file is taken. */
+.downloads-note {
+  max-width: var(--measure);
+  margin-bottom: 10px;
+  padding: 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* A row, not a card. Boxing these inside the run block made a bordered
+   container inside a bordered container; the hairline and the spacing already
+   carry the separation. The primary stays filled because it is a button. */
+.dl {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 11px 14px;
-  border-radius: var(--r-sm);
+  padding: 10px 8px;
+  border-radius: var(--r-2);
+  color: var(--text);
   text-decoration: none;
-  color: inherit;
-  transition: transform 0.15s var(--ease), box-shadow 0.2s var(--ease),
-    border-color 0.2s var(--ease), background 0.2s var(--ease);
+  transition:
+    background 140ms var(--ease-swap),
+    transform 140ms var(--ease-out);
 }
 
-.dl-primary {
-  border: 1px solid var(--accent);
-  background: var(--accent-soft);
+.dl:hover {
+  background: var(--surface-2);
 }
 
-.dl-secondary {
-  border: 1px solid var(--border);
-  background: var(--surface);
+.dl:active {
+  transform: scale(0.994);
 }
 
-.dl-primary:hover,
-.dl-secondary:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+.dl[data-primary="true"] {
+  margin-bottom: 6px;
+  padding: 12px 13px;
+  background: var(--accent-fill);
+  color: #fff;
+  box-shadow: var(--shadow-1);
 }
 
-.dl-secondary:hover {
-  border-color: var(--accent);
+.dl[data-primary="true"]:hover {
+  background: var(--accent-fill-hover);
 }
 
 .dl-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
   display: grid;
   place-items: center;
   flex: none;
-  background: var(--surface-2);
-  color: var(--text-muted);
+  width: 22px;
+  height: 22px;
+  color: var(--text-3);
 }
 
-.dl-primary .dl-icon {
-  background: var(--accent);
+.dl[data-primary="true"] .dl-icon {
   color: #fff;
+}
+
+.dl-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .dl-name {
   display: block;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 560;
-}
-
-.dl-sub {
-  display: block;
-  font-size: 11.5px;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.dl-arrow {
-  margin-left: auto;
-  color: var(--text-faint);
+.dl-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dl[data-primary="true"] .dl-sub {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.dl-go {
   flex: none;
-  transition: transform 0.2s var(--ease), color 0.2s var(--ease);
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  transition: transform 160ms var(--ease-out);
 }
 
-.dl-primary:hover .dl-arrow,
-.dl-secondary:hover .dl-arrow {
-  transform: translateY(2px);
-  color: var(--accent);
+.dl:hover .dl-go {
+  transform: translateY(1px);
 }
 
-.error-card {
-  padding: 18px 20px;
+.dl[data-primary="true"] .dl-go {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.code-group {
+  padding: 0 18px 18px;
+}
+
+.code-head {
+  font-size: 13px;
+  font-weight: 590;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+.code-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 /* ---------------------------------------------------------------------------
-   Question card
+   Failure
 --------------------------------------------------------------------------- */
 
-.question-card {
-  padding: 18px 20px;
-}
-
-.question-card.answered,
-.question-card.timedout {
-  padding: 13px 18px;
-  background: var(--surface-2);
-  box-shadow: none;
-}
-
-.q-answered-head {
+.run-error {
   display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 570;
-  color: var(--ok);
-  margin-bottom: 6px;
+  gap: 12px;
+  padding: 16px 18px;
 }
 
-.question-card.timedout .q-answered-head {
-  color: var(--warn);
-}
-
-.q-answer {
-  display: flex;
-  gap: 10px;
-  font-size: 13px;
-  padding: 3px 0;
-}
-
-.q-answer-label {
-  color: var(--text-faint);
+.run-error .mark-bad {
   flex: none;
-}
-
-.q-answer-value {
-  font-weight: 520;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.q-head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 14.5px;
-  font-weight: 600;
-  letter-spacing: -0.012em;
-}
-
-.q-pulse {
-  width: 7px;
-  height: 7px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: var(--accent);
-  flex: none;
-  animation: qpulse 1.7s var(--ease-in-out) infinite;
+  background: var(--danger);
+  color: var(--bg);
+}
+
+.run-error-body {
+  min-width: 0;
+}
+
+.run-error-title {
+  font-size: 15px;
+  font-weight: 590;
+}
+
+.run-error-detail {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+   The mid-run question.
+
+   Inline in the thread, never a modal: a modal blocks the screen, so you lose
+   the sentences that explain why you are being asked. It also stays in the
+   thread after it is answered -- that is the difference between a
+   conversation and a form.
+--------------------------------------------------------------------------- */
+
+.q {
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  padding: 18px;
+}
+
+.q-title {
+  font-size: 15px;
+  font-weight: 590;
+  letter-spacing: -0.01em;
+  color: var(--text);
 }
 
 .q-intro {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin: 6px 0 14px;
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--text-2);
 }
 
-.chips {
+.known {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
-  margin-bottom: 16px;
+  gap: 6px;
+  margin-top: 14px;
 }
 
-.chip {
-  display: inline-flex;
+.known-item {
+  display: flex;
   align-items: baseline;
-  gap: 5px;
-  font-size: 11.5px;
+  gap: 6px;
   padding: 4px 9px;
-  border-radius: 99px;
-  background: var(--ok-soft);
-  color: var(--ok);
-  animation: rise 0.34s var(--ease) both;
-}
-
-.chip b {
-  font-weight: 600;
-  opacity: 0.72;
-}
-
-.chip span {
-  color: var(--text);
-  font-weight: 500;
-}
-
-.q-field {
-  margin-bottom: 14px;
-  animation: rise 0.4s var(--ease) both;
-}
-
-.q-label {
-  display: block;
-  font-size: 13px;
-  font-weight: 570;
-  margin-bottom: 3px;
-}
-
-.q-label .opt {
-  color: var(--text-faint);
-  font-weight: 450;
-  margin-left: 5px;
-  font-size: 11.5px;
-}
-
-.q-reason {
-  font-size: 12px;
-  color: var(--accent);
-  margin: 0 0 6px;
-  opacity: 0.85;
-}
-
-.q-hint {
-  font-size: 11.5px;
-  color: var(--text-faint);
-  margin: 5px 0 0;
-}
-
-input[type="text"] {
-  width: 100%;
-  font: inherit;
-  font-size: 14px;
-  color: var(--text);
+  border-radius: var(--r-pill);
   background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 10px 12px;
-  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease),
-    background 0.18s var(--ease);
+  font-size: 12px;
+  color: var(--text-2);
 }
 
-input[type="text"]:focus {
+.known-item b {
+  font-weight: 560;
+  color: var(--text-3);
+}
+
+.field {
+  margin-top: 16px;
+}
+
+.field-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--text);
+  margin-bottom: 5px;
+}
+
+.field-optional {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* The reason the agent needs this. Shown because "why do you need this" is
+   the difference between a question that looks considered and one that looks
+   like a form. */
+.field-reason {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-bottom: 7px;
+}
+
+.field input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-2);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  transition:
+    border-color 140ms var(--ease-swap),
+    box-shadow 140ms var(--ease-swap);
+}
+
+.field input::placeholder {
+  color: var(--text-3);
+}
+
+.field input:focus {
   outline: none;
-  background: var(--surface);
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
-input.invalid {
+.field input.is-invalid {
   border-color: var(--danger);
 }
 
-.err-text {
+.field-hint {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.field-err {
+  margin-top: 5px;
   font-size: 12px;
   color: var(--danger);
-  margin: 5px 0 0;
 }
+
+.q-done .q-title {
+  color: var(--text-2);
+}
+
+.answers {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.answer {
+  display: grid;
+  grid-template-columns: minmax(0, 13rem) minmax(0, 1fr);
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+.answer dt {
+  color: var(--text-3);
+}
+
+.answer dd {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+   Buttons
+--------------------------------------------------------------------------- */
 
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
+  gap: 7px;
   padding: 10px 18px;
-  font-size: 13.5px;
-  font-weight: 570;
+  border: 1px solid transparent;
+  border-radius: var(--r-2);
+  font-size: 14px;
+  font-weight: 560;
   cursor: pointer;
-  transition: background 0.18s var(--ease), transform 0.12s var(--ease),
-    box-shadow 0.18s var(--ease);
+  transition:
+    background 140ms var(--ease-swap),
+    border-color 140ms var(--ease-swap),
+    transform 140ms var(--ease-out),
+    opacity 140ms var(--ease-swap);
 }
 
 .btn:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-.btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.btn-primary {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 3px 12px -4px var(--accent);
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-
-.btn-secondary {
-  background: var(--surface);
-  border-color: var(--border-strong);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+  transform: scale(0.985);
 }
 
 .btn:disabled {
@@ -944,349 +1034,344 @@ input.invalid {
   cursor: not-allowed;
 }
 
+.btn-primary {
+  background: var(--accent-fill);
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-fill-hover);
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
 .btn-wide {
   width: 100%;
-  margin-top: 18px;
+  margin-top: 16px;
 }
 
 .q-submit {
-  width: 100%;
-  margin-top: 6px;
+  margin-top: 18px;
 }
 
 /* ---------------------------------------------------------------------------
-   Composer
+   Composer -- pinned, and the only element in the page with real elevation.
+
+   It is the primary action, so it is the one thing allowed to sit above the
+   surface. Everything else is separated by a hairline.
 --------------------------------------------------------------------------- */
 
 .composer-wrap {
-  padding: 10px 22px 18px;
-  background: linear-gradient(to top, var(--bg) 72%, transparent);
-  position: sticky;
-  bottom: 0;
-  z-index: 10;
+  padding: 10px var(--gutter) 14px;
+  background: linear-gradient(to top, var(--bg) 62%, transparent);
 }
 
 .composer {
-  max-width: var(--rail);
+  width: min(var(--rail), 100%);
   margin: 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-3);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-lg);
-  padding: 8px 8px 8px 12px;
-  transition: border-color 0.2s var(--ease), transform 0.2s var(--ease);
+  box-shadow: var(--shadow-2);
+  padding: 8px;
+  transition:
+    border-color 160ms var(--ease-swap),
+    box-shadow 160ms var(--ease-swap);
 }
 
 .composer:focus-within {
   border-color: var(--accent);
+  box-shadow: var(--shadow-2), 0 0 0 3px var(--accent-ring);
 }
 
-.composer.over {
+.composer.is-over {
   border-color: var(--accent);
-  transform: scale(1.008);
-  background: var(--accent-soft);
+  background: var(--accent-wash);
+}
+
+.composer.is-muted {
+  opacity: 0.72;
 }
 
 .attach {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 4px 4px 8px;
-  padding: 7px 11px;
-  border-radius: var(--r-sm);
+  margin: 2px 4px 8px;
+  padding: 6px 8px 6px 10px;
+  border-radius: var(--r-2);
   background: var(--surface-2);
-  font-size: 12.5px;
-  animation: rise 0.32s var(--ease) both;
-}
-
-.attach-name {
-  font-weight: 550;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.attach-size {
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-  flex: none;
-}
-
-/* A data chip reads as a variant of the document chip, not a second control:
-   same shape, one tag, dimmer. The lab is the subject; its data is an
-   accessory, and the visual weight should say so. */
-.attach-data {
-  background: var(--surface-1, var(--surface-2));
-  box-shadow: inset 0 0 0 1px var(--surface-2);
+  font-size: 13px;
 }
 
 .attach-kind {
   flex: none;
   padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text-faint);
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
   font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.attach-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.attach-size {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 .attach-x {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-  padding: 3px;
-  border-radius: 5px;
+  flex: none;
   display: grid;
   place-items: center;
-  flex: none;
-  transition: color 0.15s, background 0.15s;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    background 140ms var(--ease-swap),
+    color 140ms var(--ease-swap);
 }
 
 .attach-x:hover {
-  color: var(--danger);
-  background: var(--danger-soft);
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 .composer-row {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-}
-
-.composer-attach {
-  border: 0;
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-  padding: 8px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  flex: none;
-  transition: color 0.15s, background 0.15s;
-}
-
-.composer-attach:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
+  gap: 6px;
 }
 
 .composer textarea {
   flex: 1;
   min-width: 0;
-  border: 0;
-  outline: none;
-  resize: none;
-  background: transparent;
-  font: inherit;
-  font-size: 14.5px;
-  line-height: 1.5;
-  color: var(--text);
-  padding: 9px 0;
   max-height: 160px;
+  padding: 8px 4px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
 }
 
 .composer textarea::placeholder {
-  color: var(--text-faint);
+  color: var(--text-3);
 }
 
-.composer textarea:disabled {
-  cursor: not-allowed;
-}
-
-.composer-send {
-  border: 0;
-  background: var(--accent);
-  color: #fff;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
+.icon-btn {
+  flex: none;
   display: grid;
   place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--r-2);
+  background: none;
+  color: var(--text-2);
   cursor: pointer;
+  transition:
+    background 140ms var(--ease-swap),
+    color 140ms var(--ease-swap);
+}
+
+.icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.send {
   flex: none;
-  transition: background 0.18s var(--ease), transform 0.12s var(--ease),
-    opacity 0.18s var(--ease);
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--r-2);
+  background: var(--accent-fill);
+  color: #fff;
+  cursor: pointer;
+  transition:
+    background 140ms var(--ease-swap),
+    opacity 140ms var(--ease-swap),
+    transform 140ms var(--ease-out);
 }
 
-.composer-send:hover:not(:disabled) {
-  background: var(--accent-hover);
-  transform: translateY(-1px);
+.send:hover:not(:disabled) {
+  background: var(--accent-fill-hover);
 }
 
-.composer-send:disabled {
-  opacity: 0.3;
+.send:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.send:disabled {
+  background: var(--surface-3);
+  color: var(--text-3);
   cursor: not-allowed;
 }
 
 .composer-note {
-  max-width: var(--rail);
+  width: min(var(--rail), 100%);
   margin: 8px auto 0;
-  text-align: center;
-  font-size: 11.5px;
-  color: var(--text-faint);
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--text-3);
 }
+
+/* ---------------------------------------------------------------------------
+   Toast
+--------------------------------------------------------------------------- */
 
 .toast {
   position: fixed;
-  bottom: 108px;
   left: 50%;
+  bottom: 132px;
   transform: translateX(-50%);
-  background: var(--danger-soft);
-  color: var(--danger);
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  padding: 9px 16px;
-  border-radius: 99px;
+  z-index: 20;
+  max-width: min(30rem, calc(100% - 32px));
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
   font-size: 13px;
-  box-shadow: var(--shadow-md);
-  z-index: 30;
-  animation: rise 0.3s var(--ease) both;
-  max-width: min(92vw, 620px);
+  color: var(--text);
+  animation: enter 240ms var(--ease-out) backwards;
 }
 
 /* ---------------------------------------------------------------------------
-   Keyframes
+   Narrow screens.
+
+   The rail already collapses to the viewport minus its gutters, so this is
+   about the things that do not scale: the task row's right-hand slot, which
+   must give up width before the title does, and the composer's padding.
 --------------------------------------------------------------------------- */
 
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(7px);
+@media (max-width: 600px) {
+  :root {
+    --gutter: 14px;
+    --header-h: 48px;
   }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
 
-@keyframes fade {
-  from {
-    opacity: 0;
+  .rail {
+    padding-top: 22px;
+    gap: 20px;
   }
-  to {
-    opacity: 1;
-  }
-}
 
-/* The mark fades in a beat ahead of the words, so the sentence reads as having
-   been spoken rather than as a block that simply appeared. */
-@keyframes sayIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.985);
-    filter: blur(1.5px);
+  .run-head,
+  .q {
+    padding: 14px;
   }
-  to {
-    opacity: 1;
-    transform: none;
-    filter: blur(0);
-  }
-}
 
-@keyframes pop {
-  0% {
-    opacity: 0;
-    transform: scale(0.72);
+  .progress {
+    padding: 0 14px 12px;
   }
-  60% {
-    transform: scale(1.06);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+  .task {
+    align-items: start;
+    padding: 9px 14px;
+    gap: 9px;
   }
-}
 
-@keyframes breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 1;
+  .task-mark {
+    margin-top: 2px;
   }
-  50% {
-    transform: scale(1.18);
-    opacity: 0.85;
-  }
-}
 
-@keyframes ripple {
-  0% {
-    opacity: 0.65;
-    transform: scale(0.5);
+  /* Two lines rather than a title cut mid-word. This wrap happens when the row
+     is first drawn, which is not the mid-run reflow the running row promises
+     to avoid -- that promise is about the right-hand slot, and the slot still
+     swaps inside a fixed width. */
+  .task-name {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
   }
-  100% {
-    opacity: 0;
-    transform: scale(2.2);
-  }
-}
 
-@keyframes segPulse {
-  0%,
-  100% {
-    opacity: 1;
+  .task-side {
+    max-width: 7.5rem;
   }
-  50% {
-    opacity: 0.45;
-  }
-}
 
-@keyframes qpulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+  /* A failed row is terminal -- nothing further arrives on it -- so giving its
+     error a line of its own cannot reflow anything still in motion. A row that
+     reads "Train a k-nearest-neighbou…" beside "ModuleNotFoun…" has told the
+     reader neither which task failed nor why. */
+  .task.is-failed .task-side {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    justify-self: start;
+    max-width: none;
+    white-space: normal;
+    margin-top: 3px;
   }
-  70% {
-    box-shadow: 0 0 0 7px transparent;
+
+  .downloads {
+    padding: 12px 14px 14px;
+  }
+
+  .code-group {
+    padding: 0 14px 14px;
+  }
+
+  .empty-title {
+    max-width: none;
+  }
+
+  .answer {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+
+  .toast {
+    bottom: 120px;
   }
 }
 
 /* ---------------------------------------------------------------------------
-   Accessibility
+   Reduced motion.
+
+   Not "shorter durations" -- off. Every state in this interface is legible
+   from ink, weight and a drawn mark, so removing motion costs nothing except
+   the breathing dot, which is replaced by a static one.
 --------------------------------------------------------------------------- */
 
-/* Not optional: for some people this is the difference between an interface
-   they can use and one they cannot. The `!important` is the rare legitimate
-   use -- it has to beat the inline stagger delays set in JSX, and it is scoped
-   to a media query nobody sees unless they asked for it. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.001ms !important;
-    animation-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-}
-
-@media (max-width: 620px) {
-  .thread {
-    padding: 20px 14px 8px;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 
-  .composer-wrap {
-    padding: 8px 14px 14px;
-  }
-
-  .welcome h1 {
-    font-size: 22px;
-  }
-
-  .bubble {
-    max-width: 90%;
-  }
-
-  .tagline {
-    display: none;
+  .task-mark-running {
+    opacity: 1;
   }
 }
