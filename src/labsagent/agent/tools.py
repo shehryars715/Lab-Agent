@@ -12,6 +12,7 @@ sandbox cannot leak between runs.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -21,33 +22,136 @@ from labsagent.runner import run_solution as _run_solution
 from labsagent.sandbox.base import DEFAULT_TIMEOUT_S, Sandbox
 
 
+@dataclass(frozen=True)
+class RunRecord:
+    """One `run_solution` call, kept whole.
+
+    WHY A LIST AND NOT A `last`. `figures` learned this lesson first (see its
+    note below): "the most recent call" is the right answer for a single call
+    and the wrong answer for a task. An agent that runs its solution and then
+    runs a chore -- a cleanup, a probe, a listing -- leaves the chore as the
+    most recent everything, and the chore exited 0, so it looked like success.
+    The report then shipped the chore as the solution. Keeping every run lets
+    the caller pick the one that was actually the task.
+    """
+
+    entry_file: str
+    ok: bool
+    transcript: Any
+    stdout: str
+    stderr: str
+    figures: list[str] = field(default_factory=list)
+    #: sha256 of `entry_file` as it was WHEN THIS RAN. An agent that edits the
+    #: file after running it leaves a transcript that no longer describes the
+    #: code we are about to ship; comparing this against the file on disk is
+    #: how that is caught. None when the file could not be read.
+    source_sha: str | None = None
+
+
 @dataclass
 class TaskRecorder:
     """Collects what the agent reports, plus what actually happened.
 
-    The agent's own claim of success is never trusted on its own -- `attempts`
-    and `last_ok` are recorded by us, from real execution.
+    The agent's own claim of success is never trusted on its own -- `runs` and
+    `attempts` are recorded by us, from real execution.
     """
 
+    #: What the agent DECLARED in record_task_result. A claim, not a fact: an
+    #: agent that wrote to "workspace/task3.py" will still cheerfully report
+    #: "task3.py". Used only to break ties between real runs.
     entry_file: str | None = None
-    # What was actually EXECUTED, as opposed to what the agent later claims in
-    # record_task_result. The two can differ -- an agent that wrote to
-    # "workspace/task3.py" may still report "task3.py" -- and only one of them
-    # is known to exist.
-    last_entry_file: str | None = None
     status: str | None = None
     notes: str = ""
     attempts: int = 0
-    last_ok: bool = False
-    last_stdout: str = ""
-    last_stderr: str = ""
-    last_transcript: Any = None
     warnings: list[str] = field(default_factory=list)
-    last_figures: list[str] = field(default_factory=list)
+    #: Every run_solution call this ATTEMPT made, in order.
+    runs: list[RunRecord] = field(default_factory=list)
+
+    @property
+    def last(self) -> RunRecord | None:
+        return self.runs[-1] if self.runs else None
+
+    # The `last_*` views below are what callers outside the harvest path want:
+    # "what happened most recently". The harvest path deliberately does NOT use
+    # them -- see `orchestrator.choose_run`.
+    @property
+    def last_entry_file(self) -> str | None:
+        return self.last.entry_file if self.last else None
+
+    @property
+    def last_ok(self) -> bool:
+        return bool(self.last and self.last.ok)
+
+    @property
+    def last_stdout(self) -> str:
+        return self.last.stdout if self.last else ""
+
+    @property
+    def last_stderr(self) -> str:
+        return self.last.stderr if self.last else ""
+
+    @property
+    def last_transcript(self) -> Any:
+        return self.last.transcript if self.last else None
+
+    @property
+    def figures(self) -> list[str]:
+        """Every figure this ATTEMPT produced -- not just the last call's.
+
+        WHY IT CANNOT BE "last". `run_solution` reports figures as the set of
+        image files that are NEW since that call started, which is the right
+        per-call answer and the wrong per-task one. An agent that runs its
+        solution, then a diagnostic probe, then its solution again ends with an
+        empty delta twice over: the probe draws nothing, and the re-run
+        OVERWRITES the .png rather than creating it. Assigning the last value
+        therefore threw away a chart that was sitting in the workspace, and the
+        report shipped without the figure the task asked for.
+
+        Accumulating is scoped correctly by construction: `build_solver` makes a
+        fresh recorder per attempt, so a discarded attempt cannot contribute.
+        """
+        seen: list[str] = []
+        for record in self.runs:
+            for name in record.figures:
+                if name not in seen:
+                    seen.append(name)
+        return seen
+
+    def figures_for(self, entry_file: str) -> list[str]:
+        """Figures drawn by runs of one file, by the same accumulate rule.
+
+        Scoping matters once a chore can no longer be mistaken for the
+        solution: a probe that happens to draw something is not this task's
+        figure. Falls back to everything when the scoped set is empty, because
+        a lost chart is a worse failure than an extra one.
+        """
+        from labsagent.orchestrator import normalize_entry
+
+        target = normalize_entry(entry_file)
+        scoped: list[str] = []
+        for record in self.runs:
+            if normalize_entry(record.entry_file) != target:
+                continue
+            for name in record.figures:
+                if name not in scoped:
+                    scoped.append(name)
+        return scoped or self.figures
 
     @property
     def finished(self) -> bool:
         return self.status is not None
+
+
+def _sha_of(sandbox: Sandbox, entry_file: str) -> str | None:
+    """sha256 of a file in the sandbox, or None if it cannot be read.
+
+    Never raises: this is provenance for a later staleness check, and a run
+    must not fail because the hash could not be taken.
+    """
+    try:
+        return hashlib.sha256(sandbox.read_file(entry_file).encode("utf-8")).hexdigest()
+    except Exception:  # noqa: BLE001 -- any read failure just means "unknown"
+        return None
 
 
 def build_tools(
@@ -74,13 +178,18 @@ def build_tools(
         outcome = _run_solution(sandbox, entry_file, stdin_values or [], timeout_s)
 
         recorder.attempts += 1
-        recorder.last_entry_file = entry_file
-        recorder.last_ok = outcome.ok
-        recorder.last_stdout = outcome.result.stdout
-        recorder.last_stderr = outcome.result.stderr
-        recorder.last_transcript = outcome.transcript
         recorder.warnings = outcome.warnings
-        recorder.last_figures = list(outcome.figures)
+        recorder.runs.append(
+            RunRecord(
+                entry_file=entry_file,
+                ok=outcome.ok,
+                transcript=outcome.transcript,
+                stdout=outcome.result.stdout,
+                stderr=outcome.result.stderr,
+                figures=list(outcome.figures),
+                source_sha=_sha_of(sandbox, entry_file),
+            )
+        )
 
         parts = [f"exit_code: {outcome.result.exit_code}"]
         if outcome.result.timed_out:

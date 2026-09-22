@@ -23,6 +23,7 @@ import docx
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 
+from labsagent.blocks import leading_prose
 from labsagent.models import TaskOutcome
 from labsagent.report.cover import CoverInfo, build_cover
 from labsagent.report.docx_utils import (
@@ -82,6 +83,13 @@ def _annotate_one(anchor: Paragraph, outcome: TaskOutcome) -> None:
     """Insert one task's work. The cursor advances to each newly created
     paragraph -- inserting repeatedly after the same anchor reverses order."""
     cursor = anchor
+
+    # Anything the caller put before the code -- today, which dataset this run
+    # used. Guarded by `leading_prose` returning empty for every outcome that
+    # does not set `blocks`, so a report built the way every previous report
+    # was built is byte-identical, which this module's docstring promises.
+    for block in leading_prose(outcome):
+        cursor = _explanation(cursor, block.text)
 
     cursor = _label(cursor, CODE_LABEL)
     if outcome.code_text:

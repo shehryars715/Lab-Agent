@@ -63,3 +63,75 @@ def test_prompt_without_references_stays_minimal():
 
     assert "already solved" not in prompt
     assert len(prompt) < 300
+
+
+# --- choosing which run was the solution ------------------------------------
+
+
+from labsagent.agent.tools import RunRecord  # noqa: E402
+from labsagent.orchestrator import choose_run, normalize_entry  # noqa: E402
+
+
+def _run(entry: str, ok: bool = True, transcript: object = "t") -> RunRecord:
+    return RunRecord(entry_file=entry, ok=ok, transcript=transcript, stdout="", stderr="")
+
+
+def test_a_virtual_root_path_normalises_to_a_bare_name():
+    for entry in ("task3.py", "/task3.py", "./workspace/Task3.PY", r"workspace\task3.py"):
+        assert normalize_entry(entry) == "task3.py"
+
+
+def test_the_task_file_beats_a_later_chore():
+    runs = [_run("task3.py"), _run("cleanup.py")]
+    assert choose_run(runs, "task3").entry_file == "task3.py"
+
+
+def test_a_failed_run_of_the_task_file_is_not_eligible():
+    runs = [_run("task3.py", ok=False), _run("cleanup.py")]
+    assert choose_run(runs, "task3") is None
+
+
+def test_the_last_run_of_the_task_file_wins():
+    first, second = _run("task3.py", transcript="old"), _run("task3.py", transcript="new")
+    assert choose_run([first, second], "task3").transcript == "new"
+
+
+def test_another_tasks_file_is_never_harvested():
+    runs = [_run("task1.py"), _run("task2.py")]
+    assert choose_run(runs, "task3", known_ids=["task1", "task2"]) is None
+
+
+def test_a_declared_file_that_never_ran_is_ignored():
+    runs = [_run("cleanup.py")]
+    assert choose_run(runs, "task3", declared="task3.py") is None
+
+
+def test_a_declared_file_breaks_the_tie_when_the_task_file_never_ran():
+    runs = [_run("solution.py")]
+    assert choose_run(runs, "task3", declared="solution.py").entry_file == "solution.py"
+
+
+def test_a_near_miss_on_the_task_name_is_accepted_last():
+    runs = [_run("task3_v2.py")]
+    assert choose_run(runs, "task3").entry_file == "task3_v2.py"
+
+
+def test_nothing_ran_is_no_candidate():
+    assert choose_run([], "task3") is None
+
+
+def test_the_prompt_says_when_no_data_resolved():
+    """The block has to reach the solver, not just exist."""
+    from labsagent.orchestrator import build_task_prompt
+
+    task = Task(id="task1", title="T", statement="Analyse the sales data.")
+    prompt = build_task_prompt(task, {}, (), [("sales.csv", "404")])
+    assert "No data was resolved" in prompt
+    assert "sales.csv -- 404" in prompt
+
+
+def test_the_prompt_is_unchanged_when_no_data_was_wanted():
+    from labsagent.orchestrator import build_task_prompt
+
+    task = Task(id="task1", title="T", statement="Print hello.")
+    assert build_task_prompt(task, {}, (), []) == build_task_prompt(task, {})

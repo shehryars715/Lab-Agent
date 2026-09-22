@@ -58,3 +58,38 @@ def test_console_consumer_renders_without_raising(capsys):
 
     out = capsys.readouterr().out
     assert "lab 03" in out and "1 passed, 1 failed" in out
+
+
+# --- the log on disk --------------------------------------------------------
+#
+# Both call sites wrote `f"{at} {kind}"`, separately, which drops every payload:
+# a finished run could say an attempt failed three times and not why -- the one
+# thing you want when a run has gone wrong.
+
+
+def test_an_event_becomes_a_json_safe_dict_with_its_payload():
+    from labsagent.events import AttemptFailed, event_to_dict
+
+    data = event_to_dict(AttemptFailed(task_id="task1", attempt=2, error="boom"))
+    assert data["kind"] == "AttemptFailed"
+    assert data["error"] == "boom"
+    assert data["attempt"] == 2
+    assert isinstance(data["at"], str), "a datetime is not a JSON type"
+
+
+def test_the_log_is_json_lines_one_object_per_event(tmp_path):
+    import json
+
+    from labsagent.events import AttemptFailed, RunStarted, write_events_log
+    from labsagent.runstore import RunStore
+
+    store = RunStore.create("99", root=tmp_path / "runs")
+    events = [
+        RunStarted(run_id="r", lab_number="99", task_count=1),
+        AttemptFailed(task_id="task1", attempt=1, error="no successful run of task1.py"),
+    ]
+    path = write_events_log(store, events)
+
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [r["kind"] for r in rows] == ["RunStarted", "AttemptFailed"]
+    assert rows[1]["error"] == "no successful run of task1.py"

@@ -16,6 +16,8 @@ what lets the same event drive a terminal line, a JSON log, and a progress bar.
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Protocol, runtime_checkable
@@ -164,3 +166,30 @@ def console_consumer(event: Event) -> None:
             f"\n{state}: {event.passed} passed, {event.failed} failed, "
             f"${event.cost_usd:.6f}"
         )
+
+
+def event_to_dict(event: Event) -> dict:
+    """One event as a JSON-safe dict, kind included.
+
+    `dataclasses.asdict` is the convenient call and chokes on `at`, which is a
+    datetime -- the same boundary `runstore` and `wire_event` each have to
+    cross. This is that boundary for the log on disk.
+    """
+    data = {"kind": event.kind}
+    for key, value in vars(event).items():
+        data[key] = value.isoformat() if isinstance(value, datetime) else value
+    return data
+
+
+def write_events_log(store, events) -> "Path":
+    """The run's events as JSON Lines.
+
+    WHY NOT `f"{at} {kind}"`. That is what both call sites wrote, separately,
+    and it drops every payload -- so a finished run could tell you that an
+    attempt failed three times and not why, which is the one thing you want
+    when a run has gone wrong. One writer, one format, and the payload kept.
+    """
+    return store.write_log(
+        "events.log",
+        "\n".join(json.dumps(event_to_dict(e), default=str) for e in events),
+    )

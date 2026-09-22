@@ -18,6 +18,12 @@ dependencies = [
     "matplotlib>=3.11.2",
     "nbformat>=5.11.1",
     "numpy>=2.5.3",
+    # A lab that says "use the attached workbook" was unsolvable without this.
+    # pandas accepts .xlsx and then raises at read time for a missing engine,
+    # so the file profiled as binary noise AND the solver could not open it --
+    # and with no pip in the venv it could not install the fix either. One run
+    # spent ~15 minutes writing its own zip/XML parser instead.
+    "openpyxl>=3.1",
     "pandas>=3.0.5",
     "pillow>=12.3.0",
     "pydantic-settings>=2.15.0",

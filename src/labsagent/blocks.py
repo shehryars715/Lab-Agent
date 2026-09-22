@@ -92,6 +92,32 @@ def blocks_for(outcome) -> list[Block]:
     return out
 
 
+def leading_prose(outcome) -> list[Block]:
+    """Prose a CALLER placed before the first code block, if any.
+
+    WHY THIS IS SHARED RATHER THAN LOCAL. Three emitters do not consume the
+    block list: `report/docx_builder.py` (the annotate-in-place Word report),
+    `package/notebook.py`, and -- for its statement header -- `emit/script.py`.
+    They read `TaskOutcome`'s named fields, which is why they are byte-stable
+    and why adding a block reached none of them. Anything a caller wants said
+    before the code, such as which dataset the run used, therefore needs one
+    definition of "the bit that goes at the top" instead of three.
+
+    DELIBERATELY ONLY LEADING PROSE. `blocks_for()` SYNTHESISES a list whose
+    prose -- the explanation -- comes LAST, so a naive walk would print every
+    explanation a second time at the top of its own task. Reading `blocks`
+    directly and stopping at the first non-prose block means a synthesised
+    list contributes nothing, and only an explicit caller is honoured.
+    """
+    blocks = getattr(outcome, "blocks", None) or []
+    out: list[Block] = []
+    for block in blocks:
+        if block.kind != "prose":
+            break
+        out.append(block)
+    return out
+
+
 def code_of(outcome) -> str:
     """Every code block of a task, joined. The `.py` emitter's whole job."""
     return "\n\n".join(b.text.rstrip() for b in blocks_for(outcome) if b.kind == "code")

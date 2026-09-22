@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -108,6 +109,11 @@ def _outcome_to_dict(outcome: TaskOutcome) -> dict[str, Any]:
         "explanation": outcome.explanation,
         "attempts": outcome.attempts,
         "error": outcome.error,
+        "cost_usd": outcome.cost_usd,
+        "usage": dict(outcome.usage),
+        "attempt_errors": list(outcome.attempt_errors),
+        "stopped_reason": outcome.stopped_reason,
+        "produced": [dict(d) for d in outcome.produced],
     }
 
 
@@ -128,6 +134,14 @@ def _outcome_from_dict(data: dict[str, Any]) -> TaskOutcome:
         explanation=data.get("explanation"),
         attempts=data.get("attempts", 0),
         error=data.get("error"),
+        # `.get` with a default, like every field added after the first manifest
+        # was written: a run recorded before these existed must still load, or
+        # resuming it becomes impossible.
+        cost_usd=data.get("cost_usd", 0.0),
+        usage=dict(data.get("usage") or {}),
+        attempt_errors=list(data.get("attempt_errors") or []),
+        stopped_reason=data.get("stopped_reason"),
+        produced=[dict(d) for d in (data.get("produced") or [])],
     )
 
 
@@ -138,6 +152,7 @@ def manifest_to_dict(manifest: RunManifest) -> dict[str, Any]:
         "spec": _spec_to_dict(manifest.spec),
         "outcomes": [_outcome_to_dict(o) for o in manifest.outcomes],
         "token_usage": dict(manifest.token_usage),
+        "usage": dict(manifest.usage),
         "cost_usd": manifest.cost_usd,
         "anchors": dict(manifest.anchors),
         "datasets": [dict(d) for d in manifest.datasets],
@@ -151,6 +166,7 @@ def manifest_from_dict(data: dict[str, Any]) -> RunManifest:
         spec=_spec_from_dict(data["spec"]),
         outcomes=[_outcome_from_dict(o) for o in data.get("outcomes", [])],
         token_usage=dict(data.get("token_usage", {})),
+        usage=dict(data.get("usage") or {}),
         cost_usd=data.get("cost_usd", 0.0),
         anchors={str(k): int(v) for k, v in (data.get("anchors") or {}).items()},
         # `.get` with a default, like every field added after the first
@@ -209,6 +225,49 @@ class RunStore:
     def logs_dir(self) -> Path:
         return self.dir / "logs"
 
+    @staticmethod
+    def reset_workspace(workspace: Path, keep: set[str]) -> None:
+        """Empty a task workspace, keeping named files. Never raises.
+
+        `data_dir` has always claimed that "a task workspace is wiped and
+        rebuilt per attempt". It was not: the sandbox is opened with keep=True
+        and the directory is reused, so attempt 3 inherited attempts 1 and 2.
+        One run finished a third attempt in 22 seconds off stale intermediates
+        and reported a different number than the attempt that built them
+        (391,153 against 391,286). This makes the docstring true.
+
+        Datasets and handed-forward files are in `keep`, so a reset does not
+        re-download or recopy anything.
+        """
+        workspace = Path(workspace)
+        if not workspace.is_dir():
+            return
+        for path in workspace.iterdir():
+            if path.name in keep:
+                continue
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink()
+            except OSError:
+                # A file we cannot remove is a file the next attempt can see.
+                # Annoying, not fatal, and never worth failing a run over.
+                continue
+
+    @property
+    def artifacts_dir(self) -> Path:
+        """Data files the TASKS produced, kept per task and handed forward.
+
+        Beside the workspace for the same reason `data_dir` is: a workspace is
+        the agent's scratch space and is reset between attempts, while the CSV
+        task 1 built is an input that task 2 is entitled to. Without this the
+        handoff was improvised -- later tasks wrote scripts to go and copy
+        `../task2/customer_features.csv`, which is both paid-for turns and a
+        reach outside the workspace the isolation was supposed to prevent.
+        """
+        return self.dir / "artifacts"
+
     @property
     def data_dir(self) -> Path:
         """Datasets, downloaded or uploaded once and copied into each workspace.
@@ -240,6 +299,7 @@ class RunStore:
             store.report_dir,
             store.logs_dir,
             store.data_dir,
+            store.artifacts_dir,
         ):
             sub.mkdir(parents=True, exist_ok=True)
         return store

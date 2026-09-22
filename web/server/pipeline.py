@@ -33,7 +33,7 @@ from labsagent import events as ev
 from labsagent.agent.build import build_explainer, build_model
 from labsagent.blocks import blocks_for
 from labsagent.capture.rendered import RenderedBackend
-from labsagent.data import provenance_block
+from labsagent.data import Acquisition, candidate_tokens, provenance_block, split_refs
 from labsagent.data.sources import acquire, classify
 from labsagent.config import PROJECT_ROOT, Settings
 from labsagent.ingest.cover import extract_cover_facts
@@ -131,8 +131,7 @@ def dataset_refs_in(answers: dict[str, str]) -> list[str]:
     for key, value in (answers or {}).items():
         if key in RESERVED_KEYS:
             continue
-        for token in str(value or "").replace(",", " ").split():
-            token = token.strip().strip(".;\"'")
+        for token in candidate_tokens(str(value or "")):
             if not token or token in found:
                 continue
             try:
@@ -190,6 +189,59 @@ def apply_instructions(spec: LabSpec, notes: str = "") -> LabSpec:
     return replace(spec, tasks=[replace(t, instruction=note) for t in spec.tasks])
 
 
+def _looks_like_a_file(ref: str) -> bool:
+    """Does this exist on disk? Asked, never inferred -- and never raises.
+
+    Windows raises rather than returning False for a syntactically impossible
+    path, which is a "no", not an error to propagate. Same reasoning as
+    `sources.classify`.
+    """
+    try:
+        return Path(ref).is_file()
+    except OSError:
+        return False
+
+
+def _reask_for_data(job: Job, acquired, uploads: list[Path]) -> dict[str, str] | None:
+    """Ask once more for the data, or None if nobody answered.
+
+    `job.ask` returns {} on timeout rather than raising, so an unattended tab
+    lands here with nothing -- and must take the stop path, not the carry-on
+    path. That distinction is the whole reason this returns None instead of {}.
+    """
+    job.publish(
+        {
+            "type": "data_unresolved",
+            "failures": [{"ref": ref, "reason": reason} for ref, reason in acquired.failures],
+        }
+    )
+    job.publish(
+        {
+            "type": "narration",
+            "text": (
+                "None of the data references worked, so there is nothing to solve "
+                "against. Correct it below and I will try again."
+            ),
+        }
+    )
+    answers = job.ask(
+        [
+            {
+                "key": "datasets",
+                "label": "Data to use",
+                "value": ", ".join(acquired.requested),
+                "required": True,
+                "hint": (
+                    "A file you attached, a https:// link straight to the file, or a "
+                    "Kaggle dataset like owner/name. Separate several with commas."
+                ),
+            }
+        ],
+        timeout_s=ASK_TIMEOUT_S,
+    )
+    return answers or None
+
+
 def _acquire(
     job: Job,
     *,
@@ -198,7 +250,7 @@ def _acquire(
     intent: Intent,
     store: RunStore,
     settings: Settings,
-) -> list:
+) -> Acquisition:
     """Turn every dataset reference into a file on disk. Never raises.
 
     WHAT WINS. If the student saw the "Data to use" field, whatever is in it
@@ -217,7 +269,15 @@ def _acquire(
 
     if "datasets" in answers:
         raw = str(answers.get("datasets") or "")
-        refs = [t.strip() for t in raw.replace(",", " ").split() if t.strip()]
+        # ONE PATH, TYPED WHOLE, IS ONE REFERENCE. "C:\Users\Online Retail.xlsx"
+        # has no comma to split on and several spaces that are not separators,
+        # so ask the two things that can settle it -- is this an attachment we
+        # hold, or a file that exists -- before applying any rule at all.
+        whole = raw.strip().strip("\"'")
+        if whole and (whole.lower() in by_name or _looks_like_a_file(whole)):
+            refs = [whole]
+        else:
+            refs = split_refs(raw)
     else:
         refs = [str(u) for u in uploads] + list(intent.datasets)
 
@@ -238,7 +298,7 @@ def _acquire(
     refs = [as_path(r) for r in refs]
 
     if not refs:
-        return []
+        return Acquisition()
 
     # Reuses `planning` rather than introducing a fifth phase: the progress bar
     # has four segments for every run, and a run with no data must not look
@@ -252,6 +312,7 @@ def _acquire(
         max_bytes=settings.max_dataset_bytes,
         kaggle_username=settings.kaggle_username,
         kaggle_key=settings.kaggle_key,
+        convert_excel=settings.convert_excel_to_csv,
         on_progress=lambda ref: job.publish({"type": "data_fetching", "ref": ref}),
     )
 
@@ -284,14 +345,46 @@ def _acquire(
             {
                 "type": "narration",
                 "text": (
-                    f"I could not get {ref}: {reason} "
-                    "I will carry on without it -- attach the file and ask me to "
-                    "redo the tasks that need it."
+                    f"I could not get {ref}: {reason}"
                 ),
             }
         )
 
-    return result.datasets
+    # CARRYING ON IS ONLY HONEST WHEN SOMETHING ARRIVED. With some data in
+    # hand, a dead link costs the tasks that needed it and nothing else -- the
+    # policy `acquire` exists for. With NONE, the same sentence is a promise to
+    # solve the lab against nothing, which is what the caller now refuses.
+    if result.datasets and result.failures:
+        job.publish(
+            {
+                "type": "narration",
+                "text": (
+                    "I will carry on with what I have -- attach the missing file "
+                    "and ask me to redo the tasks that need it."
+                ),
+            }
+        )
+
+    # WHAT YOU ATTACHED BUT DID NOT NAME. Not promoted to a dataset: clearing
+    # the data field deliberately means "no data", and guessing past that would
+    # silently substitute a file nobody asked for.
+    used = {str(d.ref).lower() for d in result.datasets} | {
+        d.name.lower() for d in result.datasets
+    }
+    unused = [Path(u).name for u in uploads if Path(u).name.lower() not in used]
+    if unused:
+        job.publish({"type": "data_unused", "names": unused})
+        job.publish(
+            {
+                "type": "narration",
+                "text": (
+                    f"You attached {', '.join(unused)}, but the data field did not "
+                    "list it, so I did not use it."
+                ),
+            }
+        )
+
+    return result
 
 
 def wire_event(event: ev.Event) -> dict[str, Any]:
@@ -755,7 +848,7 @@ def run_job(
         # manual happened to name, with no chance to correct it. Inside the
         # solve, it runs once per attempt, and `max_retries_per_task` is 3.
         store = RunStore.create(spec.lab_number, root=RUNS_ROOT)
-        datasets = _acquire(
+        acquired = _acquire(
             job,
             uploads=dataset_paths or [],
             answers=answers,
@@ -763,6 +856,43 @@ def run_job(
             store=store,
             settings=settings,
         )
+
+        # A LAB THAT ASKED FOR DATA AND GOT NONE DOES NOT GET SOLVED. Not the
+        # same as a lab with no data, and not the same as one dead link among
+        # three -- both of those still run, which is the whole point of
+        # `acquire` collecting failures instead of raising them. This is the
+        # case where every reference failed, and carrying on means paying for
+        # five tasks written against nothing. That is the run this check exists
+        # because of.
+        #
+        # Re-asked ONCE, because the usual cause is a fixable typo and the
+        # student is already watching this tab. Then stopped, with the reasons
+        # still on screen and the artifacts of ingest still on disk, so a
+        # corrected answer resumes rather than restarts.
+        if acquired.total_failure:
+            answers = _reask_for_data(job, acquired, dataset_paths or [])
+            if answers is not None:
+                acquired = _acquire(
+                    job,
+                    uploads=dataset_paths or [],
+                    answers=answers,
+                    intent=intent,
+                    store=store,
+                    settings=settings,
+                )
+        if acquired.total_failure:
+            job.finish(
+                error=(
+                    "I could not get the data this lab needs, so I stopped before "
+                    "writing any code. "
+                    + "; ".join(f"{ref}: {reason}" for ref, reason in acquired.failures)
+                    + " Attach the file and start again."
+                )[:500]
+            )
+            return
+
+        datasets = acquired.datasets
+        data_failures = list(acquired.failures)
 
         # -- 5. solve ------------------------------------------------------
         job.phase("solving", "Solving each task")
@@ -796,6 +926,7 @@ def run_job(
                 model=build_model(settings),
                 explainer=build_explainer(settings, usage),
                 datasets=datasets,
+                data_failures=data_failures,
             )
 
         # Remember what a revision would need. A re-run has to reach the same
@@ -818,9 +949,7 @@ def run_job(
         _emit(job, job.context, manifest.outcomes, usage)
 
         recorder_events = recorder.events
-        store.write_log(
-            "events.log", "\n".join(f"{e.at.isoformat()} {e.kind}" for e in recorder_events)
-        )
+        ev.write_events_log(store, recorder_events)
 
         passed = sum(1 for o in manifest.outcomes if o.status == "passed")
         job.finish(

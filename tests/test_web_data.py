@@ -76,6 +76,7 @@ class _Settings:
     max_dataset_bytes = 100 * 1024 * 1024
     kaggle_username = ""
     kaggle_key = ""
+    convert_excel_to_csv = True
 
 
 class _Store:
@@ -94,7 +95,7 @@ def _run(tmp_path, **kwargs):
     from labsagent.intent import Intent
 
     job = _Job()
-    datasets = _acquire(
+    acquired = _acquire(
         job,
         uploads=kwargs.get("uploads", []),
         answers=kwargs.get("answers", {}),
@@ -102,7 +103,9 @@ def _run(tmp_path, **kwargs):
         store=_Store(tmp_path / "data"),
         settings=_Settings(),
     )
-    return job, datasets
+    # `_acquire` reports what it managed AND what it did not; these tests are
+    # almost all about the former, so it is unpacked here once.
+    return job, acquired.datasets
 
 
 def test_nothing_to_fetch_costs_nothing(tmp_path: Path):
@@ -302,3 +305,47 @@ def test_a_url_is_not_swapped_for_a_same_named_upload(tmp_path: Path, csv: Path)
     )
     assert datasets == [], "the upload must not stand in for the URL"
     assert "data_failed" in job.kinds()
+
+
+# --- a filename with a space in it ------------------------------------------
+#
+# Every test above uses "sales.csv". That is why this survived: the answer is
+# offered joined by ", " and was split on commas AND spaces alike, so
+# "Online Retail.xlsx, https://..." became three references, all of which
+# failed, and the lab was solved against no data at all.
+
+
+@pytest.fixture
+def spaced(tmp_path: Path) -> Path:
+    path = tmp_path / "Online Retail.xlsx"
+    path.write_text(IRIS, encoding="utf-8")
+    return path
+
+
+def test_a_filename_with_spaces_survives_the_answer(tmp_path: Path, spaced: Path):
+    job, datasets = _run(
+        tmp_path,
+        uploads=[spaced],
+        answers={"datasets": "Online Retail.xlsx, https://example.invalid/other.csv"},
+    )
+    names = [d.name for d in datasets]
+    assert "Online_Retail.xlsx" in names or "Online Retail.xlsx" in names, names
+    attempted = [p["ref"] for p in job.published if p.get("type") == "data_fetching"]
+    assert len(attempted) == 2, f"two references, not three: {attempted}"
+    assert "Online" not in attempted
+
+
+def test_a_whole_path_with_spaces_is_one_reference(tmp_path: Path, spaced: Path):
+    """No comma to split on, and spaces that are not separators."""
+    _, datasets = _run(tmp_path, answers={"datasets": str(spaced)})
+    assert len(datasets) == 1
+
+
+def test_references_on_separate_lines_are_not_split_further(tmp_path: Path, spaced: Path):
+    job, _ = _run(
+        tmp_path,
+        uploads=[spaced],
+        answers={"datasets": "Online Retail.xlsx\nuciml/iris"},
+    )
+    attempted = [p["ref"] for p in job.published if p.get("type") == "data_fetching"]
+    assert len(attempted) == 2, attempted

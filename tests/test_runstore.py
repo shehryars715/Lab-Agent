@@ -175,3 +175,93 @@ def test_manifest_survives_a_real_reload_cycle(tmp_path):
     RunStore.open(store.dir).save(reopened)
 
     assert len(RunStore.open(store.dir).load().outcomes) == 2
+
+
+# --- fields added after the first manifest was written ----------------------
+
+
+def test_a_manifest_round_trips_the_per_task_accounting(tmp_path):
+    from labsagent.models import LabSpec, RunManifest, Task, TaskOutcome
+    from labsagent.runstore import RunStore
+
+    store = RunStore.create("99", root=tmp_path / "runs")
+    manifest = RunManifest(
+        run_id="r",
+        started_at=datetime.now(timezone.utc),
+        spec=LabSpec(lab_number="99", title="T", tasks=[Task(id="task1", title="a", statement="b")]),
+        outcomes=[
+            TaskOutcome(
+                task=Task(id="task1", title="a", statement="b"),
+                status="passed",
+                cost_usd=0.012,
+                usage={"calls": 7},
+                attempt_errors=["no successful run of task1.py"],
+                stopped_reason="task",
+                produced=[{"name": "out.csv", "bytes": 9}],
+            )
+        ],
+        usage={"total": {"calls": 7}, "phases": {"solve": {"calls": 6}}},
+    )
+    store.save(manifest)
+    loaded = store.load()
+
+    outcome = loaded.outcomes[0]
+    assert outcome.cost_usd == 0.012
+    assert outcome.usage == {"calls": 7}
+    assert outcome.attempt_errors == ["no successful run of task1.py"]
+    assert outcome.stopped_reason == "task"
+    assert outcome.produced == [{"name": "out.csv", "bytes": 9}]
+    assert loaded.usage["phases"]["solve"]["calls"] == 6
+
+
+def test_a_manifest_written_before_these_fields_existed_still_loads(tmp_path):
+    """The `.get`-with-a-default rule, as an assertion. Resuming depends on it."""
+    import json
+
+    from labsagent.runstore import RunStore
+
+    store = RunStore.create("99", root=tmp_path / "runs")
+    store.manifest_path.write_text(
+        json.dumps(
+            {
+                "run_id": "r",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "spec": {"lab_number": "99", "title": "T", "tasks": []},
+                "outcomes": [
+                    {
+                        "task": {"id": "task1", "title": "a", "statement": "b"},
+                        "status": "passed",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = store.load()
+    assert loaded.outcomes[0].cost_usd == 0.0
+    assert loaded.outcomes[0].attempt_errors == []
+    assert loaded.usage == {}
+
+
+def test_reset_workspace_keeps_what_it_is_told_to(tmp_path):
+    """`data_dir`'s docstring has always claimed this happens. Now it does."""
+    from labsagent.runstore import RunStore
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "sales.csv").write_text("a,b", encoding="utf-8")
+    (ws / "scratch.py").write_text("x = 1", encoding="utf-8")
+    (ws / "sub").mkdir()
+    (ws / "sub" / "deep.txt").write_text("gone", encoding="utf-8")
+
+    RunStore.reset_workspace(ws, keep={"sales.csv"})
+
+    assert (ws / "sales.csv").exists(), "the dataset is not re-fetched"
+    assert not (ws / "scratch.py").exists()
+    assert not (ws / "sub").exists()
+
+
+def test_reset_workspace_on_a_missing_directory_is_a_no_op(tmp_path):
+    from labsagent.runstore import RunStore
+
+    RunStore.reset_workspace(tmp_path / "nope", keep=set())

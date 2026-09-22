@@ -166,6 +166,68 @@ def _adopt(path: Path, dest_dir: Path, origin: str, ref: str, taken: set[str]) -
     )
 
 
+#: Workbooks. Accepted as data, but never handed to the solver as-is when they
+#: can be converted -- see `_adopt_all` and `data/normalise.py`.
+EXCEL_SUFFIXES = (".xlsx", ".xlsm", ".xls")
+
+
+def _adopt_all(
+    path: Path,
+    dest_dir: Path,
+    origin: str,
+    ref: str,
+    taken: set[str],
+    *,
+    convert_excel: bool = True,
+) -> list[Dataset]:
+    """`_adopt`, except a workbook arrives as the CSV(s) it contains.
+
+    WHY THE SOLVER NEVER MEETS THE WORKBOOK. The file is copied into every
+    task's workspace and re-parsed by every attempt, and the .py that gets
+    handed in would carry a `pd.read_excel` that depends on an engine the
+    student may not have. Converting once here pays the parse cost once and
+    hands in a script that runs anywhere pandas does.
+
+    The original is kept in the data directory as the run's record of what it
+    was given; it is simply not returned as a `Dataset`, so nothing copies or
+    describes it.
+    """
+    adopted = _adopt(path, dest_dir, origin, ref, taken)
+    if not convert_excel or adopted.path.suffix.lower() not in EXCEL_SUFFIXES:
+        return [adopted]
+
+    from labsagent.data.normalise import to_csv
+
+    converted = to_csv(adopted.path, dest_dir)
+    if not converted:
+        # Conversion is an optimisation. openpyxl can still read it for the
+        # profile, and the solver can still open it -- just more expensively.
+        return [adopted]
+
+    workbook = adopted.path.name
+    # NOT `_safe_name` HERE. `to_csv` has already written these into `dest_dir`,
+    # so asking for a free name would find the file itself and hand back
+    # `sales_2.csv` for something on disk as `sales.csv`. Registering the real
+    # name is what keeps a LATER reference from colliding with it.
+    for csv_path in converted:
+        taken.add(csv_path.name.lower())
+
+    return [
+        Dataset(
+            name=csv_path.name,
+            path=csv_path,
+            origin=origin,
+            ref=ref or workbook,
+            bytes=csv_path.stat().st_size,
+            # SAY WHERE IT CAME FROM. This line reaches the report, the
+            # notebook and the submitted .py, and a CSV that appeared from
+            # nowhere is a provenance gap in all three.
+            preview=f"{profile(csv_path)}\n    (converted from {workbook})",
+        )
+        for csv_path in converted
+    ]
+
+
 def _pick(paths, limit: int = MAX_FILES_PER_REF) -> list[Path]:
     """Data files, biggest first, bounded. Non-data files are dropped."""
     files = sorted(
@@ -237,7 +299,13 @@ def _filename_from(response, url: str) -> str:
 # ---------------------------------------------------------------- providers
 
 
-def from_path(ref: str, dest_dir: Path, *, max_bytes: int = MAX_DATASET_BYTES) -> list[Dataset]:
+def from_path(
+    ref: str,
+    dest_dir: Path,
+    *,
+    max_bytes: int = MAX_DATASET_BYTES,
+    convert_excel: bool = True,
+) -> list[Dataset]:
     """A file already on disk -- an upload, or a --data argument."""
     source = Path(ref)
     if not source.is_file():
@@ -256,8 +324,17 @@ def from_path(ref: str, dest_dir: Path, *, max_bytes: int = MAX_DATASET_BYTES) -
 
     taken: set[str] = set()
     if source.suffix.lower() == ".zip":
-        return _from_zip(source, dest_dir, origin="upload", ref=source.name, taken=taken)
-    return [_adopt(source, dest_dir, "upload", source.name, taken)]
+        return _from_zip(
+            source,
+            dest_dir,
+            origin="upload",
+            ref=source.name,
+            taken=taken,
+            convert_excel=convert_excel,
+        )
+    return _adopt_all(
+        source, dest_dir, "upload", source.name, taken, convert_excel=convert_excel
+    )
 
 
 def from_url(
@@ -266,6 +343,7 @@ def from_url(
     *,
     max_bytes: int = MAX_DATASET_BYTES,
     timeout_s: int = FETCH_TIMEOUT_S,
+    convert_excel: bool = True,
 ) -> list[Dataset]:
     """Stream an http(s) URL to disk, refusing anything non-public or oversized."""
     _check_public(ref)
@@ -307,7 +385,14 @@ def from_url(
         raise DataError(f"could not save the download: {exc}") from exc
 
     if scratch.suffix.lower() == ".zip":
-        found = _from_zip(scratch, dest_dir, origin="url", ref=ref, taken=set())
+        found = _from_zip(
+            scratch,
+            dest_dir,
+            origin="url",
+            ref=ref,
+            taken=set(),
+            convert_excel=convert_excel,
+        )
         scratch.unlink(missing_ok=True)
         return found
 
@@ -336,6 +421,7 @@ def from_kaggle(
     username: str = "",
     key: str = "",
     max_bytes: int = MAX_DATASET_BYTES,
+    convert_excel: bool = True,
 ) -> list[Dataset]:
     """Download a Kaggle dataset by slug, via kagglehub's own local cache.
 
@@ -382,7 +468,11 @@ def from_kaggle(
     for path in candidates:
         if path.stat().st_size > max_bytes:
             continue
-        found.append(_adopt(path, dest_dir, "kaggle", slug, taken))
+        found.extend(
+            _adopt_all(
+                path, dest_dir, "kaggle", slug, taken, convert_excel=convert_excel
+            )
+        )
     if not found:
         raise DataError(
             f"every file in Kaggle dataset {slug} is over the "
@@ -395,7 +485,13 @@ def from_kaggle(
 
 
 def _from_zip(
-    archive: Path, dest_dir: Path, *, origin: str, ref: str, taken: set[str]
+    archive: Path,
+    dest_dir: Path,
+    *,
+    origin: str,
+    ref: str,
+    taken: set[str],
+    convert_excel: bool = True,
 ) -> list[Dataset]:
     """Extract the data files out of a zip, refusing any member that escapes.
 
@@ -426,8 +522,11 @@ def _from_zip(
         raise DataError(f"{archive.name} is not a readable zip: {exc}") from exc
 
     found = [
-        _adopt(path, dest_dir, origin, ref, taken)
+        dataset
         for path in _pick(list(staging.rglob("*")))
+        for dataset in _adopt_all(
+            path, dest_dir, origin, ref, taken, convert_excel=convert_excel
+        )
     ]
     shutil.rmtree(staging, ignore_errors=True)
     if not found:
@@ -446,16 +545,30 @@ def resolve(
     timeout_s: int = FETCH_TIMEOUT_S,
     kaggle_username: str = "",
     kaggle_key: str = "",
+    convert_excel: bool = True,
 ) -> list[Dataset]:
     """One reference -> the files it names. Raises `DataError`, never anything else."""
     kind = classify(ref)
     if kind == "path":
-        return from_path(ref, dest_dir, max_bytes=max_bytes)
+        return from_path(
+            ref, dest_dir, max_bytes=max_bytes, convert_excel=convert_excel
+        )
     if kind == "kaggle":
         return from_kaggle(
-            ref, dest_dir, username=kaggle_username, key=kaggle_key, max_bytes=max_bytes
+            ref,
+            dest_dir,
+            username=kaggle_username,
+            key=kaggle_key,
+            max_bytes=max_bytes,
+            convert_excel=convert_excel,
         )
-    return from_url(ref, dest_dir, max_bytes=max_bytes, timeout_s=timeout_s)
+    return from_url(
+        ref,
+        dest_dir,
+        max_bytes=max_bytes,
+        timeout_s=timeout_s,
+        convert_excel=convert_excel,
+    )
 
 
 def acquire(
@@ -466,6 +579,7 @@ def acquire(
     timeout_s: int = FETCH_TIMEOUT_S,
     kaggle_username: str = "",
     kaggle_key: str = "",
+    convert_excel: bool = True,
     on_progress=None,
 ) -> Acquisition:
     """Resolve every reference, collecting failures instead of raising them.
@@ -487,6 +601,7 @@ def acquire(
         if not ref or ref in seen:
             continue
         seen.add(ref)
+        result.requested.append(ref)
         if on_progress is not None:
             on_progress(ref)
         try:
@@ -498,6 +613,7 @@ def acquire(
                     timeout_s=timeout_s,
                     kaggle_username=kaggle_username,
                     kaggle_key=kaggle_key,
+                    convert_excel=convert_excel,
                 )
             )
         except DataError as exc:

@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from labsagent.blocks import Block
+from labsagent.data.refs import candidate_tokens, split_refs
 from labsagent.errors import DataError
 
 #: Refused above this, per file. The point is to turn "you attached the wrong
@@ -109,10 +110,25 @@ class Acquisition:
 
     datasets: list[Dataset] = field(default_factory=list)
     failures: list[tuple[str, str]] = field(default_factory=list)  # (ref, reason)
+    #: Every reference we were asked to get, deduped. Needed to tell "this lab
+    #: wanted no data" apart from "this lab wanted data and got none" -- which
+    #: look identical if you only ever look at `datasets`.
+    requested: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return bool(self.datasets)
+
+    @property
+    def total_failure(self) -> bool:
+        """Asked for data, got none of it.
+
+        Distinct from `not ok`: a lab that never named a dataset is not
+        failing, it simply has no data. One reference failing out of three is
+        not this either -- that is the partial case `acquire` exists to
+        tolerate, and it must keep being tolerated.
+        """
+        return bool(self.requested) and not self.datasets
 
 
 def materialize(datasets, workspace: Path) -> list[str]:
@@ -148,15 +164,88 @@ def materialize(datasets, workspace: Path) -> list[str]:
     return written
 
 
-def describe(datasets) -> str:
+def stage_outputs(produced, workspace: Path) -> list[str]:
+    """Copy earlier tasks' data products into this task's workspace.
+
+    Same skip-if-same-size rule as `materialize`, and for the same reason: an
+    attempt that retries must not recopy 40 MB it already has.
+
+    COPY, NOT A SHARED DIRECTORY. The solver is told to open files by bare name
+    because the .py it writes is handed in, and a `../task2/features.csv` baked
+    into that file only runs on this machine. See `Dataset`'s docstring, which
+    makes the same argument for datasets.
+    """
+    workspace = Path(workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+
+    for item in produced:
+        source = Path(item.get("path", ""))
+        name = item.get("name") or source.name
+        if not name or not source.is_file():
+            continue
+        target = workspace / name
+        if target.exists() and target.stat().st_size == source.stat().st_size:
+            written.append(name)
+            continue
+        try:
+            shutil.copy2(source, target)
+        except OSError:
+            # A missing hand-off file is a prompt that names one fewer file,
+            # not a failed task. The task may not even need it.
+            continue
+        written.append(name)
+
+    return written
+
+
+def describe_produced(produced, limit: int = 3) -> str:
+    """The block naming what earlier tasks left in this workspace.
+
+    Same shape as `describe`, so the solver reads one consistent format for
+    "here is a file and here is what is in it".
+    """
+    items = [p for p in produced if p.get("name")][:limit]
+    if not items:
+        return ""
+    lines = [
+        "",
+        "Files produced by earlier tasks, already in your working directory. "
+        "Open them by name:",
+        "",
+    ]
+    lines.extend(p.get("preview") or f"  {p['name']}" for p in items)
+    return "\n".join(lines)
+
+
+def describe(datasets, failures=()) -> str:
     """The block appended to a task prompt. Empty string when there is no data.
 
     The two prohibitions are here rather than only in the system prompt because
     this is where the file is named: the instruction and the thing it is about
     arrive together, which is the difference between a rule the model has to
     remember and one it is reading.
+
+    WHEN NOTHING RESOLVED, SAY SO. The system prompt states that listed data
+    files "are already saved in your workspace". With no data and no block, the
+    solver read that, believed it, went looking for a file it had never been
+    given, found the upload OUTSIDE its workspace and copied 23 MB in by hand --
+    burning most of a run. Contradicting that sentence is cheap here and
+    impossible in the prompt, which is byte-stable so it can be cached.
     """
     items = list(datasets)
+    problems = list(failures)
+    if not items and problems:
+        lines = ["", "No data was resolved for this lab. I tried:", ""]
+        lines.extend(f"  {ref} -- {reason}" for ref, reason in problems)
+        lines += [
+            "",
+            "So there are no data files in your workspace. Do not go looking for "
+            "them, do not read anything from outside your workspace, and do not "
+            "invent substitute data. If a task cannot be done without the file, "
+            "say so and call record_task_result with status \"failed\".",
+        ]
+        return "\n".join(lines)
     if not items:
         return ""
 
@@ -197,9 +286,13 @@ def provenance_block(datasets) -> Block | None:
 __all__ = [
     "Acquisition",
     "DATA_SUFFIXES",
+    "candidate_tokens",
+    "split_refs",
     "Dataset",
     "MAX_DATASET_BYTES",
     "describe",
+    "describe_produced",
+    "stage_outputs",
     "materialize",
     "provenance_block",
 ]

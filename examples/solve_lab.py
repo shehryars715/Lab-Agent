@@ -152,6 +152,7 @@ def main() -> int:
     store = RunStore.create(spec.lab_number)
     refs = data_refs + [r for r in reading.intent.datasets if r not in data_refs]
     datasets = []
+    data_failures = []
     if refs:
         print(f"    data: resolving {len(refs)} reference(s)")
         got = acquire(
@@ -160,13 +161,21 @@ def main() -> int:
             max_bytes=settings.max_dataset_bytes,
             kaggle_username=settings.kaggle_username,
             kaggle_key=settings.kaggle_key,
+            convert_excel=settings.convert_excel_to_csv,
         )
         datasets = got.datasets
+        data_failures = list(got.failures)
         for dataset in datasets:
             print(f"      {dataset.name}  ({dataset.source_note})")
-        # Never fatal: a task that does not need the missing file still runs.
+        # One dead link among several is never fatal: a task that does not need
+        # the missing file still runs.
         for ref, reason in got.failures:
             print(f"      could not get {ref}: {reason}")
+        # EVERY reference failing is a different thing, and solving a
+        # data-driven lab against nothing is what it used to buy.
+        if got.total_failure:
+            print("    nothing resolved -- stopping before any code is written.")
+            return 1
 
     # 3. Solve every task
     probe_ctx = probing(probe) if probe is not None else contextlib.nullcontext()
@@ -180,6 +189,7 @@ def main() -> int:
                 None if "--no-explain" in flags else build_explainer(settings, usage)
             ),
             datasets=datasets,
+            data_failures=data_failures,
         )
 
     # 4. Emit whatever was asked for. Explicit --want beats the request, which
@@ -216,7 +226,7 @@ def main() -> int:
     )
     archive = next((p for p in written if p.suffix == ".zip"), None)
 
-    store.write_log("events.log", "\n".join(f"{e.at.isoformat()} {e.kind}" for e in recorder.events))
+    ev.write_events_log(store, recorder.events)
 
     if probe is not None:
         store.write_log("probe.json", json.dumps(probe.as_dict(), indent=2))

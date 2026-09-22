@@ -41,6 +41,10 @@ Rules that matter:
   Open them by name -- pd.read_csv("sales.csv"), not a full path and not a
   URL. Never download anything, never invent substitute data, and never open
   a data file with read_file: the task already gives you its columns.
+- Everything you need is in your working directory, including any file an
+  earlier task produced that this one refers to. Do not list, read or copy
+  files from other directories, and do not go looking for a file you were not
+  told about.
 - Never read an image file. You cannot see images, and a plot read as text is
   tens of thousands of tokens of noise. If run_solution exits 0, any figure the
   program saved was saved correctly -- there is nothing to check.

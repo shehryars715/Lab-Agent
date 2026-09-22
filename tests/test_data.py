@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from labsagent.data import (
+    Acquisition,
     DATA_SUFFIXES,
     Dataset,
     describe,
@@ -422,3 +423,191 @@ def test_the_notebook_does_not_duplicate_the_explanation(csv: Path, tmp_path: Pa
     (written,) = NotebookEmitter().emit(ctx)
     source = json.dumps(json.loads(written.read_text(encoding="utf-8")))
     assert source.count("It prints one.") == 1
+
+
+def test_the_annotated_docx_carries_it_above_the_code(csv: Path, tmp_path: Path):
+    """The annotate-in-place report is the flagship deliverable for a .docx
+    upload, and it reads TaskOutcome's named fields rather than blocks -- so it
+    was the third emitter a blocks-only addition silently missed."""
+    import docx as pydocx
+
+    from labsagent.models import LabSpec, Task
+    from labsagent.report.docx_builder import annotate_manual
+
+    source = tmp_path / "manual.docx"
+    doc = pydocx.Document()
+    doc.add_paragraph("Task 1: Cluster the data.")
+    doc.save(str(source))
+
+    note = provenance_block(
+        [Dataset(name="iris.csv", path=csv, origin="kaggle", ref="uciml/iris")]
+    )
+    out = annotate_manual(
+        source,
+        tmp_path / "report.docx",
+        [_outcome_with(note)],
+        anchors={"task1": 0},
+    )
+    text = [p.text for p in pydocx.Document(str(out)).paragraphs]
+    assert "Data used: iris.csv (from Kaggle dataset uciml/iris)." in text
+    assert text.index("Data used: iris.csv (from Kaggle dataset uciml/iris).") < text.index(
+        "Code:"
+    ), "provenance belongs above the code, not buried after it"
+
+
+def test_the_annotated_docx_is_unchanged_without_blocks(tmp_path: Path):
+    """Byte-stability of the anchored path is what emit/docx.py promises."""
+    import docx as pydocx
+
+    from labsagent.models import Task, TaskOutcome
+    from labsagent.report.docx_builder import annotate_manual
+
+    def render(target: str) -> list[str]:
+        source = tmp_path / f"manual_{target}.docx"
+        doc = pydocx.Document()
+        doc.add_paragraph("Task 1: Do the thing.")
+        doc.save(str(source))
+        outcome = TaskOutcome(
+            task=Task(id="task1", title="T", statement="S"),
+            status="passed",
+            code_text="print(1)",
+        )
+        out = annotate_manual(
+            source, tmp_path / f"{target}.docx", [outcome], anchors={"task1": 0}
+        )
+        return [p.text for p in pydocx.Document(str(out)).paragraphs]
+
+    assert render("a") == render("b")
+    assert not any("Data used" in line for line in render("a"))
+
+
+# --- when nothing resolved --------------------------------------------------
+#
+# The system prompt tells the solver that listed data files "are already saved
+# in your workspace". With no data and no block, it read that, believed it, and
+# went looking outside its workspace for a file it had never been given.
+
+
+def test_describe_says_so_when_every_reference_failed():
+    text = describe([], [("Online", "I do not know how to get 'Online'.")])
+    assert "No data was resolved" in text
+    assert "Online" in text
+    assert "already saved in your workspace" not in text
+    assert "do not invent substitute data" in text.lower()
+
+
+def test_describe_is_still_empty_for_a_lab_that_wanted_no_data():
+    """A lab with no data must stay byte-identical to what it was."""
+    assert describe([]) == ""
+    assert describe([], []) == ""
+
+
+def test_a_lab_that_asked_for_nothing_is_not_a_total_failure():
+    assert Acquisition().total_failure is False
+
+
+def test_asking_and_getting_nothing_is_a_total_failure():
+    acquired = Acquisition(requested=["a.csv"], failures=[("a.csv", "gone")])
+    assert acquired.total_failure is True
+
+
+def test_one_failure_among_several_is_not_a_total_failure(csv: Path):
+    acquired = Acquisition(
+        datasets=[Dataset(name="a.csv", path=csv)],
+        requested=["a.csv", "b.csv"],
+        failures=[("b.csv", "gone")],
+    )
+    assert acquired.total_failure is False, "the partial case must keep running"
+
+
+def test_acquire_records_what_it_was_asked_for(tmp_path: Path, csv: Path):
+    got = acquire([str(csv), str(csv)], tmp_path / "data")
+    assert got.requested == [str(csv)], "deduped, and recorded even when it worked"
+
+
+# --- workbooks --------------------------------------------------------------
+#
+# ".xlsx" was an accepted data suffix that nothing could read: openpyxl was not
+# a declared dependency, so `pd.read_excel` raised, the profile fell back to
+# reading the zip container as text, and the solver -- told the file was in its
+# workspace -- spent most of a run writing its own xlsx parser.
+
+
+@pytest.fixture
+def workbook(tmp_path: Path) -> Path:
+    openpyxl = pytest.importorskip("openpyxl")
+    path = tmp_path / "sales.xlsx"
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "Q1"
+    sheet.append(["region", "units"])
+    sheet.append(["north", 4])
+    sheet.append(["south", 7])
+    book.save(path)
+    return path
+
+
+def test_a_workbook_is_profiled_by_its_columns_not_its_bytes(workbook: Path):
+    text = profile(workbook)
+    assert "region" in text and "units" in text
+    assert "PK" not in text, "the zip container must never reach a prompt"
+
+
+def test_a_binary_file_is_refused_rather_than_rendered(tmp_path: Path):
+    path = tmp_path / "mystery.bin"
+    path.write_bytes(b"PK\x03\x04" + b"\xff\xfe" * 200)
+    text = profile(path)
+    assert "binary file" in text
+    assert "�" not in text, "no replacement characters, which is what this cost"
+
+
+def test_a_workbook_arrives_as_a_csv(tmp_path: Path, workbook: Path):
+    """The solver never meets the workbook: it is converted once, here."""
+    datasets = from_path(str(workbook), tmp_path / "data")
+    assert [d.name for d in datasets] == ["sales.csv"]
+    assert datasets[0].path.suffix == ".csv"
+    assert datasets[0].path.read_text(encoding="utf-8").startswith("region,units")
+    assert "converted from sales.xlsx" in datasets[0].preview
+    assert datasets[0].ref == "sales.xlsx", "provenance survives the conversion"
+
+
+def test_the_original_workbook_is_kept_but_not_handed_over(tmp_path: Path, workbook: Path):
+    data_dir = tmp_path / "data"
+    datasets = from_path(str(workbook), data_dir)
+    assert (data_dir / "sales.xlsx").exists(), "the run keeps a record of its input"
+    assert "sales.xlsx" not in [d.name for d in datasets]
+
+
+def test_conversion_can_be_turned_off(tmp_path: Path, workbook: Path):
+    datasets = from_path(str(workbook), tmp_path / "data", convert_excel=False)
+    assert [d.name for d in datasets] == ["sales.xlsx"]
+
+
+def test_a_multi_sheet_workbook_names_each_sheet(tmp_path: Path):
+    openpyxl = pytest.importorskip("openpyxl")
+    path = tmp_path / "book.xlsx"
+    book = openpyxl.Workbook()
+    book.active.title = "First"
+    book.active.append(["a"])
+    second = book.create_sheet("Second Half")
+    second.append(["b"])
+    book.save(path)
+
+    names = [d.name for d in from_path(str(path), tmp_path / "data")]
+    assert names == ["book__first.csv", "book__second_half.csv"]
+
+
+def test_an_unreadable_workbook_falls_back_to_the_file_itself(tmp_path: Path):
+    """Conversion is an optimisation; it must never cost the dataset."""
+    path = tmp_path / "broken.xlsx"
+    path.write_bytes(b"PK\x03\x04not really a workbook")
+    datasets = from_path(str(path), tmp_path / "data")
+    assert [d.name for d in datasets] == ["broken.xlsx"]
+
+
+def test_to_csv_on_rubbish_returns_nothing(tmp_path: Path):
+    from labsagent.data.normalise import to_csv
+
+    path = tmp_path / "broken.xlsx"
+    path.write_bytes(b"not a zip at all")
+    assert to_csv(path, tmp_path / "out") == []

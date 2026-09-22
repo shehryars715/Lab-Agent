@@ -32,10 +32,45 @@ class Settings(BaseSettings):
     #: rather than a full disk, and bounds the per-task copy.
     max_dataset_mb: int = 100
 
+    # A workbook is converted to CSV once, at acquire time, rather than parsed
+    # again by every task and every attempt -- and the .py that gets handed in
+    # then carries `pd.read_csv`, which runs anywhere pandas does, instead of
+    # `pd.read_excel`, which needs an engine the student may not have. Turn it
+    # off only to debug the conversion itself; the workbook is still readable.
+    convert_excel_to_csv: bool = True
+
     model_name: str = "deepseek-flash"
     temperature: float = 0.0
     timeout_s: int = 30
     max_retries_per_task: int = 3
+
+    # CIRCUIT BREAKERS, NOT TARGETS. Healthy labs run 5-6 model calls and about
+    # $0.0007 per task, so these sit roughly an order of magnitude above normal
+    # and should never fire on a run that is going well. They exist because
+    # nothing else bounded an attempt: deepagents defaults `recursion_limit` to
+    # 9,999, and `max_retries_per_task` bounds attempts rather than turns
+    # inside one. A single attempt once ran seven minutes unchecked, and the
+    # retry budget then bought two more of them.
+    #
+    # The turn cap alone is not enough -- 30 turns x 3 attempts x 5 tasks is
+    # still 450 calls -- so the cost ceiling is the binding constraint and the
+    # knob to reach for first.
+    max_turns_per_attempt: int = 30
+    max_cost_per_task_usd: float = 0.02
+    max_cost_per_run_usd: float = 0.15
+
+    # A task's data products are copied into the workspaces of the tasks that
+    # reference it. Capped because the point is to stop later tasks hunting for
+    # a file, not to duplicate a 40 MB intermediate into every directory -- one
+    # run held the same CSV three times and came to 188 MB.
+    handoff_max_mb: int = 50
+
+    # A retry starts from a clean directory. Without this an attempt inherits
+    # the previous one's half-finished intermediates, which is how a third
+    # attempt once "passed" in 22 seconds off stale files and reported a
+    # different number than the attempt that wrote them. Datasets and
+    # handed-forward files survive the reset, so nothing is re-fetched.
+    wipe_workspace_between_attempts: bool = True
 
     # Ship only the tools this job needs. deepagents offers ls/glob/grep/delete/
     # edit_file and a subagent `task` tool; solving a one-file lab task needs

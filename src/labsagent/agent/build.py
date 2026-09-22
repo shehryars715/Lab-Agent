@@ -91,6 +91,24 @@ def build_model(settings: Settings, phase: str = "solve"):
     )
 
 
+def solver_config(settings: Settings, callbacks=()) -> dict:
+    """The per-invoke config for one solver attempt.
+
+    THE TURN CAP HAS TO BE SET HERE. deepagents binds `recursion_limit: 9_999`
+    onto the graph, which is effectively no limit at all; a config passed at the
+    call site wins over a bound one, so this is where a real bound can go.
+
+    The doubling is because a LangGraph super-step alternates between the model
+    node and the tools node, so one model turn costs two steps. Keeping that
+    arithmetic next to the agent builder stops it drifting into the orchestrator
+    and being wrong in two places.
+    """
+    return {
+        "recursion_limit": 2 * settings.max_turns_per_attempt + 2,
+        "callbacks": list(callbacks),
+    }
+
+
 def build_explainer(settings: Settings, usage=None, model=None) -> Explainer:
     """The report-prose writer, with the model choice made in exactly one place.
 

@@ -11,6 +11,8 @@ notebook opens in Colab already showing results, exactly as if it had been run.
 
 from __future__ import annotations
 
+from labsagent.blocks import leading_prose
+
 import base64
 from pathlib import Path
 
@@ -22,19 +24,6 @@ COLAB_SETUP = (
     "# Setup -- Colab has these, a local kernel may need them\n"
     "# !pip install numpy matplotlib scipy scikit-learn pandas -q\n"
 )
-
-
-def _leading_prose(outcome):
-    """Prose blocks the caller put BEFORE the first code block, if any."""
-    blocks = getattr(outcome, "blocks", None)
-    if not blocks:
-        return []
-    out = []
-    for block in blocks:
-        if block.kind != "prose":
-            break
-        out.append(block)
-    return out
 
 
 def _image_output(path: Path) -> nbf.NotebookNode:
@@ -80,7 +69,7 @@ def build_notebook(
         # `blocks` explicitly. `blocks_for()` synthesises a list whose prose
         # (the explanation) comes last, so calling it here would duplicate the
         # explanation cell at the bottom of every task.
-        for block in _leading_prose(outcome):
+        for block in leading_prose(outcome):
             cells.append(nbf.v4.new_markdown_cell(block.text))
 
         if outcome.status != "passed":

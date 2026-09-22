@@ -62,8 +62,43 @@ def _count_rows(path: Path) -> int:
     return max(0, total - 1)
 
 
+#: First bytes of formats that are containers, not text. A .xlsx is a zip, and
+#: `errors="replace"` will happily render one as several hundred replacement
+#: characters -- which is exactly what went into a task prompt when the Excel
+#: engine was missing, in place of the column names the solver needed.
+_BINARY_MAGIC = (
+    b"PK\x03\x04",          # zip, and therefore xlsx / xlsm
+    b"\xd0\xcf\x11\xe0",    # OLE2, and therefore legacy .xls
+    b"\x89PNG",
+    b"\x1f\x8b",            # gzip
+    b"%PDF",
+)
+
+
+def _is_binary(path: Path) -> bool:
+    """A container or an embedded NUL. Never raises; unreadable means "no"."""
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(4096)
+    except OSError:
+        return False
+    return head.startswith(_BINARY_MAGIC) or b"\x00" in head
+
+
 def _excerpt(path: Path) -> str:
-    """Head of the file, for anything pandas cannot make a table of."""
+    """Head of the file, for anything pandas cannot make a table of.
+
+    Binary is refused outright. "Here is a file I could not read" is useful to
+    the solver; several hundred bytes of a zip container rendered as text is
+    not -- it is noise that costs tokens on every turn of every task, and it
+    invites the model to go and parse the container by hand. One run did.
+    """
+    if _is_binary(path):
+        suffix = path.suffix.lower() or "no extension"
+        return (
+            f"    binary file ({suffix}); not previewed. If a task needs data "
+            "from it, say so and record the task as failed."
+        )
     try:
         head = path.read_text(encoding="utf-8", errors="replace")[:EXCERPT_CHARS]
     except OSError as exc:

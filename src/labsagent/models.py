@@ -110,6 +110,19 @@ class TaskOutcome:
     attempts: int = 0
     error: str | None = None
     blocks: list[Block] | None = None
+    #: What THIS task cost, and the usage behind it. Only run-level totals were
+    #: ever persisted, so "which task was expensive" could not be answered from
+    #: a finished run -- which is most of what you want to know about one.
+    cost_usd: float = 0.0
+    usage: dict = field(default_factory=dict)
+    #: Every attempt's error, in order, kept even when a later attempt passed.
+    #: `error` is None once a task succeeds, so the reason it needed three
+    #: attempts used to be unrecoverable.
+    attempt_errors: list[str] = field(default_factory=list)
+    #: "turn_limit" | "task" | "run" when a ceiling ended this task.
+    stopped_reason: str | None = None
+    #: Data files this task produced, for the next task that references it.
+    produced: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -119,6 +132,10 @@ class RunManifest:
     spec: LabSpec
     outcomes: list[TaskOutcome] = field(default_factory=list)
     token_usage: dict[str, int] = field(default_factory=dict)
+    #: The full `RunUsage.as_dict()` -- total AND per-phase. `token_usage` is
+    #: the collapsed total and is kept so older manifests still load, but it
+    #: threw away the solve/explain/ingest split that says where money went.
+    usage: dict = field(default_factory=dict)
     cost_usd: float = 0.0
     #: task id -> paragraph index in the source .docx. Empty for every other
     #: input type. Persisted so a revision can still rebuild the Word report.
