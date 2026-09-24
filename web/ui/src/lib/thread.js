@@ -50,6 +50,12 @@ const emptyRun = () => ({
   progress: { done: 0, total: 0 },
   cost: 0,
   artifacts: [],
+  proposed: null, // formats the agent resolved from the request, before any exist
+  emitFailures: [], // formats that could not be produced; the others still ship
+  // Server-side timestamps from core events, so a REPLAYED run can still say
+  // how long it took -- `startedAt`/`finishedAt` are the browser's clock and
+  // only mean something for a run watched live.
+  clock: null,
   summary: null,
   error: null,
   startedAt: Date.now(),
@@ -244,7 +250,19 @@ export function reduce(state, frame) {
     }
 
     case 'questions_ready':
-      return { ...base, known: frame.known ?? [] }
+      return patchRun(
+        { ...base, known: frame.known ?? [] },
+        { proposed: frame.proposed_artifacts ?? null },
+      )
+
+    case 'emit_failed':
+      return patchRun(base, (run) => ({
+        ...run,
+        emitFailures: [
+          ...run.emitFailures.filter((f) => f.format !== frame.format),
+          { format: frame.format, reason: frame.reason },
+        ],
+      }))
 
     case 'needs_input': {
       const withQuestion = push(base, {
@@ -298,8 +316,16 @@ export function reduce(state, frame) {
         ],
       }))
 
-    case 'event':
-      return applyCoreEvent(base, frame.event)
+    case 'event': {
+      const at = Date.parse(frame.event?.at)
+      const timed = Number.isNaN(at)
+        ? base
+        : patchRun(base, (run) => ({
+            ...run,
+            clock: { first: run.clock?.first ?? at, last: at },
+          }))
+      return applyCoreEvent(timed, frame.event)
+    }
 
     case 'done':
       // The run entry morphs in place rather than a second entry appearing.
@@ -319,4 +345,34 @@ export function reduce(state, frame) {
     default:
       return base
   }
+}
+
+/** Reading order, which is not append order.
+ *
+ *  The reducer appends the run entry the moment a run OPENS, so everything the
+ *  agent then says lands underneath it. That would put the finished block --
+ *  and therefore the downloads -- above a screen of narration. So a run renders
+ *  at the END of the stretch it belongs to: after its own narration and
+ *  questions, and before the next thing the user said.
+ *
+ *  Presentation only. The reducer still appends in event order, which is what
+ *  its tests assert and what replay depends on.
+ */
+export function readingOrder(entries) {
+  const out = []
+  let held = null
+  for (const entry of entries) {
+    if (entry.kind === 'run') {
+      if (held) out.push(held)
+      held = entry
+      continue
+    }
+    if (entry.kind === 'user-text' && held) {
+      out.push(held)
+      held = null
+    }
+    out.push(entry)
+  }
+  if (held) out.push(held)
+  return out
 }

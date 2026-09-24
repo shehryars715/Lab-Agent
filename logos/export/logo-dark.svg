@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 512">
+  <title>Labs-Agent</title>
+  <g id="icon">
+    <path fill="#f4f4f4" fill-rule="evenodd" d="M224 128a128 128 0 1 0 0 256a128 128 0 1 0 0-256Z M168 184h36v100h76v36h-112Z M232 248v-48a48 48 0 0 1 48 48Z"/>
+  </g>
+  <g id="wordmark">
+    <text x="392" y="290" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="500" font-size="96" letter-spacing="-2.5" fill="#f4f4f4">Labs-Agent</text>
+  </g>
+</svg>

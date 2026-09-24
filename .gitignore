@@ -35,6 +35,10 @@ labsagent.toml
 build/
 runs/
 
+# Launch video built by `/brag`: the render, its poster, and the Hyperframes
+# composition source that produces them -- which carries its own node_modules.
+brag-output/
+
 # --- python -------------------------------------------------------------------
 __pycache__/
 *.py[cod]

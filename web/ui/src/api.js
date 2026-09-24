@@ -1,4 +1,6 @@
-// The four things the browser can ask the server to do.
+// Everything the browser asks the server, in one file. No endpoint here is new:
+// the redesign reads the same routes the old surface did, plus two that already
+// existed and went unused (the status poll and fetching a download as text).
 //
 // Every URL here is relative. That is what lets the same code run behind the
 // Vite dev proxy (:5173 -> :8000) and behind FastAPI serving the built assets
@@ -91,6 +93,28 @@ export async function submitAnswers(jobId, answers) {
   })
   if (!res.ok) throw new Error(await readError(res))
   return res.json()
+}
+
+/** The polling route, used for labs that are running but not on screen.
+ *  Returns null when the server no longer knows the job -- a restart, or the
+ *  registry evicted it -- which the sidebar shows as "lost", not as an error. */
+export async function getRunStatus(jobId) {
+  const res = await fetch(`/api/runs/${encodeURIComponent(jobId)}`)
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(await readError(res))
+  return res.json()
+}
+
+/** A download read as text, for the inline preview. Same URL as the download
+ *  link, so the whitelist on the server is the only thing deciding access.
+ *  Large files are cut at `limit` characters and say so. */
+export async function fetchText(url, { limit = 400_000, signal } = {}) {
+  const res = await fetch(url, { signal })
+  if (!res.ok) throw new Error(await readError(res))
+  const text = await res.text()
+  return text.length > limit
+    ? { text: text.slice(0, limit), truncated: true, length: text.length }
+    : { text, truncated: false, length: text.length }
 }
 
 export function downloadUrl(jobId, key) {

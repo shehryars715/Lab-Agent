@@ -1,16 +1,27 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
-    <!-- Inline data URI rather than a file: one less request, and no
-         /favicon.ico 404 in the console of a tool built to be looked at. -->
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230062cc'/%3E%3Cpath d='M9 16.5l5 5 9-10' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#141114" />
+    <meta name="description" content="Turn a lab manual into a draft you check: real programs, really run." />
+    <!-- The mark: a stage node running along the rail into a tick -- the Run
+         Panel, reduced to one gesture. SVG first; PNG for browsers without it. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <title>Labs-Agent</title>
+    <!-- Resolve the theme before first paint, so a light-mode user never sees
+         a dark flash. Mirrors lib/prefs.js; guarded because storage can throw. -->
+    <script>
+      try {
+        var p = localStorage.getItem('labsagent.theme') || 'dark'
+        var light = p === 'light' || (p === 'system' && matchMedia('(prefers-color-scheme: light)').matches)
+        document.documentElement.dataset.theme = light ? 'light' : 'dark'
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

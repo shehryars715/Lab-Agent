@@ -1,0 +1,382 @@
+/* Motion, in one file, so the whole grammar can be read at once.
+
+   One curve family (tokens.css), transform and opacity for everything that
+   moves, plus stroke-dashoffset for ticks that draw themselves. Nothing loops
+   unless something is genuinely running, and every loop stops the moment the
+   state it reports does.
+
+   FOCAL MOMENT: the stage rail. A ghost stage strikes forward when it goes
+   live, a coral shimmer runs along its connector while it works, the
+   connector fills as it completes, and its tick draws itself. When the run
+   finishes, the result rises into the same panel. */
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise));
+  }
+}
+
+@keyframes enter-soft {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--rise) / 2));
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes strike {
+  0% {
+    opacity: 0.35;
+    transform: scale(0.72);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes draw {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+}
+
+@keyframes float {
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+/* ------------------------------------------------------------ pages */
+
+/* Every route change remounts the page host (App keys it on the route), so
+   each page arrives with one short rise. Product UI: 380ms, not a show. */
+.page-host > * {
+  animation: enter var(--dur-slow) var(--ease-out) both;
+}
+
+.home-title,
+.home-sub,
+.home .composer-wrap {
+  animation: enter var(--dur-slow) var(--ease-out) both;
+}
+
+.home-sub {
+  animation-delay: 40ms;
+}
+
+.home .composer-wrap {
+  animation-delay: 80ms;
+}
+
+/* ------------------------------------------------------------ sidebar */
+
+/* The list as a list: a short stagger, capped at twelve rows (the index is
+   clamped in Sidebar.jsx), so a long history never makes anyone wait. */
+.lab-item {
+  animation: enter-soft var(--dur-base) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * var(--stagger));
+}
+
+.lab-rename {
+  animation: fade-in var(--dur-fast) var(--ease-out);
+}
+
+/* ------------------------------------------------------------ thread */
+
+.lab-column > .entry,
+.lab-column > .reconnecting {
+  animation: enter var(--dur-base) var(--ease-out) both;
+}
+
+.brief.is-done {
+  animation: fade-in var(--dur-base) var(--ease-out) both;
+}
+
+/* ------------------------------------------------------------ stage rail */
+
+.stage .mark {
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.stage.is-pending .mark,
+.stage.is-skipped .mark {
+  opacity: 0.85;
+}
+
+/* Struck forward: the ghost becomes the live mark. */
+.stage.is-running .mark,
+.stage.is-waiting .mark,
+.task.is-running .mark {
+  animation: strike var(--dur-slow) var(--ease-out) both;
+}
+
+.stage-line::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--ink-3);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+
+.stage.is-done .stage-line::after,
+.stage.is-partial .stage-line::after {
+  transform: scaleX(1);
+}
+
+/* The shimmer: a short coral highlight travelling the live connector. */
+.stage.is-running .stage-line::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 38%;
+  background: linear-gradient(90deg, transparent, var(--accent-mark), transparent);
+  animation: sweep 1.7s var(--ease-in-out) infinite;
+}
+
+.stage-detail {
+  transition: color var(--dur-base) var(--ease-out);
+}
+
+/* Ticks draw themselves, one stage after another. */
+.mark-draw .mark-tick {
+  stroke-dasharray: 100;
+  animation: draw 460ms var(--ease-out) both;
+}
+
+.stage .mark-draw .mark-tick {
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+.task .mark-draw .mark-tick {
+  animation-delay: calc(min(var(--i, 0), 8) * 45ms);
+}
+
+.mark-cross,
+.mark-strike,
+.mark-dot {
+  animation: fade-in var(--dur-base) var(--ease-out) both;
+}
+
+/* ------------------------------------------------------------ tasks */
+
+/* A new activity line cross-fades in (the element is keyed on its text). */
+.task-activity {
+  animation: enter-soft var(--dur-fast) var(--ease-out) both;
+}
+
+.task-name {
+  transition:
+    color var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out);
+}
+
+.status-line {
+  animation: enter-soft var(--dur-base) var(--ease-out) both;
+}
+
+/* ------------------------------------------------------------ result */
+
+/* The run folds into its result: the files rise into the same panel. */
+.run.is-finished .result {
+  animation: enter var(--dur-slow) var(--ease-out) both;
+}
+
+.run.is-finished .result .artifact {
+  animation: enter-soft var(--dur-base) var(--ease-out) both;
+  animation-delay: calc(160ms + min(var(--i, 0), 6) * 55ms);
+}
+
+.run.is-working {
+  transition: box-shadow var(--dur-slow) var(--ease-out), border-color var(--dur-slow) var(--ease-out);
+}
+
+.artifact-icon {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.artifact-row:hover .artifact-icon {
+  transform: translateY(-1px);
+}
+
+.artifact-preview,
+.code-group[open] > .artifact-rows,
+.run-fail-detail[open] pre,
+.run-superseded[open] .tasks {
+  animation: enter-soft var(--dur-base) var(--ease-out) both;
+}
+
+/* ------------------------------------------------------------ feedback */
+
+.chip:active,
+.lab-action:active,
+.theme-opt:active {
+  transform: scale(0.95);
+}
+
+.chip,
+.lab-action,
+.theme-opt {
+  transition-property: background-color, border-color, color, transform;
+}
+
+.composer.is-over .drop-hint svg {
+  animation: float 1.2s var(--ease-in-out) infinite;
+}
+
+.toast {
+  animation: toast-in var(--dur-base) var(--ease-out) both;
+}
+
+.attachment {
+  animation: enter-soft var(--dur-base) var(--ease-out) both;
+}
+
+/* ------------------------------------------------------------ reduced motion */
+
+/* Not "turn everything off". Movement goes; spinners stop on a legible arc;
+   the short opacity changes that confirm a state stay, because they are the
+   feedback, not the decoration. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --rise: 0px;
+    --stagger: 0ms;
+  }
+
+  .sidebar,
+  .composer,
+  .artifact-icon {
+    transition-property: opacity, background-color, border-color, color;
+  }
+
+  .stage.is-running .mark,
+  .stage.is-waiting .mark,
+  .task.is-running .mark {
+    animation: fade-in var(--dur-fast) var(--ease-out) both;
+  }
+
+  .mark-arc,
+  .send[data-busy] .send-spin {
+    animation: none;
+  }
+
+  .stage.is-running .stage-line::before,
+  .skel::after,
+  .composer.is-over .drop-hint svg,
+  .reconnecting-dot {
+    animation: none;
+  }
+
+  .skel::after {
+    display: none;
+  }
+
+  .composer.is-over {
+    transform: none;
+  }
+
+  .mark-draw .mark-tick,
+  .stage .mark-draw .mark-tick,
+  .task .mark-draw .mark-tick {
+    animation-delay: 0ms;
+  }
+
+  .run.is-finished .result .artifact {
+    animation-delay: 0ms;
+  }
+
+  .mark-draw .mark-tick {
+    animation: fade-in var(--dur-fast) var(--ease-out) both;
+    stroke-dasharray: none;
+  }
+
+  .stage-line::after {
+    transition-duration: 0ms;
+  }
+
+  .chip:active,
+  .lab-action:active,
+  .theme-opt:active,
+  .btn:active:not(:disabled),
+  .send:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* ------------------------------------------------------------ celebration */
+
+/* The one party in the product: eight short coral strokes fly out from the
+   done tick, once, when you watched the run finish. 700ms and gone. */
+@keyframes spark {
+  0% {
+    opacity: 0;
+    transform: rotate(var(--a)) translateY(-6px) scaleY(0.4);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--a)) translateY(-19px) scaleY(1);
+  }
+}
+
+@keyframes badge-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+.done-badge.is-celebrating {
+  animation: badge-pop 480ms var(--ease-out) both;
+}
+
+.done-badge.is-celebrating .sparks i {
+  animation: spark 700ms var(--ease-out) 260ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .done-badge.is-celebrating {
+    animation: fade-in var(--dur-fast) var(--ease-out) both;
+  }
+
+  .sparks {
+    display: none;
+  }
+}
+
+/* A lab read back from disk is a record, not an event: nothing replays. */
+.run.is-static .result,
+.run.is-static .result .artifact {
+  animation: none;
+}

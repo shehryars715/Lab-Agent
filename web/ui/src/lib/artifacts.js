@@ -18,12 +18,18 @@ const ICONS = {
 /** Headline deliverables first, then the archive, then per-task source. */
 const ORDER = { report: 0, notebook: 1, package: 2, code: 3 }
 
+// Within a kind, the Word report leads the Markdown copy (both are "report").
+const byName = (a) => (/\.docx$/i.test(a.filename ?? '') ? 0 : 1)
+
 export function iconFor(kind) {
   return ICONS[kind] || CodeFile
 }
 
 export function ordered(artifacts) {
   return [...(artifacts || [])].sort(
-    (a, b) => (ORDER[a.kind] ?? 9) - (ORDER[b.kind] ?? 9),
+    (a, b) =>
+      (ORDER[a.kind] ?? 9) - (ORDER[b.kind] ?? 9) ||
+      (a.key.startsWith('code:') ? 1 : 0) - (b.key.startsWith('code:') ? 1 : 0) ||
+      byName(a) - byName(b),
   )
 }

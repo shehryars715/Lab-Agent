@@ -1,53 +1,102 @@
-import { useEffect, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { getRunStatus } from '../api'
 import { initial, lastRun, reduce } from '../lib/thread'
 
 // The React binding around the transcript reducer. Everything here is
-// transport: opening a connection, closing it, noticing it dropped. What the
-// frames MEAN lives in ../lib/thread.js where it can be tested without a
-// browser.
+// transport: opening a connection, noticing it dropped, noticing the job is
+// gone. What the frames MEAN lives in ../lib/thread.js.
 //
-// `revision` is a counter, not a value. A revision reuses the same job on the
-// server -- same run directory, same artifacts, replaced in place -- so the URL
-// does not change, and a counter that increments is the only thing that can
-// tell this effect to reconnect. Using the feedback text as the dependency
-// would reconnect when the same words were sent twice, which is a real thing
-// to want.
+// REPLAY REBUILDS THE WHOLE LAB. The server keeps a log, not a queue, so a
+// fresh EventSource gets every frame from seq 1 -- which is what lets a page
+// refresh land back on a live run. The one thing the log does not contain is
+// the user's own revision messages, and without them a replayed revision would
+// fold into the first run's card. So each revision is stored with the last seq
+// seen before it was sent (`afterSeq`), and replay re-inserts the message and
+// a fresh run entry at exactly that point.
+//
+// `revision` is a counter, not a value: a revision reuses the same job and the
+// same URL, so only an incrementing number can tell the effect to reconnect.
 
-export function useRunStream(jobId, revision = 0) {
-  const [state, dispatch] = useReducer(reduce, initial)
+const START = { type: '__start', newJob: true }
+
+export function useRunStream(jobId, { revisions = [] } = {}) {
+  const [state, dispatch] = useReducer(reduce, undefined, () => reduce(initial, START))
+  const [revision, setRevision] = useState(0)
+  const [lost, setLost] = useState(false)
+  // Dropped = it had opened, and then errored. Tracked here rather than read
+  // off `state.live` in a render, because an open and a drop in the same tick
+  // are batched into one render that never shows `live: true`.
+  const [dropped, setDropped] = useState(false)
+  const opened = useRef(false)
   const sourceRef = useRef(null)
+  const seqRef = useRef(0)
+  const revIndex = useRef(0)
+  const revsRef = useRef(revisions)
+  revsRef.current = revisions
+
+  const feed = useCallback((frame) => {
+    if (frame.seq && frame.seq <= seqRef.current) return
+    const revs = revsRef.current
+    while (revIndex.current < revs.length && (frame.seq ?? 0) > revs[revIndex.current].afterSeq) {
+      dispatch({ type: '__user', text: revs[revIndex.current].text })
+      dispatch({ type: '__start', newJob: false })
+      revIndex.current += 1
+    }
+    if (frame.seq) seqRef.current = frame.seq
+    dispatch(frame)
+  }, [])
 
   useEffect(() => {
     if (!jobId) return undefined
+    let cancelled = false
+    let retryTimer = null
 
-    const es = new EventSource(`/api/runs/${jobId}/events`)
+    const es = new EventSource(`/api/runs/${encodeURIComponent(jobId)}/events`)
     sourceRef.current = es
 
-    es.onopen = () => dispatch({ type: '__live' })
+    es.onopen = () => {
+      opened.current = true
+      setDropped(false)
+      dispatch({ type: '__live' })
+    }
     es.onmessage = (message) => {
       try {
-        dispatch(JSON.parse(message.data))
+        feed(JSON.parse(message.data))
       } catch {
         /* a malformed frame is not worth tearing the stream down for */
       }
     }
-    es.onerror = () => dispatch({ type: '__offline' })
+    es.onerror = () => {
+      dispatch({ type: '__offline' })
+      if (opened.current) setDropped(true)
+      // CONNECTING means the browser is already retrying a dropped connection
+      // on its own. CLOSED means it gave up -- which is what a 404 looks like
+      // from inside EventSource, since it cannot read status codes. Ask the
+      // polling route which it was.
+      if (es.readyState !== EventSource.CLOSED || cancelled) return
+      getRunStatus(jobId)
+        .then((status) => {
+          if (cancelled) return
+          if (status === null) setLost(true)
+          else retryTimer = window.setTimeout(() => setRevision((n) => n + 1), 2000)
+        })
+        .catch(() => {
+          if (!cancelled) retryTimer = window.setTimeout(() => setRevision((n) => n + 1), 3000)
+        })
+    }
 
     return () => {
+      cancelled = true
+      window.clearTimeout(retryTimer)
       es.close()
       sourceRef.current = null
     }
-  }, [jobId, revision])
+  }, [jobId, revision, feed])
 
-  // Once the run is terminal the server ends the response, and EventSource
-  // treats a closed stream as an error and retries on a timer, forever. But a
-  // revision reopens the same job, so this cannot close for good -- it closes,
-  // and the effect above reopens with a fresh EventSource when `revision`
-  // changes.
-  //
-  // The check is on the LAST run entry, not on any of them. Asking whether any
-  // entry is finished stays true forever once the first run completes, which
-  // would close the stream the instant a revision tried to use it.
+  // A terminal run ends the response, and EventSource would treat that as a
+  // drop and reconnect forever. Close it; a revision reopens via the counter.
+  // The check is on the LAST run entry: "any finished" stays true forever once
+  // the first run completes, and would kill the stream a revision needs.
   const run = lastRun(state)
   const finished = Boolean(run?.state.finishedAt)
   useEffect(() => {
@@ -57,5 +106,15 @@ export function useRunStream(jobId, revision = 0) {
     }
   }, [finished])
 
-  return [state, dispatch]
+  /** Open a revision locally, then reconnect. Returns the boundary to store. */
+  const beginRevision = useCallback((text) => {
+    const afterSeq = seqRef.current
+    dispatch({ type: '__user', text })
+    dispatch({ type: '__start', newJob: false })
+    revIndex.current += 1
+    setRevision((n) => n + 1)
+    return { text, afterSeq }
+  }, [])
+
+  return { state, lost, dropped, beginRevision }
 }

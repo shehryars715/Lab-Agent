@@ -1,0 +1,181 @@
+/* ==========================================================================
+   Design tokens -- the ONE place a colour, size, duration or radius is named.
+
+   Every other stylesheet reads these and never writes a raw value of its own.
+   That is what lets dark and light be a single attribute flip on <html>, and
+   what makes "is this the accent?" a grep for one variable instead of a hunt
+   for hex codes.
+
+   Dark is the default because of the scene this is used in: a student alone
+   at a laptop after midnight with the lights off. Light is a full twin, not a
+   filter over the dark theme -- every role is re-picked for its own ground.
+
+   Neutrals are tinted a few degrees towards the coral so the greys read as
+   one warm family rather than as the blue-grey every dashboard ships.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- ground and surfaces, darkest to lightest ------------------------- */
+  --bg: #141114;            /* the page */
+  --bg-raised: #1a161a;     /* sidebar: a second neutral layer, not a card */
+  --surface: #211c20;       /* composer, run panel, question */
+  --surface-2: #2a2429;     /* hover, chips, inset wells */
+  --surface-3: #352d33;     /* pressed, selected */
+  --line: #2e282d;          /* hairlines */
+  --line-strong: #463d44;   /* dividers that must be seen (decorative, <3:1) */
+  --line-control: #7a6e75;  /* the ONLY boundary of a control: >=3:1 on --surface and --surface-2 */
+
+  /* ---- ink ----------------------------------------------------------------- */
+  --ink: #f4eeea;
+  --ink-2: #c7bdbb;
+  --ink-3: #aa9f9e;         /* >= 4.5:1 on every ground, --surface-3 included */
+  --ink-ghost: #877b82;     /* unlit marks: faint, but >= 3:1 on all five grounds, since they carry state */
+
+  /* ---- the accent: electric coral, spent on edges and the active mark ---- */
+  --accent: #ff6a4d;        /* fills */
+  --accent-hover: #ff8166;
+  --accent-mark: #ff6a4d;   /* coral drawn as a status mark or ring (>= 3:1) */
+  --accent-ink: #ff7d61;    /* coral used AS text on the dark ground (7:1) */
+  --on-accent: #1d0c07;     /* text sitting on a coral fill (7:1) */
+  --accent-soft: rgb(255 106 77 / 0.13);
+  --accent-line: rgb(255 106 77 / 0.5);
+
+  /* ---- failure: rose, a different hue from the accent, always with a mark -- */
+  --danger: #f27092;
+  --danger-soft: rgb(242 112 146 / 0.12);
+  --danger-line: rgb(242 112 146 / 0.45);
+
+  /* ---- code: two quiet hues beside ink, never the accent ------------------ */
+  --code-string: #e2bb8a;
+  --code-number: #d9a6c4;
+  --plot-ground: #ffffff;   /* notebook plots are drawn for white paper */
+
+  /* ---- browser surfaces --------------------------------------------------- */
+  --focus: #ff8a70;
+  --selection: rgb(255 106 77 / 0.32);
+  --scrim: rgb(8 5 8 / 0.62);
+  --scrollbar: #3b3339;
+  --scrollbar-hover: #52474f;
+
+  /* ---- depth: offset + blur, used on the composer and overlays only ------ */
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-2: 0 10px 30px -12px rgb(0 0 0 / 0.6), 0 2px 8px -2px rgb(0 0 0 / 0.35);
+  --shadow-3: 0 24px 60px -20px rgb(0 0 0 / 0.75), 0 4px 14px -4px rgb(0 0 0 / 0.4);
+
+  /* ---- type ---------------------------------------------------------------- */
+  --font-display: 'Bricolage Grotesque Variable', 'Geist Variable', system-ui, sans-serif;
+  --font-text: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+  /* A fixed rem scale at ~1.14 per step -- product UI, not a poster. */
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --text-display: 2.5rem;
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --leading-prose: 1.62;
+
+  --weight-regular: 400;
+  --weight-medium: 520;
+  --weight-semibold: 600;
+
+  /* ---- space: a 4px step ----------------------------------------------- */
+  --space-0: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 56px;
+  --space-10: 80px;
+
+  /* ---- shape --------------------------------------------------------------- */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-2xl: 26px;       /* the one-line composer: a soft capsule, not a pill */
+  --radius-pill: 999px;
+
+  /* ---- layout ------------------------------------------------------------ */
+  --sidebar-w: 268px;
+  --rail-w: 60px;
+  --topbar-h: 52px;
+  --measure: 46rem;         /* the working column */
+  --prose: 60ch;           /* ~75 characters of Geist at body size */
+  --gutter: 16px;
+
+  /* ---- motion: one curve family, three durations -------------------------- */
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);        /* quart out: arrivals */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);    /* state flips */
+  --ease-exit: cubic-bezier(0.5, 0, 0.75, 0);       /* departures */
+  --dur-fast: 160ms;
+  --dur-base: 240ms;
+  --dur-slow: 380ms;
+  --rise: 8px;
+  --stagger: 30ms;
+
+  /* ---- stacking ------------------------------------------------------------ */
+  --z-sidebar: 20;
+  --z-topbar: 30;
+  --z-scrim: 40;
+  --z-drawer: 50;
+  --z-toast: 60;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #fbf8f6;
+  --bg-raised: #f4efec;
+  --surface: #ffffff;
+  --surface-2: #f2ece9;
+  --surface-3: #e8e0dc;
+  --line: #e7dfdb;
+  --line-strong: #d1c6c2;
+  --line-control: #8f8380;
+
+  --ink: #1f1a1d;
+  --ink-2: #54494d;
+  --ink-3: #65595b;         /* >= 4.5:1 on every ground, --surface-3 included */
+  --ink-ghost: #827673;     /* >= 3.3:1 on all five light grounds */
+
+  --accent: #ff6a4d;
+  --accent-hover: #ff5634;
+  --accent-mark: #e04a2c;   /* the fill coral is 2.8:1 on white; marks need 3:1 */
+  --accent-ink: #bf3419;    /* coral-as-text on light needs to be much deeper */
+  --on-accent: #1d0c07;
+  --accent-soft: rgb(255 106 77 / 0.12);
+  --accent-line: rgb(214 70 42 / 0.5);
+
+  --danger: #c0264f;
+  --danger-soft: rgb(192 38 79 / 0.08);
+  --danger-line: rgb(192 38 79 / 0.4);
+
+  --code-string: #875314;
+  --code-number: #9a3b73;
+
+  --focus: #d4472a;
+  --selection: rgb(255 106 77 / 0.24);
+  --scrim: rgb(40 28 30 / 0.36);
+  --scrollbar: #d8cec9;
+  --scrollbar-hover: #bfb2ad;
+
+  --shadow-1: 0 1px 2px rgb(60 30 30 / 0.08);
+  --shadow-2: 0 10px 30px -14px rgb(60 30 30 / 0.22), 0 2px 6px -2px rgb(60 30 30 / 0.08);
+  --shadow-3: 0 24px 60px -24px rgb(60 30 30 / 0.3), 0 4px 14px -4px rgb(60 30 30 / 0.1);
+}

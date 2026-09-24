@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logos/export/logo-dark.svg">
+    <img src="logos/export/logo.svg" alt="Labs-Agent" width="360">
+  </picture>
+</p>
+
 # Labs-Agent
 
 Turn a programming lab manual into a finished submission — working code, terminal
