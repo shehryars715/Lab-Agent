@@ -76,3 +76,4 @@ web/fixtures/matrix_out/
 *.md
 !/README.md
 .impeccable/
+brand.md

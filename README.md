@@ -7,12 +7,15 @@
 
 # Labs-Agent
 
-A web app that turns a programming lab manual into a finished submission: working
-code, real captured output, and the deliverables the lab asks for.
+A solution you review before you submit.
 
-Open the app, attach the manual (and any data), say what you want — *"just the
-notebook for tasks 2 and 4"* — and download the result. Ask for changes afterwards in
-the same chat.
+Labs-Agent reads your lab manual, writes and runs each task, captures the real output,
+and hands back the document your course asks for — the manual filled in, a notebook,
+or a script.
+
+- Everything you see actually ran.
+- When it can't do something, it says so.
+- It only asks when it truly can't continue.
 
 ## What it does
 
@@ -35,7 +38,15 @@ the same chat.
   notebook (`.ipynb`), a script (`.py`), a write-up (`.md`), or a `.zip` of them.
   Screenshots are real terminal output, captured as the program ran.
 
-A typical lab costs well under a cent.
+A typical lab costs well under a cent. Open the app, attach the manual (and any data),
+say what you want — *"just the notebook for tasks 2 and 4"* — and ask for changes
+afterwards in the same chat.
+
+## Use it well
+
+1. **Review everything.** If you can't explain it, don't hand it in.
+2. **Follow your course's rules.** If AI help isn't allowed, don't use it.
+3. **Learn from it.** Compare it with your own attempt; study the version that works.
 
 ## Running it
 
@@ -87,7 +98,7 @@ Three ideas carry most of the design:
   solver (`instruction`), and what the chat shows are separate fields, so none leaks
   into another.
 
-## Testing
+## Testing and evals
 
 ```bash
 uv run python -m pytest            # core suite, offline, no key
