@@ -47,10 +47,14 @@ from typing import Any
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from pydantic import BaseModel, Field
 
+from labsagent.present import STYLES
 from labsagent.report.cover import LAYOUTS
 from labsagent.usage import Usage
 
-MAX_QUESTIONS = 3
+# ONE, AND USUALLY NONE (2026-09-25). Every question pauses the run, and on the
+# real Lab 2 run both of the two asked were about things already settled. A
+# question now has to name the task it blocks -- see `_to_plan`.
+MAX_QUESTIONS = 1
 BRIEFING_ATTEMPTS = 3
 
 PROMPT = """You are about to solve a university programming lab. Before you start, \
@@ -67,32 +71,31 @@ TASKS
 ALREADY KNOWN (never ask for these)
 {known}
 
-PART ONE -- QUESTIONS.
+PART ONE -- QUESTIONS. Almost always: none.
 
-Ask ONLY about things that would change the code you write, and that you cannot
-work out from the task text or choose sensibly yourself.
+A question stops the whole run until the student answers, so ask ONLY when a
+task literally cannot be written without a fact that only the student has --
+for example "use the constants from your lecture notes" with no constants
+given. If you could write a reasonable program without the answer, do not ask:
+decide yourself.
 
-Good questions are about genuine forks in the road:
-  - data that is referenced but not supplied ("which CSV?")
-  - a choice the grader may care about ("numpy or plain Python?")
-  - an output format the task leaves open ("plain text or a table?")
-  - a value only the student knows ("your student ID for the header?")
-
-Bad questions -- do NOT ask these:
+NEVER ask about:
+  - data or datasets (handled separately, before you are asked anything)
+  - which library, method or approach to use -- choose one yourself
+  - output format, layout, style, plots or wording -- choose yourself
+  - what to do if something is missing or fails -- there are no fallbacks
   - anything listed under ALREADY KNOWN
-  - restating the task ("shall I print the sum?")
-  - preferences with an obvious default ("what filename?")
-  - anything you can decide yourself by reading the tasks
+  - the student's name, ID, section or program, or which files to produce
 
-Return AT MOST {max_questions}. Returning ZERO is correct and common: most labs
-are fully specified, and inventing a question to look useful wastes the
-student's time.
+Return AT MOST {max_questions}. Returning ZERO is correct and expected.
 
-For each question give:
-  key      short lowercase slug, no spaces, e.g. "dataset_source"
+For a question you truly must ask, give:
+  key      short lowercase slug, no spaces
   label    the question as shown to the student, under 60 characters
   hint     a one-line clarification, or "" if none is needed
-  reason   why the answer changes what you write, under 90 characters
+  reason   why the task cannot be written without it, under 90 characters
+  default  the value you will assume if they skip it, under 80 characters
+  blocks   the task ids that cannot be written without it, e.g. ["task2"]
 
 PART TWO -- COVER.
 
@@ -125,8 +128,18 @@ only the .ipynb on LMS" means ["ipynb"]. Follow the student's request when they
 made one. When neither says anything, ["docx", "ipynb", "zip"] is the sensible
 default for a lab that wants a written report.
 
-In `artifacts_reason`, say in ONE short line why -- the student sees it and can
-redirect you before you start. Quote the manual if it told you.
+In `artifacts_reason`, say in ONE short line why. Quote the manual if it told you.
+
+PART FOUR -- HOW EACH TASK IS PRESENTED.
+
+Pick the `style` that suits THIS lab's content:
+  classic      code, then its output, then a short explanation. Safe default.
+  walkthrough  step by step: each part of the program with its own output.
+               Good for multi-step algorithms and data pipelines.
+  findings     the written answers first, then the code that produced them.
+               Good when the tasks are mostly analysis or discussion.
+  compact      code and output with a one-line caption. Good for short
+               input/output exercises.
 
 Return ONLY a JSON object matching this schema exactly:
 
@@ -137,18 +150,16 @@ Lab task descriptions:
 {tasks}
 """
 
+# THE EXAMPLE ASKS NOTHING. It used to be a data question whose default was
+# "Generate a small sample dataset in the code" -- an exemplar gets copied, so
+# the one example the model saw was both the question not to ask and the
+# improvisation not to make.
 SCHEMA_HINT = """{
-  "questions": [
-    {
-      "key": "dataset_source",
-      "label": "Which dataset should task 3 use?",
-      "hint": "The manual says 'the dataset' but does not attach one.",
-      "reason": "Determines whether I generate data or read a file."
-    }
-  ],
+  "questions": [],
   "cover": { "layout": "rule", "tagline": "Perceptron training, no framework." },
   "artifacts": ["docx", "zip"],
-  "artifacts_reason": "The manual asks for a Word report."
+  "artifacts_reason": "The manual asks for a Word report.",
+  "style": "walkthrough"
 }"""
 
 _SLUG = re.compile(r"[^a-z0-9_]+")
@@ -159,6 +170,10 @@ class ProposedQuestion(BaseModel):
     label: str
     hint: str = ""
     reason: str = ""
+    default: str = ""
+    #: Task ids this question blocks. A question that blocks nothing is a
+    #: preference, and a preference does not stop the run.
+    blocks: list[str] = Field(default_factory=list)
 
 
 class CoverChoice(BaseModel):
@@ -171,6 +186,7 @@ class Briefing(BaseModel):
     cover: CoverChoice = Field(default_factory=CoverChoice)
     artifacts: list[str] = Field(default_factory=list)
     artifacts_reason: str = ""
+    style: str = ""
 
 
 @dataclass
@@ -184,6 +200,8 @@ class Plan:
     #: student can redirect once, before any solving money is spent.
     artifacts: list[str] = dataclass_field(default_factory=list)
     artifacts_reason: str = ""
+    #: How each task is laid out -- one of `labsagent.present.STYLES`.
+    style: str = "classic"
 
     @property
     def asked(self) -> bool:
@@ -236,11 +254,11 @@ def _known_block(facts, profile, instructions: str, data: list[str] | None = Non
     # something can -- so when the file is already in hand, asking for it again
     # is the formality this block exists to prevent.
     for name in data or []:
-        lines.append(f"  Data file already supplied and loaded: {name}")
+        lines.append(f"  Data, already arranged before any code is written: {name}")
     return "\n".join(lines) if lines else "  (nothing beyond the tasks below)"
 
 
-def _to_plan(briefing: Briefing, taken: set[str]) -> Plan:
+def _to_plan(briefing: Briefing, taken: set[str], task_ids=None) -> Plan:
     """Validate what came back. A model's answer is a proposal, not a fact.
 
     The layout is checked against the real list rather than trusted: an
@@ -249,9 +267,18 @@ def _to_plan(briefing: Briefing, taken: set[str]) -> Plan:
     problem behind a working report.
     """
     questions: list[dict[str, Any]] = []
-    for item in briefing.questions[:MAX_QUESTIONS]:
+    known_ids = set(task_ids or [])
+    for item in briefing.questions:
+        if len(questions) >= MAX_QUESTIONS:
+            break
         label = (item.label or "").strip()
         if not label:
+            continue
+        # A QUESTION MUST NAME WHAT IT BLOCKS. "Plain text or a table?" blocks
+        # nothing -- the solver can pick -- and is dropped here, whatever the
+        # prompt managed to persuade the model of.
+        blocked = [t for t in item.blocks if not known_ids or t in known_ids]
+        if not blocked:
             continue
         questions.append(
             {
@@ -259,6 +286,7 @@ def _to_plan(briefing: Briefing, taken: set[str]) -> Plan:
                 "label": label[:120],
                 "hint": (item.hint or "").strip()[:200],
                 "reason": (item.reason or "").strip()[:200],
+                "default": (item.default or "").strip()[:160],
                 "required": False,  # a guess is always allowed; see pipeline
             }
         )
@@ -266,6 +294,7 @@ def _to_plan(briefing: Briefing, taken: set[str]) -> Plan:
     layout = (briefing.cover.layout or "").strip().lower()
     tagline = (briefing.cover.tagline or "").strip()
     known = {"docx", "ipynb", "py", "md", "zip"}
+    style = (briefing.style or "").strip().lower()
     artifacts = [a.strip().lower().lstrip(".") for a in briefing.artifacts]
     return Plan(
         questions=questions,
@@ -273,6 +302,7 @@ def _to_plan(briefing: Briefing, taken: set[str]) -> Plan:
         tagline=tagline[:160],
         artifacts=[a for a in artifacts if a in known],
         artifacts_reason=(briefing.artifacts_reason or "").strip()[:160],
+        style=style if style in STYLES else "classic",
     )
 
 
@@ -305,7 +335,7 @@ def read_briefing(
         except Exception:  # noqa: BLE001 -- retried, then degraded
             continue
         if isinstance(briefing, Briefing):
-            return _to_plan(briefing, taken), _usage(handler)
+            return _to_plan(briefing, taken, [t.id for t in spec.tasks]), _usage(handler)
 
     # A run that cannot plan is still a run. The cover falls back to classic,
     # the tagline is empty, and no questions are asked -- all of which are the

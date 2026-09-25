@@ -1,9 +1,9 @@
 """Typed progress events.
 
 WHY THIS EXISTS BEFORE IT HAS TWO CONSUMERS. The core must not know whether it
-is being watched by a terminal, a web socket, a log file, or nothing. Today the
-CLI is the only consumer; in Phase 7 a browser becomes a second one. If the core
-printed directly, adding the browser would mean rewriting the core.
+is being watched by a browser, a log file, a test, or nothing. The web layer
+and the event log both consume it. If the core printed directly, every new
+consumer would mean rewriting the core.
 
 The pattern is an observer/event bus, and the rule generalises: when you can
 name a future consumer, emit events rather than side effects. The cost now is
@@ -60,6 +60,8 @@ class AttemptStarted(Event):
     task_id: str
     attempt: int
     max_attempts: int
+    #: "fast" for a basic task's thinking-off first attempt, else "standard".
+    mode: str = "standard"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -85,6 +87,10 @@ class TaskFinished(Event):
     status: str
     attempts: int
     cost_usd: float = 0.0
+    #: One plain sentence when the task stopped for want of something.
+    blocker: str = ""
+    #: One plain sentence when it passed except for a part it could not do.
+    gap: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -158,8 +164,11 @@ def console_consumer(event: Event) -> None:
     elif isinstance(event, ArtifactWritten):
         print(f"    {event.artifact}: {event.path}")
     elif isinstance(event, TaskFinished):
-        mark = "ok" if event.status == "passed" else "FAILED"
+        mark = "ok" if event.status == "passed" else ("STOPPED" if event.blocker else "FAILED")
         print(f"    -> {mark} after {event.attempts} attempt(s)  ${event.cost_usd:.6f}")
+        for label, sentence in (("needs", event.blocker), ("not done", event.gap)):
+            if sentence:
+                print(f"       {label}: {sentence}")
     elif isinstance(event, RunFinished):
         state = "ABORTED" if event.aborted else "done"
         print(

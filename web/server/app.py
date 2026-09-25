@@ -38,7 +38,7 @@ from .jobs import HEARTBEAT_S, JobRegistry
 from labsagent.data import DATA_SUFFIXES
 from labsagent.ingest.readers import ACCEPTED_SUFFIXES
 
-from .pipeline import UPLOADS_ROOT, revise_job, run_job
+from .pipeline import UPLOADS_ROOT, repackage_job, revise_job, run_job
 
 # The upload ceiling. A lab manual is tens of kilobytes; this exists to turn a
 # wrong-file-selected mistake into a fast error rather than a slow one.
@@ -46,7 +46,7 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 # Data gets its own, larger ceiling, because the two are different kinds of
 # mistake. A 30 MB "manual" is the wrong file; a 30 MB CSV is Tuesday. The real
-# cap lives in Settings, so the CLI and the server cannot disagree about it.
+# cap lives in Settings, so the eval and the server cannot disagree about it.
 MAX_DATA_BYTES = load_settings().max_dataset_bytes
 
 # At most this many data files in one run. The same number bounds the upload
@@ -79,6 +79,13 @@ class Feedback(BaseModel):
     feedback: str
 
 
+class Identity(BaseModel):
+    name: str = ""
+    cms_id: str = ""
+    section: str = ""
+    program: str = ""
+
+
 # --------------------------------------------------------------------- meta
 
 
@@ -95,8 +102,7 @@ def health() -> dict:
 
 # There is deliberately no GET /api/profile. Identity lives in the browser
 # (see `pipeline.profile_from`), so the server has nothing to remember and
-# nothing to hand back -- and, more to the point, no way to overwrite the
-# name the CLI has cached for you.
+# nothing to hand back.
 
 
 # --------------------------------------------------------------------- runs
@@ -353,6 +359,32 @@ def revise_run(job_id: str, body: Feedback) -> dict:
         daemon=True,
     ).start()
     return {"job_id": job.id, "revising": True}
+
+
+@app.post("/api/runs/{job_id}/identity", status_code=202)
+def set_identity(job_id: str, body: Identity) -> dict:
+    """Put the student's details on the files -- a rebuild, no model call.
+
+    Identity used to be a REQUIRED question before any code was written, though
+    it only ever reached the cover and the filenames. It is now offered after
+    the files exist, and this route rebuilds them with it.
+    """
+    job = registry.get(job_id)
+    if job is None:
+        raise HTTPException(404, "no such job")
+    if not job.is_terminal():
+        raise HTTPException(409, "this run is still working")
+    values = {k: v.strip() for k, v in body.model_dump().items() if v and v.strip()}
+    if not values:
+        raise HTTPException(422, "nothing to add")
+    job.reopen()
+    threading.Thread(
+        target=repackage_job,
+        args=(job, values),
+        name=f"labsagent-identity-{job.id}",
+        daemon=True,
+    ).start()
+    return {"job_id": job.id, "repackaging": True}
 
 
 @app.get("/api/runs/{job_id}/download/{key}")

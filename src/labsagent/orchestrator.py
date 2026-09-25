@@ -32,13 +32,14 @@ Four decisions are encoded here, each deliberate:
 
 5. DESCRIBING IS NOT DOING. The report prose is written by a separate call that
    never sees the debugging -- see agent/explainer.py. It is injected as a
-   callable rather than built here, so the CLI, the tests and the web layer each
+   callable rather than built here, so the tests, the eval and the web layer each
    decide independently whether to pay for it. With no explainer wired in, the
    solver's own notes remain the fallback and nothing changes.
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -47,8 +48,8 @@ from pathlib import Path, PurePosixPath
 from langgraph.errors import GraphRecursionError
 
 from labsagent import events as ev
-from labsagent.agent.build import build_solver, solver_config
-from labsagent.agent.tools import RunRecord
+from labsagent.agent.build import build_solver, fast_variant, solver_config
+from labsagent.agent.tools import RunRecord, missing_module
 from labsagent.budget import BudgetExceeded, LiveUsage
 from labsagent.agent.explainer import Explainer
 from labsagent.capture.base import ScreenshotBackend
@@ -61,7 +62,8 @@ from labsagent.data import (
 )
 from labsagent.config import Settings
 from labsagent.errors import SandboxError
-from labsagent.models import LabSpec, RunManifest, Task, TaskOutcome
+from labsagent.models import LabSpec, RunManifest, Task, TaskOutcome, Transcript
+from labsagent.runner import run_sections
 from labsagent.runner import run_solution as _run_file
 from labsagent.runstore import RunStore, pending_tasks
 from labsagent.sandbox.local import LocalSandbox
@@ -246,8 +248,19 @@ def build_task_prompt(
     # has been emptied, which is surprising unless it is said.
     if previous_error:
         parts.append(
-            f"\nYour previous attempt failed with: {previous_error[:300]}\n"
+            f"\nYour previous attempt failed with: {previous_error}\n"
             "The workspace has been reset, so start from a clean file."
+        )
+
+    # THE WRITTEN HALF HAS ITS OWN CHANNEL. Without this the solver's only way
+    # to "explain why" was print(), and the analysis became a terminal
+    # screenshot. Listed so it prints the evidence the writer will quote.
+    questions = list(task.written_questions or [])
+    if questions:
+        parts.append(
+            "\nAnswered in writing separately, from what your program prints -- "
+            "do not print these answers, print the numbers they rely on: "
+            + "; ".join(questions)
         )
 
     parts.append(f"\nWrite your solution to a file named {task.id}.py")
@@ -305,6 +318,116 @@ def _produced_by(
             }
         )
     return made
+
+
+def _sections(sandbox, task: Task, chosen: RunRecord, settings: Settings, store: RunStore):
+    """Real per-section output for a passed task, and the transcript to ship.
+
+    One extra local run, no model tokens, and never able to fail the task: any
+    problem returns no sections and the chosen run as it was. When the section
+    run's output differs from the chosen run (an unseeded random number, say),
+    the section run wins, so the Word screenshot and the notebook cells can
+    never show two different results for the same code.
+    """
+    try:
+        found = run_sections(
+            sandbox, chosen.entry_file, list(task.sample_inputs or []), settings.timeout_s
+        )
+    except Exception:  # noqa: BLE001 -- a decoration
+        found = None
+    if not found:
+        return [], chosen.transcript
+    sections: list[dict] = []
+    for part in found:
+        figures = []
+        for name in part["figures"]:
+            dest = store.shots_dir / f"{task.id}_{Path(name).name}"
+            try:
+                dest.write_bytes((Path(sandbox.workdir) / name).read_bytes())
+            except OSError:
+                continue
+            figures.append(dest.as_posix())
+        sections.append(
+            {
+                "title": part["title"],
+                "code": part["code"],
+                "output": "\n".join(part["lines"]).strip(),
+                "figures": figures,
+            }
+        )
+    combined = [line for part in found for line in part["lines"]]
+    transcript = chosen.transcript
+    if transcript is None or combined != list(transcript.lines):
+        transcript = Transcript(
+            command=f"python {normalize_entry(chosen.entry_file)}",
+            lines=combined,
+        )
+    return sections, transcript
+
+
+#: A stop sentence is shown to a student in the chat, the run panel and the
+#: report. Long enough for "what is missing and what to do", no longer.
+MAX_STOP_SENTENCE = 240
+
+
+def error_tail(text: str | None, limit: int = 400) -> str:
+    """The END of an error, where the exception actually is.
+
+    A retry used to be told the first 300 characters of the traceback, which is
+    "Traceback (most recent call last): File ..." and stops before the one line
+    that says what went wrong -- so the retry rediscovered it by running again.
+    """
+    lines = [line.rstrip() for line in (text or "").strip().splitlines() if line.strip()]
+    kept: list[str] = []
+    size = 0
+    for line in reversed(lines):
+        if kept and size + len(line) + 1 > limit:
+            break
+        kept.insert(0, line)
+        size += len(line) + 1
+    return "\n".join(kept)[-limit:]
+
+
+def plain_sentence(text: str | None, limit: int = MAX_STOP_SENTENCE) -> str:
+    """What the agent said, cleaned for a student: no code, no traceback."""
+    lines = [
+        line.strip()
+        for line in (text or "").replace("`", "").splitlines()
+        if line.strip() and not line.strip().startswith(("Traceback", 'File "'))
+    ]
+    text = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    return cut[: end + 1] if end > 60 else cut.rstrip() + "..."
+
+
+def blocker_sentence(recorder) -> str:
+    """The agent's own sentence, or one built from what the runs showed.
+
+    A template only for the case the harness can name for itself -- a module
+    that would not import. Anything else gets an honest general sentence
+    rather than a guess dressed as a diagnosis.
+    """
+    said = plain_sentence(recorder.missing) or plain_sentence(recorder.notes)
+    if said:
+        return said
+    for run in reversed(recorder.runs):
+        absent = missing_module(run.stderr, recorder_workdir(recorder))
+        if absent:
+            return (
+                f"This task needs the {absent} library, which isn't installed here, "
+                "so I stopped instead of writing a stand-in for it."
+            )
+    return (
+        "This task needs something this setup doesn't have, so I stopped instead "
+        "of working around it."
+    )
+
+
+def recorder_workdir(recorder):
+    return getattr(recorder, "workdir", ".")
 
 
 def solve_task(
@@ -371,12 +494,31 @@ def solve_task(
     infra_retries = 0
     attempt = 0
     budget_stop: str | None = None
+    #: Every attempt's recorder, so the run_solution cycles are counted across
+    #: the whole task -- the number a person watching the run actually sees.
+    recorders = []
 
-    while attempt < settings.max_retries_per_task:
+    # A PURE THEORY QUESTION HAS NOTHING TO RUN. Sending it to the solver is
+    # how a program that prints an essay gets written; the writer answers it.
+    if not task.needs_code:
+        outcome = TaskOutcome(task=task, status="passed", error=None)
+
+    while task.needs_code and attempt < settings.max_retries_per_task:
         attempt += 1
+        # EFFORT SCALES WITH THE TASK. A basic task's first attempt runs with
+        # the model's thinking step off and a tight turn cap: reading two
+        # numbers and printing their sum does not need deliberation, and paying
+        # for it on every call is what made trivial tasks slow. If the fast
+        # attempt fails, the retry escalates to the full setting -- so a task
+        # ingest misjudged costs one cheap attempt, not a wrong answer.
+        fast = task.effort == "basic" and attempt == 1
+        turns = settings.basic_max_turns if fast else settings.max_turns_per_attempt
         emitter.emit(
             ev.AttemptStarted(
-                task_id=task.id, attempt=attempt, max_attempts=settings.max_retries_per_task
+                task_id=task.id,
+                attempt=attempt,
+                max_attempts=settings.max_retries_per_task,
+                mode="fast" if fast else "standard",
             )
         )
 
@@ -402,7 +544,11 @@ def solve_task(
         # reset, so its workspace view should be too.
         with LocalSandbox(workdir=workspace, keep=True) as sandbox:
             result = None
-            agent, recorder = build_solver(sandbox, settings, model=model)
+            agent, recorder = build_solver(
+                sandbox, settings, model=fast_variant(model, settings) if fast else model
+            )
+            recorder.workdir = sandbox.workdir
+            recorders.append(recorder)
             # Usage is accumulated BY THIS, as it is billed, rather than summed
             # from the returned messages afterwards -- an aborted attempt never
             # returns any, and it is the aborted attempt whose cost matters.
@@ -411,6 +557,9 @@ def solve_task(
                 run_usage=usage,
                 task_cap=settings.max_cost_per_task_usd,
                 run_cap=settings.max_cost_per_run_usd,
+                # The TASK's start, not this attempt's: the ceiling was meant
+                # to bound the task and was quietly bounding each attempt.
+                task_start=before,
             )
             try:
                 result = agent.invoke(
@@ -428,13 +577,13 @@ def solve_task(
                             }
                         ]
                     },
-                    config=solver_config(settings, callbacks=[live]),
+                    config=solver_config(settings, callbacks=[live], max_turns=turns),
                 )
             except GraphRecursionError:
                 # The attempt would not stop on its own. It still gets its
                 # artifacts collected below: a task that produced a working
                 # program and then kept fiddling has still produced one.
-                stopped = f"stopped: turn limit ({settings.max_turns_per_attempt} turns) reached"
+                stopped = f"stopped: turn limit ({turns} turns) reached"
                 emitter.emit(
                     ev.AttemptFailed(task_id=task.id, attempt=attempt, error=stopped)
                 )
@@ -484,6 +633,24 @@ def solve_task(
             # simply forgets its final record_task_result call has not lied
             # about anything, and demoting those to failures would trade a rare
             # false pass for a common false fail.
+            # A DECLARED BLOCKER ENDS THE TASK. Not harvested -- whatever ran was
+            # at best part of the task -- and not retried: a fresh attempt meets
+            # the same missing library with less context, which is exactly how
+            # an honest stop used to turn into a hand-written stand-in on
+            # attempt two.
+            if recorder.status == "blocked":
+                blocker = blocker_sentence(recorder)
+                emitter.emit(
+                    ev.AttemptFailed(
+                        task_id=task.id, attempt=attempt, error=f"blocked: {blocker}"[:300]
+                    )
+                )
+                outcome = TaskOutcome(
+                    task=task, status="failed", error=blocker, blocker=blocker
+                )
+                attempt_errors.append(f"blocked: {blocker}")
+                break
+
             chosen = choose_run(
                 recorder.runs,
                 task.id,
@@ -532,8 +699,9 @@ def solve_task(
                         )
                     )
 
+                sections, transcript = _sections(sandbox, task, chosen, settings, store)
                 shots = screenshots.render(
-                    chosen.transcript, store.shots_dir / f"{task.id}_output.png"
+                    transcript, store.shots_dir / f"{task.id}_output.png"
                 )
                 for shot in shots:
                     emitter.emit(
@@ -549,10 +717,14 @@ def solve_task(
                     code_text=code_text,
                     screenshot_paths=list(shots),
                     figure_paths=figure_paths,
-                    transcript=chosen.transcript,
+                    transcript=transcript,
+                    sections=sections,
                     explanation=recorder.notes or None,
                     attempts=attempt,
                     error=None,
+                    # Done except one part, said plainly -- the honest version
+                    # of a stand-in that claimed the whole task.
+                    gap=plain_sentence(recorder.missing) or None,
                     produced=_produced_by(
                         Path(sandbox.workdir),
                         started_with,
@@ -586,15 +758,21 @@ def solve_task(
             # SAY WHICH FAILURE THIS WAS. "produced no output" is right when
             # nothing ran; it is misleading when plenty ran and none of it was
             # the task -- which is the case this loop now refuses to ship.
-            if recorder.runs and not any(r.ok for r in recorder.runs):
-                error = (recorder.last_stderr or "produced no output").strip()
+            said = plain_sentence(recorder.notes) if recorder.status == "failed" else ""
+            if said:
+                # IT SAID WHY. That used to be dropped and replaced with "no
+                # successful run of task1.py", which told the retry nothing.
+                tail = error_tail(recorder.last_stderr, 240)
+                error = f"{said} (last error: {tail})" if tail else said
+            elif recorder.runs and not any(r.ok for r in recorder.runs):
+                error = error_tail(recorder.last_stderr) or "produced no output"
             elif recorder.runs:
                 error = (
                     f"no successful run of {task.id}.py "
                     f"(ran: {', '.join(sorted({r.entry_file for r in recorder.runs}))})"
                 )
             else:
-                error = (recorder.last_stderr or "produced no output").strip()
+                error = error_tail(recorder.last_stderr) or "produced no output"
             emitter.emit(
                 ev.AttemptFailed(task_id=task.id, attempt=attempt, error=error[:300])
             )
@@ -626,8 +804,15 @@ def solve_task(
                 )
             )
             written = None
-        if written:
+        if isinstance(written, str) and written:
             outcome.explanation = written
+        elif written is not None and not isinstance(written, str):
+            outcome.explanation = written.overview or outcome.explanation
+            outcome.answers = list(written.answers)
+
+    if not task.needs_code and not (outcome.answers or outcome.explanation):
+        outcome.status = "failed"
+        outcome.error = "no written answer was produced"
 
     outcome.attempts = attempt
     cost = usage.total.cost_usd - before
@@ -641,9 +826,15 @@ def solve_task(
     }
     outcome.attempt_errors = attempt_errors
     outcome.stopped_reason = budget_stop or outcome.stopped_reason
+    outcome.runs = sum(r.attempts for r in recorders)
     emitter.emit(
         ev.TaskFinished(
-            task_id=task.id, status=outcome.status, attempts=attempt, cost_usd=cost
+            task_id=task.id,
+            status=outcome.status,
+            attempts=attempt,
+            cost_usd=cost,
+            blocker=outcome.blocker or "",
+            gap=outcome.gap or "",
         )
     )
     return SolveResult(outcome=outcome, cost_usd=cost, stopped_reason=budget_stop)
@@ -700,6 +891,29 @@ def run_lab(
                 task_id=task.id, title=task.title, index=position, total=len(todo)
             )
         )
+
+        # BUILT ON A BLOCKED TASK, SO NOT STARTED. Its prerequisite has no code
+        # to hand forward, and solving it anyway is how a later task ends up
+        # re-implementing the part that was missing.
+        stopped_refs = sorted(
+            ref for ref in referenced_task_ids(task) if done.get(ref) and done[ref].blocker
+        )
+        if stopped_refs:
+            blocker = (
+                f"This task builds on {', '.join(stopped_refs)}, which I had to stop, "
+                "so I did not start it."
+            )
+            outcome = TaskOutcome(task=task, status="failed", error=blocker, blocker=blocker)
+            emitter.emit(
+                ev.TaskFinished(
+                    task_id=task.id, status="failed", attempts=0, blocker=blocker
+                )
+            )
+            manifest.outcomes.append(outcome)
+            done[task.id] = outcome
+            store.save(manifest)
+            continue
+
         result = solve_task(
             task,
             store,

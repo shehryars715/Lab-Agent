@@ -89,9 +89,8 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
         Quick check before I write any code
       </h2>
       <p className="brief-intro">
-        {questions.some((q) => q.reason && q.key !== 'artifacts')
-          ? 'Your manual leaves these open, and each one changes the program I’d write.'
-          : 'Nothing’s unclear in the tasks — just confirm what you want back.'}
+        Your manual leaves this open, and it changes the program I’d write. Answer if
+        you like — otherwise I’ll use the default shown.
       </p>
 
       {entry.known?.length > 0 && (
@@ -139,10 +138,14 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
 
       <div className="brief-actions">
         <button className="btn btn-primary btn-lg" type="submit" disabled={submitting}>
-          {submitting ? 'Sending…' : 'Looks good — go'}
+          {submitting ? 'Sending…' : 'Go'}
+        </button>
+        {/* Every question is optional: skipping means "use your default". */}
+        <button type="button" className="btn btn-quiet" disabled={submitting} onClick={() => onSubmit({})}>
+          Skip — use your judgment
         </button>
         <span className="brief-timeout">
-          No rush — I’ll wait {Math.round((entry.timeoutS ?? 600) / 60)} minutes, then carry on with what I have.
+          I’ll go with my defaults in {Math.round((entry.timeoutS ?? 180) / 60)} minutes if you don’t answer.
         </span>
       </div>
     </form>
@@ -171,6 +174,7 @@ function TextField({ id, errorId, question: q, value, invalid, autoFocus, onChan
         onBlur={onBlur}
       />
       {q.hint && !invalid && <p className="field-hint">{q.hint}</p>}
+      {q.default && <p className="field-hint">If you skip: {q.default}</p>}
       {invalid && (
         <p className="field-err" id={errorId}>
           I need this one before I carry on.

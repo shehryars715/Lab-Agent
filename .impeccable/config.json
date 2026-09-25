@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "clipped-overflow-container",
+        "value": "*",
+        "files": [
+          "brag-output/composition/index.html"
+        ],
+        "createdAt": "2026-09-22T20:16:56.146Z",
+        "reason": "Video composition, not a web page: the 1920x1080 frame must clip (#root), the accent wash is deliberately bled to the frame edge (#bg > #glow), and the progress segment fill is deliberately masked to its pill (.seg > i). No tooltips, menus or popovers exist in a rendered video."
+      }
+    ]
+  }
+}

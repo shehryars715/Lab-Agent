@@ -4,22 +4,11 @@ NOTHING IN `labsagent` IS MODIFIED, SUBCLASSED, OR MONKEY-PATCHED. Every step
 below is a call into the package's public API. That is not a stylistic
 preference -- it is what the core was built for. `events.py` says so directly:
 
-    "The core must not know whether it is being watched by a terminal, a web
-     socket, a log file, or nothing. Today the CLI is the only consumer; in
-     Phase 7 a browser becomes a second one."
+    "The core must not know whether it is being watched by a browser, a log
+     file, a test, or nothing."
 
-So this module is that second consumer, and the seam it plugs into was cut
-before it existed. Compare with `examples/solve_lab.py`: the sequence of calls
-is nearly identical, and the differences are all additions (a pause, an event
-sink, extra instructions) rather than edits.
-
-THE ONE PLACE THE ORDER CHANGES, AND WHY. `solve_lab.py` resolves the student
-profile BEFORE anything else -- "ask before spending money, not after". Here it
-runs after solving and before annotating, which is what the brief asked for:
-ask partway through, once the work is done. The cost of getting it wrong is
-bounded and small (a lab is ~$0.0016, and by that point it is already spent),
-and the benefit is real: by the time we ask, the tasks have been extracted, so
-the dialog can say "Found 3 tasks" instead of asking blind.
+So this module is that consumer, and the seam it plugs into was cut
+before it existed.
 """
 
 from __future__ import annotations
@@ -40,7 +29,7 @@ from labsagent.ingest.cover import extract_cover_facts
 from labsagent.ingest.readers import read_document, read_pasted
 from labsagent.emit import DEFAULT_ARTIFACTS, REGISTRY, EmitContext, emit_all
 from labsagent.ingest.labspec import extract_labspec
-from labsagent.intent import Intent, detect_formats, scope
+from labsagent.intent import Intent, scope
 from labsagent.models import LabSpec, TaskOutcome
 from labsagent.orchestrator import run_lab
 from labsagent.profile import ASK_ORDER, StudentProfile
@@ -50,36 +39,20 @@ from labsagent.usage import RunUsage
 
 from .briefing import read_briefing
 from .jobs import Job
-from .revise import read_revision
+from .revise import answer_question, read_revision
 from .trace import tracing_tools
 
 # How long the browser gets to answer before the run continues without it.
 # Ten minutes is chosen against the alternative failure: a tab closed by
 # accident should not hold a worker thread until the process exits.
-ASK_TIMEOUT_S = 600.0
+ASK_TIMEOUT_S = 180.0
 
 RUNS_ROOT = PROJECT_ROOT / "runs"
 UPLOADS_ROOT = RUNS_ROOT / "_web_uploads"
 
 
-# Steering the agent to narrate, without touching `agent/prompts.py`.
-#
-# WHY THIS IS HERE AND NOT IN THE SYSTEM PROMPT. `prompts.py` documents
-# `SOLVER_PROMPT` as byte-stable on purpose: it is resent on every turn of
-# every task, so a changed prefix converts cache HITS into cache MISSES at 50x
-# the price. Editing it would also change the behaviour of the CLI and the
-# tests, which have no chat to narrate into. The task statement is per-task and
-# already uncached, so a web-only instruction belongs here.
-#
-# Kept terse and bounded on purpose. Every narrated sentence is output tokens
-# billed at 2x the cache-miss input rate, and it accumulates in the agent's own
-# context for the rest of that task.
-NARRATION = (
-    "\n\nAs you work: before your first tool call, say in ONE short sentence what you "
-    "are about to do and why. After a failed run, say in one short sentence what went "
-    "wrong. Do not narrate every step, do not restate the task, and do not summarise at "
-    "the end -- a separate step does that."
-)
+# The solver no longer narrates into the chat; see apply_instructions.
+NARRATION = ""  # retired 2026-09-24 -- see apply_instructions
 
 
 #: Answer keys that describe the student, not the work. Everything else the
@@ -108,6 +81,20 @@ def answered_notes(questions: list[dict], answers: dict[str, str]) -> str:
         for key, value in answers.items()
         if key not in RESERVED_KEYS and str(value).strip()
     ]
+    # A SKIPPED QUESTION STILL HAS AN ANSWER: the default the card promised.
+    # Passing it on is what makes "if you skip, I'll ..." true.
+    for q in questions:
+        key, default = q.get("key"), str(q.get("default") or "").strip()
+        if key in RESERVED_KEYS or not default or str(answers.get(key) or "").strip():
+            continue
+        # NEUTRAL, NOT "THESE WIN". A skipped default arrived in the solver's
+        # prompt under "where they conflict with the task text, these win" --
+        # which is how "add a manual fallback if the import fails" became a
+        # requirement nobody asked for, and a 323-line solution.
+        lines.append(
+            f"- {labels.get(key, key)}: not answered; assume {default}, "
+            "but only where the task leaves this open"
+        )
     return "You asked, and the student answered:" + chr(10) + chr(10).join(lines) if lines else ""
 
 
@@ -173,9 +160,15 @@ def apply_instructions(spec: LabSpec, notes: str = "") -> LabSpec:
     the question is frozen at the moment it is first asked.
     """
     extra = (notes or "").strip()
-    note = NARRATION
+    # NO NARRATION ANY MORE. The solver used to be told to narrate before its
+    # first tool call and after every failure, and those sentences streamed
+    # into the chat -- written in the solver's working register ("KeyError on
+    # 'species', fixing"), several per task. Progress is now said by the
+    # harness, in plain words, from events. It also stops paying output tokens
+    # for sentences the solver then carried in its own context.
+    note = ""
     if extra:
-        note += (
+        note = (
             "\n\nAdditional instructions from the student. Follow these; where they "
             f"conflict with the task text above, these win:\n{extra}"
         )
@@ -187,6 +180,54 @@ def apply_instructions(spec: LabSpec, notes: str = "") -> LabSpec:
     # `statement` is what the student hands in; `instruction` is what steers the
     # solver. Both still ride in the manifest, so a resume is unchanged.
     return replace(spec, tasks=[replace(t, instruction=note) for t in spec.tasks])
+
+
+def data_question(intent: Intent, uploads) -> dict | None:
+    """The one question worth stopping the run for, or None.
+
+    DECIDED BY CODE, NOT BY THE MODEL. The briefing model used to own "which
+    dataset?", and asked it about data that was already on its way while
+    missing the case that mattered: the manual names a dataset, links nothing,
+    and nothing was attached. That case is a fact the pipeline can check --
+    ingest says what the manual requires, the harvester says what it links --
+    so it is checked here, and it is the only data question there is.
+    """
+    if uploads or intent.datasets or not intent.data_unlinked:
+        return None
+    wanted = " and ".join(intent.data_unlinked[:2])
+    return {
+        "key": "datasets",  # reserved: `_acquire` reads it as the references
+        "label": "Where do I get the dataset?",
+        "reason": (
+            f"The manual asks for {wanted} but doesn't include a link, and the "
+            "tasks can't be done without it."
+        ),
+        "hint": "Paste the Kaggle link (or owner/name), or a https:// link straight to the file.",
+        "value": "",
+        "default": "",
+        "required": True,
+    }
+
+
+def closing_needs(outcomes) -> str:
+    """What is left to finish, in the words each task stopped with. "" if nothing.
+
+    FINISH THE REST, THEN ASK (decided 2026-09-25). A task that stopped for want
+    of something did not hold up the others; this is where the student hears
+    about it, once, with every blocker in one place.
+    """
+    items = [
+        (o.task.title or o.task.id, o.blocker or o.gap)
+        for o in outcomes
+        if getattr(o, "blocker", None) or getattr(o, "gap", None)
+    ]
+    if not items:
+        return ""
+    lines = [f"- {title}: {sentence}" for title, sentence in items]
+    return (
+        "To finish, I need:" + chr(10) + chr(10).join(lines) + chr(10)
+        + "Reply here once you have it, or tell me to do that part another way."
+    )
 
 
 def _looks_like_a_file(ref: str) -> bool:
@@ -332,7 +373,7 @@ def _acquire(
         job.publish(
             {
                 "type": "narration",
-                "text": f"Data ready: {names}. Every task gets a copy in its workspace.",
+                "text": f"Got the data: {names}.",
             }
         )
 
@@ -442,23 +483,8 @@ def profile_from(values: dict[str, str]) -> StudentProfile:
 
     THE BROWSER IS THE SOURCE OF TRUTH, AND THE SERVER IS STATELESS ABOUT IT.
 
-    The obvious implementation is `resolve_profile()`, which is the CLI's
-    mechanism: it reads `labsagent.toml`, asks about anything missing, and
-    writes the answers back. Using it here looked like free reuse -- and it did
-    work, until a browser form silently rewrote the author's own name, cached
-    from the CLI, because that is exactly what "asked once, remembered" does.
-
-    So this does not call it. A web form is a less trusted input than a
-    terminal on the owner's machine, and the two should not share a config file
-    by accident. `PLAN.md` §7 already reached this conclusion -- identity in
-    browser `localStorage` -- and it is the right one.
-
-    The trade is real and worth naming: the CLI and the web can now disagree
-    about who you are. That is the price of neither being able to overwrite the
-    other, and it is the cheaper failure of the two.
-
-    `resolve_profile` is untouched and remains the CLI's path. This is a second
-    implementation of a different policy, not a replacement.
+    Identity lives in browser `localStorage` and arrives with each request, so
+    the server has nothing to remember and nothing to overwrite.
     """
     return StudentProfile(
         name=(values.get("name") or "").strip(),
@@ -486,40 +512,10 @@ def build_questions(
     how "I only ask for what I cannot derive" becomes visible instead of
     looking like the tool forgot to ask.
     """
+    # Identity is no longer asked here -- it only ever reached the cover and
+    # the filenames, both of which are built at packaging. `seed` is kept in
+    # the signature so callers are unchanged.
     questions: list[dict[str, Any]] = []
-
-    def have(key: str) -> bool:
-        return bool((seed.get(key) or "").strip())
-
-    for key, label in ASK_ORDER:
-        if have(key):
-            continue
-        questions.append(
-            {"key": key, "label": label, "value": "", "required": True, "hint": ""}
-        )
-
-    # Optional, and only when neither the browser nor the manual knows.
-    if not have("section") and not getattr(facts, "section", None):
-        questions.append(
-            {
-                "key": "section",
-                "label": "Section",
-                "value": "",
-                "required": False,
-                "hint": "Not in the manual either — the cover omits it if you skip.",
-            }
-        )
-    if not have("program"):
-        questions.append(
-            {
-                "key": "program",
-                "label": "Program / degree",
-                "value": "",
-                "required": False,
-                "hint": "",
-            }
-        )
-
     questions.extend(proposed)
 
     known = [
@@ -568,9 +564,9 @@ def _emit(
     """Produce whatever was asked for, and register each file as it lands.
 
     Shared by the first run and by every revision, so there is no second
-    implementation to drift -- which is exactly what went wrong before: this
-    sequence also existed in `examples/solve_lab.py`, and the two had already
-    diverged on which artifacts they honoured and which events they emitted.
+    implementation to drift -- which is exactly what went wrong before: a
+    second copy of this sequence had diverged on which artifacts it honoured
+    and which events it emitted.
 
     WHY EACH EMITTER IS ISOLATED. This step used to be all-or-nothing. A bad
     anchor raised `IndexError` inside the DOCX writer, the catch-all in
@@ -612,6 +608,8 @@ def _emit(
         ),
         manual_path=context.manual_path,
         anchors=context.anchors,
+        style=getattr(context.plan, "style", "classic") or "classic",
+        tagline=getattr(context.plan, "tagline", "") or "",
     )
 
     failed: list[tuple[str, str]] = []
@@ -757,84 +755,66 @@ def run_job(
             seed_profile,
             instructions,
             build_model(settings, phase="ingest"),
-            data=[Path(d).name for d in (dataset_paths or [])],
+            # THE WHOLE DATA PLAN, not just the uploads. Told only about files
+            # already attached, it asked "where should the Superstore dataset
+            # come from?" about a Kaggle link that was about to be downloaded.
+            data=[Path(d).name for d in (dataset_paths or [])] + list(intent.datasets),
         )
         usage.phase("briefing").merge(brief_usage)
 
+        asked_for_data = data_question(intent, dataset_paths or [])
         job.publish({"type": "plan", "question_count": len(plan.questions)})
-        job.publish(
-            {
-                "type": "narration",
-                "text": (
-                    f"Read {len(spec.tasks)} task{'s' if len(spec.tasks) != 1 else ''}. "
-                    + (
-                        f"{len(plan.questions)} thing"
-                        f"{'s' if len(plan.questions) != 1 else ''} I can't decide myself — "
-                        "asking before I start, so the answers can shape the code."
-                        if plan.questions
-                        else "Everything I need is in the manual, so I'll start now."
-                    )
-                ),
-            }
-        )
-
-        questions, known = build_questions(profile_seed, facts, plan.questions)
-
-        # WHAT DATA I WILL USE, in the pause that already exists. Shown only
-        # when there is something concrete to confirm -- files you attached, or
-        # a reference the manual named. A lab that needs no data must not be
-        # asked about data, which is the same discipline `build_questions`
-        # applies to identity: ask for what cannot be derived, and nothing else.
-        attached = [Path(d).name for d in (dataset_paths or [])]
-        proposed_data = attached + [
-            r for r in intent.datasets if r not in attached
-        ]
-        if proposed_data:
-            questions.append(
-                {
-                    "key": "datasets",
-                    "label": "Data to use",
-                    "value": ", ".join(proposed_data),
-                    "required": False,
-                    "hint": (
-                        "A file you attached, a https:// link, or a Kaggle dataset "
-                        "like owner/name. Clear this and I will pick a suitable "
-                        "built-in dataset instead."
-                    ),
-                }
+        n = len(spec.tasks)
+        if asked_for_data:
+            follow = (
+                " The manual asks for " + " and ".join(intent.data_unlinked[:2])
+                + " but doesn't include a link. Paste it below and I'll download it."
             )
-
-        # WHAT I WILL PRODUCE, offered as one more field in the pause that
-        # already exists rather than as a new control. Decision 3: the agent
-        # proposes, you confirm or redirect, once, before anything is spent.
-        # An explicit request in the chat wins over the agent's proposal.
-        proposed = list(intent.artifacts or plan.artifacts or DEFAULT_ARTIFACTS)
-        questions.append(
-            {
-                "key": "artifacts",
-                "label": "Files to produce",
-                "value": ", ".join(proposed),
-                "required": False,
-                "hint": plan.artifacts_reason
-                or "Any of: docx, ipynb, py, md, zip. Edit if you want something else.",
-            }
+        elif plan.questions:
+            follow = " One quick question first — skip it if you like."
+        else:
+            follow = ""
+        job.publish(
+            {"type": "narration", "text": f"Found {n} task{'s' if n != 1 else ''}." + follow}
         )
+
+        # ONLY GENUINE QUESTIONS PAUSE THE RUN (2026-09-24). This used to add
+        # name and CMS ID as REQUIRED fields, a data confirmation, and an
+        # always-present "Files to produce" field -- so every run stopped for up
+        # to ten minutes even when the agent had nothing to ask. None of those
+        # change the code: identity is asked at packaging, formats are resolved
+        # from the request and can be changed afterwards for free, and data is
+        # fetched as named and asked about only if none of it arrives.
+        questions, known = build_questions(profile_seed, facts, plan.questions)
+        if asked_for_data:
+            questions = [asked_for_data, *questions]
+
+        proposed = list(intent.artifacts or plan.artifacts or DEFAULT_ARTIFACTS)
         job.publish(
             {"type": "questions_ready", "known": known, "proposed_artifacts": proposed}
         )
         answers = job.ask(questions, timeout_s=ASK_TIMEOUT_S) if questions else {}
-        profile = profile_from({**profile_seed, **answers})
+        profile = profile_from(profile_seed)
+
+        # NO LINK, NO ANSWER, NO RUN. Solving against invented data is the
+        # improvisation this whole pass exists to stop, so a skipped data
+        # question ends the run before any code is written -- and says why.
+        if asked_for_data and not str(answers.get("datasets") or "").strip():
+            job.finish(
+                error=(
+                    "I can't do this lab without "
+                    + " and ".join(intent.data_unlinked[:2])
+                    + ". Paste its Kaggle link, or attach the file, and send the lab again."
+                )
+            )
+            return
 
         # The agent's own answers fold into the intent, and the intent reaches
         # the solver. The pause was moved before the solve so replies could
         # shape the code; this is the wire that finally makes that true.
         intent = intent.with_notes(answered_notes(questions, answers))
 
-        chosen = [
-            a.strip().lower().lstrip(".")
-            for a in str(answers.get("artifacts", "")).replace(",", " ").split()
-        ]
-        intent = replace(intent, artifacts=[a for a in chosen if a in REGISTRY] or proposed)
+        intent = replace(intent, artifacts=[a for a in proposed if a in REGISTRY])
 
         # ONE application, not two. This ran at ingest AND again here, on the
         # accumulating spec, so every task statement carried the narration
@@ -947,6 +927,9 @@ def run_job(
         )
 
         _emit(job, job.context, manifest.outcomes, usage)
+        needs = closing_needs(manifest.outcomes)
+        if needs:
+            job.publish({"type": "narration", "text": needs})
 
         recorder_events = recorder.events
         ev.write_events_log(store, recorder_events)
@@ -960,6 +943,7 @@ def run_job(
                 "cost_usd": usage.total.cost_usd,
                 "run_id": store.run_id,
                 "lab_number": spec.lab_number,
+                "blocked": sum(1 for o in manifest.outcomes if o.blocker),
                 "identity_saved": bool(answers),
             }
         )
@@ -971,17 +955,92 @@ def run_job(
         job.finish(error=f"{type(exc).__name__}: {exc}"[:500])
 
 
+_CHANGES = "\n\nChanges the student asked for, oldest first (the latest wins):\n"
+_SEED = "\n\nThis is a revision."
+MAX_SEED_CODE = 6000
+
+
+def revise_instruction(prior: str, change: str, code: str) -> str:
+    """A task's solver instruction after one more change request.
+
+    ACCUMULATES. This used to be rebuilt from the ORIGINAL spec every time, so a
+    second follow-up silently dropped the first one's change. Earlier changes are
+    kept as a list; only the seed (the earlier code) is replaced.
+
+    SEEDED WITH THE EARLIER CODE, so a re-solve is an edit, not a rewrite from
+    zero. "Use a while loop in task 1" should cost a write and a run, not the
+    whole plan-write-debug loop again.
+    """
+    base = (prior or "").split(_SEED)[0]
+    changes: list[str] = []
+    if _CHANGES in base:
+        base, listed = base.split(_CHANGES, 1)
+        changes = [line[2:] for line in listed.splitlines() if line.startswith("- ")]
+    change = (change or "").strip()
+    if change and change not in changes:
+        changes.append(change)
+    out = base + (_CHANGES + "\n".join(f"- {c}" for c in changes) if changes else "")
+    if code.strip():
+        out += (
+            _SEED
+            + " Edit your earlier solution below rather than starting over, and keep"
+            " what already works:\n```python\n"
+            + code[:MAX_SEED_CODE].rstrip()
+            + "\n```"
+        )
+    return out
+
+
+def _record_followup(manifest, feedback: str, followup, usage: RunUsage, prior_cost: float):
+    """Add this follow-up to the run's record instead of overwriting it."""
+    manifest.followups.append(
+        {
+            "feedback": feedback[:500],
+            "kind": followup.kind,
+            "resolved": list(followup.resolve_ids),
+            "rewritten": list(followup.rewrite_ids),
+            "artifacts": list(followup.artifacts),
+            "style": followup.style,
+            "usage": usage.total.as_dict(),
+            "cost_usd": usage.total.cost_usd,
+        }
+    )
+    manifest.cost_usd = prior_cost + usage.total.cost_usd
+
+
+def _rewrite(context: RunContext, outcomes, followup, usage: RunUsage) -> None:
+    """Re-run ONLY the writer for these tasks. The code and output are untouched."""
+    explainer = build_explainer(context.settings, usage)
+    note = followup.rewrite_instruction
+    for outcome in outcomes:
+        if outcome.task.id not in followup.rewrite_ids or outcome.status != "passed":
+            continue
+        asked = replace(
+            outcome.task,
+            statement=(
+                f"{outcome.task.statement}\n\nThe student asked for this change to the "
+                f"written part: {note}"
+            ),
+        )
+        written = explainer(asked, outcome.code_text, outcome.transcript)
+        if isinstance(written, str) and written:
+            outcome.explanation = written
+        elif written is not None and not isinstance(written, str):
+            outcome.explanation = written.overview or outcome.explanation
+            outcome.answers = list(written.answers) or outcome.answers
+
+
 def revise_job(job: Job, feedback: str) -> None:
-    """Redo part of a finished run, in the same run directory.
+    """Handle a follow-up on a finished run, in the same run directory.
 
     Same contract as `run_job`: never raises, always ends in `job.finish()`.
 
-    The mechanism is `run_lab(resume=True)`, which is the core's own
-    resumability rather than a parallel implementation of it. Two preparory
-    steps are load-bearing and both are explained in `revise.py`: the manifest
-    must record the new instruction BEFORE the resume reads it, and the tasks
-    the feedback does not concern must keep their outcomes so they are not
-    re-solved.
+    ROUTE FIRST, THEN DO THE LEAST WORK THAT SATISFIES IT -- see `revise.py`.
+    A question costs one or two small calls and changes no files. A change to
+    the write-up re-runs only the writer. A change of format, layout or name
+    only rebuilds the files. Only a change to what a program does reaches the
+    solver, and then only for the tasks it names, seeded with their earlier
+    code.
     """
     context: RunContext | None = getattr(job, "context", None)
     if context is None:
@@ -992,116 +1051,171 @@ def revise_job(job: Job, feedback: str) -> None:
         settings = context.settings
         store = context.store
         usage = RunUsage(model=settings.model_name)
-        recorder = ev.Recorder()
-        emitter = ev.Emitter(
-            lambda event: job.publish({"type": "event", "event": wire_event(event)}),
-            recorder,
-        )
-
         manifest = store.load()
+        prior_cost = manifest.cost_usd
+        prior_usage = dict(manifest.usage)
         outcomes = manifest.outcomes
 
-        job.phase("planning", "Working out what to change")
-        revision, rev_usage = read_revision(
-            feedback, outcomes, build_model(settings, phase="ingest")
+        job.phase("planning", "Reading your message")
+        followup, rev_usage = read_revision(
+            feedback,
+            outcomes,
+            build_model(settings, phase="ingest"),
+            formats=list(context.intent.artifacts or DEFAULT_ARTIFACTS),
+            style=getattr(context.plan, "style", "classic"),
         )
         usage.phase("revise").merge(rev_usage)
 
-        # A REVISION MAY CHANGE THE FORMAT. It could not before: `_emit` reads
-        # `context.intent.artifacts`, frozen at the first run, so "actually
-        # give me a notebook" re-solved every targeted task and handed back the
-        # same .docx. `read_revision` only ever extracted task ids and an
-        # instruction, so there was no path from the feedback to the emitters.
-        wanted = detect_formats(feedback)
-        if wanted and wanted != list(context.intent.artifacts):
-            context.intent = replace(context.intent, artifacts=wanted)
+        # -- a question: answer it, change nothing -------------------------
+        if followup.is_answer:
+            job.publish({"type": "followup", "action": "answer"})
+            reply = followup.reply
+            if followup.needs_code_for:
+                wanted = [o for o in outcomes if o.task.id in followup.needs_code_for]
+                reply, answer_usage = answer_question(
+                    feedback, wanted, build_model(settings, phase="explain")
+                )
+                usage.phase("answer").merge(answer_usage)
+            job.publish({"type": "narration", "text": reply})
+            _record_followup(manifest, feedback, followup, usage, prior_cost)
+            store.save(manifest)
+            job.finish(summary={"answered": True, "cost_usd": manifest.cost_usd})
+            return
+
+        # -- a change: say what, in plain words ------------------------------
+        skip = ["read", "brief"] if followup.resolve_ids else ["read", "brief", "solve"]
+        job.publish({"type": "followup", "action": "change", "skip": skip})
+        if followup.reply:
+            job.publish({"type": "narration", "text": followup.reply})
+
+        # Format, layout and identity cost nothing but a rebuild.
+        if followup.artifacts:
+            context.intent = replace(context.intent, artifacts=followup.artifacts)
+        if followup.style:
+            context.plan.style = followup.style
+        if followup.identity:
+            context.profile = profile_from(
+                {**asdict(context.profile), **followup.identity}
+            )
+
+        # Only the tasks whose CODE must change reach the solver.
+        if followup.resolve_ids:
+            targets = set(followup.resolve_ids)
+            by_id = {o.task.id: o for o in outcomes}
+            manifest.spec = replace(
+                manifest.spec,
+                tasks=[
+                    replace(
+                        t,
+                        instruction=revise_instruction(
+                            t.instruction,
+                            followup.resolve_instruction,
+                            by_id[t.id].code_text if t.id in by_id else "",
+                        ),
+                    )
+                    if t.id in targets
+                    else t
+                    for t in manifest.spec.tasks
+                ],
+            )
+            manifest.outcomes = [o for o in outcomes if o.task.id not in targets]
+            store.save(manifest)
+
             job.publish(
                 {
-                    "type": "narration",
-                    "text": f"Switching the output to: {', '.join(wanted)}.",
+                    "type": "spec",
+                    "lab_number": manifest.spec.lab_number,
+                    "title": manifest.spec.title,
+                    "course": manifest.spec.course,
+                    "task_count": len(manifest.spec.tasks),
+                    "tasks": [{"id": t.id, "title": t.title} for t in manifest.spec.tasks],
+                    "revision": {"targets": sorted(targets), "dropped": len(targets)},
                 }
             )
 
-        targets = revision.task_ids
-        if revision.everything:
-            job.publish(
-                {"type": "narration", "text": "Re-solving every task with your change."}
-            )
-        else:
-            pretty = ", ".join(targets)
-            job.publish(
-                {"type": "narration", "text": f"Re-solving {pretty} with your change."}
+            recorder = ev.Recorder()
+            emitter = ev.Emitter(
+                lambda event: job.publish({"type": "event", "event": wire_event(event)}),
+                recorder,
             )
 
-        # 1. Rewrite the spec the resume will read. `run_lab` takes the task
-        #    list from `manifest.spec` when resuming and ignores the argument,
-        #    so an instruction that only lived in the argument would vanish.
-        manifest.spec = apply_instructions(context.spec, revision.instruction)
+            def note_current_task(event: ev.Event) -> None:
+                if isinstance(event, ev.TaskStarted):
+                    tracer.task_id = event.task_id
 
-        # 2. Drop only the targeted outcomes, so unaffected tasks keep the work
-        #    already paid for. `completed_task_ids` treats them as settled.
-        keep = [
-            o
-            for o in outcomes
-            if not revision.everything and o.task.id not in set(targets)
-        ]
-        dropped = len(outcomes) - len(keep)
-        manifest.outcomes = keep
+            job.phase("solving", "Updating the tasks")
+            with tracing_tools(job.publish) as tracer:
+                emitter.subscribe(note_current_task)
+                manifest = run_lab(
+                    manifest.spec,
+                    store,
+                    settings,
+                    RenderedBackend(theme="light"),
+                    emitter=emitter,
+                    usage=usage,
+                    model=build_model(settings),
+                    resume=True,
+                    explainer=build_explainer(settings, usage),
+                    # The same files, not a fresh download: a live URL is not
+                    # guaranteed to serve the same bytes twice.
+                    datasets=context.datasets,
+                )
+            # run_lab resumes in task order of completion; put them back in
+            # the order the lab lists them.
+            order = [t.id for t in manifest.spec.tasks]
+            manifest.outcomes.sort(key=lambda o: order.index(o.task.id) if o.task.id in order else 0)
+
+        if followup.rewrite_ids:
+            job.phase("solving", "Rewriting the explanations")
+            _rewrite(context, manifest.outcomes, followup, usage)
+
+        # EVERY current format is rebuilt after ANY change. The old path could
+        # rebuild only the notebook and leave a stale Word report beside it.
+        _emit(job, context, manifest.outcomes, usage)
+        needs = closing_needs(manifest.outcomes)
+        if needs:
+            job.publish({"type": "narration", "text": needs})
+
+        manifest.usage = prior_usage  # the first pass's breakdown stays
+        _record_followup(manifest, feedback, followup, usage, prior_cost)
         store.save(manifest)
 
-        job.publish(
-            {
-                "type": "spec",
-                "lab_number": manifest.spec.lab_number,
-                "title": manifest.spec.title,
-                "course": manifest.spec.course,
-                "task_count": len(manifest.spec.tasks),
-                "tasks": [
-                    {"id": t.id, "title": t.title} for t in manifest.spec.tasks
-                ],
-                "revision": {"targets": targets, "dropped": dropped},
-            }
-        )
-
-        def note_current_task(event: ev.Event) -> None:
-            if isinstance(event, ev.TaskStarted):
-                tracer.task_id = event.task_id
-
-        job.phase("solving", "Solving")
-        with tracing_tools(job.publish) as tracer:
-            emitter.subscribe(note_current_task)
-            resumed = run_lab(
-                manifest.spec,
-                store,
-                settings,
-                RenderedBackend(theme="light"),
-                emitter=emitter,
-                usage=usage,
-                model=build_model(settings),
-                resume=True,
-                explainer=build_explainer(settings, usage),
-                # The same files, not a fresh download. A revision that
-                # re-fetched would also risk re-solving against DIFFERENT data
-                # -- a live URL is not guaranteed to serve the same bytes twice
-                # -- and the report would then describe two different runs.
-                datasets=context.datasets,
-            )
-
-        _emit(job, context, resumed.outcomes, usage)
-
-        passed = sum(1 for o in resumed.outcomes if o.status == "passed")
+        passed = sum(1 for o in manifest.outcomes if o.status == "passed")
         job.finish(
             summary={
                 "passed": passed,
-                "failed": len(resumed.outcomes) - passed,
-                "total": len(resumed.outcomes),
-                "cost_usd": usage.total.cost_usd,
+                "failed": len(manifest.outcomes) - passed,
+                "total": len(manifest.outcomes),
+                "cost_usd": manifest.cost_usd,
                 "run_id": store.run_id,
                 "lab_number": manifest.spec.lab_number,
-                "revised": targets or ["all"],
+                "revised": followup.resolve_ids + followup.rewrite_ids,
             }
         )
 
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+
+        traceback.print_exc()
+        job.finish(error=f"{type(exc).__name__}: {exc}"[:500])
+
+
+def repackage_job(job: Job, identity: dict[str, str]) -> None:
+    """Put the student's name on the files: a rebuild, and no model call at all.
+
+    Identity is asked at packaging now, not before solving -- it only ever
+    reached the cover and the filenames. So adding it later is exactly as good
+    as having had it first, and costs a few hundred milliseconds of python-docx.
+    """
+    context: RunContext | None = getattr(job, "context", None)
+    if context is None:
+        job.finish(error="This run is no longer available. Start a new one.")
+        return
+    try:
+        context.profile = profile_from({**asdict(context.profile), **identity})
+        manifest = context.store.load()
+        _emit(job, context, manifest.outcomes, RunUsage(model=context.settings.model_name))
+        job.finish(summary={"identity_saved": True, "cost_usd": manifest.cost_usd})
     except Exception as exc:  # noqa: BLE001
         import traceback
 

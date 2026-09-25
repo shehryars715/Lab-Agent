@@ -121,8 +121,10 @@ SCENARIOS = [
              "the python file, a markdown copy and a zip.",
              expect_artifacts={"docx", "ipynb", "py", "md", "zip"}, expect_tasks=1,
              note="found bug 2 -- the agent wrote a file-generator instead"),
-    Scenario("14", "override the agent's proposal at the pause", "lab03_manual.docx",
-             "Only task 2.", pause_artifacts="md, py",
+    # The pause no longer carries a formats field (2026-09-24): formats come
+    # from the request, and can be changed afterwards by a free rebuild.
+    Scenario("14", "formats named in the request", "lab03_manual.docx",
+             "Only task 2, as markdown and a python file.",
              expect_artifacts={"md", "py"}, expect_tasks=1,
              note="the agent proposes, the student redirects"),
     Scenario("15", "an unreadable file type is refused politely", "photo.xyz", "",
@@ -283,7 +285,7 @@ def leak_check(out_dir: Path) -> list[str]:
     in `Task.statement`, which every exporter prints, so nothing short of
     reading what came out would have caught it.
     """
-    needles = ("before your first tool call", "do not narrate every step")
+    needles = ("Additional instructions from the student", "This is a revision.", "Never write report files")
     leaked = []
     for path in out_dir.iterdir():
         if path.suffix not in (".py", ".md", ".ipynb"):

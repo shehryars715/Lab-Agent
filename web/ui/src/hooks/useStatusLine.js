@@ -10,39 +10,19 @@ import { stagesFor } from '../lib/stages'
 // for a while (a fast run never sees one), change every few seconds, and stay
 // out of the screen-reader live region, which announces real changes only.
 
+// Plain and few (2026-09-24): the old pool explained the machinery -- retry
+// budgets, how screenshots are made -- which is the "too technical" half of the
+// complaint. These say what is happening in words a student already uses.
 const LINES = {
-  read: [
-    'Reading it properly before I touch any code',
-    'Finding every numbered task — even the ones hiding in a footnote',
-    'Working out what this lab actually wants handed back',
-  ],
-  plan: [
-    'Deciding what I genuinely need to ask you',
-    'Zero questions is a perfectly good outcome here',
-    'Checking whether the manual names any data',
-  ],
-  brief: [
-    'Fetching the data the lab names',
-    'Peeking at the columns, so the code uses their real names',
-  ],
-  solve: [
-    'Write it, run it, read the output — and again if it’s off',
-    (run) => {
-      const max = Object.values(run.tasks).reduce((m, t) => Math.max(m, t.maxAttempts || 0), 0)
-      return max ? `Each task gets up to ${max} tries before I admit defeat` : null
-    },
-    'The screenshots are real terminal output, not a mock-up',
-    'If a task keeps failing, you’ll hear it from me — no faking',
-  ],
-  package: [
-    'Filling your answers into the report',
-    'Putting every file where it belongs',
-    'Nearly there — tidying the package',
-  ],
+  read: ['Reading your lab', 'Finding the tasks'],
+  plan: ['Getting ready to start', 'Checking what the lab needs'],
+  brief: ['Getting the data ready'],
+  solve: ['Working through the tasks', 'Checking each answer runs'],
+  package: ['Putting your files together'],
 }
 
-const QUIET_FOR_MS = 6000
-const EVERY_MS = 5000
+const QUIET_FOR_MS = 12000
+const EVERY_MS = 15000
 
 export function useStatusLine(run, working) {
   const stage = working && run ? stagesFor(run, null).find((s) => s.state === 'running')?.key : null

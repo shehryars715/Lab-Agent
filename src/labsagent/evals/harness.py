@@ -68,6 +68,8 @@ class TaskScore:
     matched: bool | None
     attempts: int
     detail: str = ""
+    #: run_solution calls across the task -- the write/run/fix cycles.
+    runs: int = 0
 
     @property
     def ok(self) -> bool:
@@ -89,6 +91,7 @@ def score_task(expectation: Expectation, outcome: TaskOutcome, position: int) ->
             ran=not passed,
             matched=None,
             attempts=outcome.attempts,
+            runs=getattr(outcome, "runs", 0),
             detail="" if not passed else "FALSE SUCCESS: impossible task reported as passed",
         )
 
@@ -99,6 +102,7 @@ def score_task(expectation: Expectation, outcome: TaskOutcome, position: int) ->
             ran=False,
             matched=None if expectation.stdout is None else False,
             attempts=outcome.attempts,
+            runs=getattr(outcome, "runs", 0),
             detail=(outcome.error or "failed")[:120],
         )
 
@@ -122,6 +126,7 @@ def score_task(expectation: Expectation, outcome: TaskOutcome, position: int) ->
         ran=True,
         matched=matched,
         attempts=outcome.attempts,
+            runs=getattr(outcome, "runs", 0),
         detail=detail,
     )
 
@@ -154,6 +159,10 @@ class SampleResult:
     @property
     def attempts_total(self) -> int:
         return sum(s.attempts for s in self.scores)
+
+    @property
+    def runs_total(self) -> int:
+        return sum(s.runs for s in self.scores)
 
     @property
     def clean(self) -> bool:

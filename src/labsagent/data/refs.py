@@ -136,3 +136,117 @@ def candidate_tokens(raw: str) -> list[str]:
             for word in _scan(cleaned, " \t"):
                 found.append(_clean(word))
     return _dedupe(found)
+
+
+# ------------------------------------------------------------- the manual itself
+#
+# WHY A HARVESTER AND NOT ONLY THE MODEL. Until 2026-09-25 the ingest model was
+# the only thing that looked for data references, and it was told -- rightly --
+# never to guess one. But the real Lab 2 and Lab 3 manuals carry their Kaggle
+# link ONLY as a hyperlink target ("Download Superstore Dataset from Kaggle",
+# the words linked), which the reader used to throw away. The model could not
+# copy what it was never shown, so Lab 3's dataset was never fetched and Lab 2's
+# arrived only because the model remembered the slug.
+#
+# A kaggle.com/datasets URL is not a judgement call. Where the signal is
+# unambiguous a pattern beats a model -- the same rule `detect_formats` follows
+# for file types -- so references are found by SHAPE here, and the model's list
+# is checked against the document rather than trusted.
+
+import re as _re
+
+_URL = _re.compile(
+    r"(?:https?://|www\.)[^\s<>\"'`]+|(?<![\w./-])kaggle\.com/[^\s<>\"'`]+",
+    _re.IGNORECASE,
+)
+_KAGGLE_COMMAND = _re.compile(
+    r"\bkaggle\s+(?:datasets|competitions)\s+download\s+(?:-d|-c|--dataset|--competition)"
+    r"\s+[A-Za-z0-9][\w./-]*",
+    _re.IGNORECASE,
+)
+
+
+def ref_key(ref: str) -> str:
+    """One identity per dataset, so a slug and its URL are not fetched twice."""
+    from labsagent.data.sources import clean_ref, kaggle_competition, kaggle_slug
+
+    slug = kaggle_slug(ref)
+    if slug:
+        return f"kaggle:{slug.lower()}"
+    competition = kaggle_competition(ref)
+    if competition:
+        return f"competition:{competition.lower()}"
+    bare = _re.sub(r"^https?://(?:www\.)?", "", clean_ref(ref).lower())
+    return bare.rstrip("/")
+
+
+def harvest_refs(texts) -> list[str]:
+    """Dataset references that are unambiguous by their shape alone.
+
+    Kaggle dataset and competition links in any form, `kaggle ... download`
+    commands, and links straight to a data file. A link to documentation or a
+    course page is not data and is not returned.
+    """
+    from labsagent.data import DATA_SUFFIXES
+    from labsagent.data.sources import clean_ref, kaggle_competition, kaggle_slug
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def keep(ref: str) -> None:
+        key = ref_key(ref)
+        if key and key not in seen:
+            seen.add(key)
+            found.append(ref)
+
+    for text in texts:
+        text = str(text or "")
+        for match in _KAGGLE_COMMAND.finditer(text):
+            command = match.group(0)
+            slug, competition = kaggle_slug(command), kaggle_competition(command)
+            if slug:
+                keep(slug)
+            elif competition:
+                keep(f"https://www.kaggle.com/competitions/{competition}")
+        for match in _URL.finditer(text):
+            url = clean_ref(match.group(0))
+            if kaggle_slug(url) or kaggle_competition(url):
+                keep(url)
+                continue
+            path = url.split("?", 1)[0].split("#", 1)[0].lower()
+            if path.endswith(DATA_SUFFIXES):
+                keep(url)
+    return found
+
+
+def grounded(ref: str, haystack: str) -> bool:
+    """Does this reference appear in the text it was supposedly read from?
+
+    The ingest prompt says "only text the document actually contains", and a
+    prompt is a request. This makes it a check: a slug the model supplied from
+    memory, which appears nowhere in the manual or the request, is dropped
+    rather than downloaded. Same bargain as the anchor quote -- verify the thing
+    the model is weak at against the thing it is strong at.
+    """
+    from labsagent.data.sources import clean_ref, kaggle_competition, kaggle_slug
+
+    haystack = haystack.lower()
+    cleaned = clean_ref(ref)
+    probes = [kaggle_slug(cleaned) or kaggle_competition(cleaned) or ""]
+    probes.append(_re.sub(r"^https?://(?:www\.)?", "", cleaned.lower()).rstrip("/"))
+    return any(p and p.lower() in haystack for p in probes)
+
+
+def reconcile_datasets(model_refs, texts, request: str = "") -> list[str]:
+    """The model's references that the document backs up, plus every reference
+    the harvester found that the model missed. Order kept, duplicates dropped."""
+    corpus = [*[str(t or "") for t in texts], str(request or "")]
+    haystack = "\n".join(corpus)
+    merged: list[str] = []
+    seen: set[str] = set()
+    for ref in [*(r for r in model_refs if grounded(r, haystack)), *harvest_refs(corpus)]:
+        key = ref_key(ref)
+        if key and key not in seen:
+            seen.add(key)
+            merged.append(ref)
+    return merged

@@ -47,14 +47,22 @@ class LiveUsage(BaseCallbackHandler):
 
     raise_error = True
 
-    def __init__(self, phase, run_usage=None, task_cap: float = 0.0, run_cap: float = 0.0):
+    def __init__(
+        self,
+        phase,
+        run_usage=None,
+        task_cap: float = 0.0,
+        run_cap: float = 0.0,
+        task_start: float | None = None,
+    ):
         self.phase = phase
         self.run_usage = run_usage
         self.task_cap = task_cap
         self.run_cap = run_cap
-        #: What this task had already spent before the attempt started, so the
-        #: task ceiling covers the task rather than one attempt of it.
-        self.task_start = self._run_total()
+        #: The run's spend when the TASK began. The caller passes it, because
+        #: this handler is built once per attempt: defaulting to "now" made the
+        #: task ceiling a per-attempt ceiling, so two attempts could spend twice.
+        self.task_start = self._run_total() if task_start is None else task_start
 
     def _run_total(self) -> float:
         return self.run_usage.total.cost_usd if self.run_usage is not None else 0.0

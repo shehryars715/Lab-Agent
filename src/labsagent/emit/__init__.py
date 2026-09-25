@@ -2,11 +2,9 @@
 
 WHY A SEAM AND NOT A FUNCTION. Before this package, the output format was
 chosen by an `import` and an f-string inside `web/server/pipeline.py`, and the
-same sequence was written a second time in `examples/solve_lab.py`. The two had
-already drifted -- the CLI honoured `--no-notebook` and emitted
-`ArtifactWritten` events, the web path did neither. Any new format had to be
-added twice and could be asked for by nobody, because no user input reached
-that code at all.
+same sequence was written a second time elsewhere. The two had already drifted.
+Any new format had to be added twice and could be asked for by nobody, because
+no user input reached that code at all.
 
 This is the same shape as the three seams the codebase already has --
 `Sandbox`, `ScreenshotBackend`, `EventConsumer` -- and it was the conspicuous
@@ -55,6 +53,11 @@ class EmitContext:
     manual_path: Path | None = None
     anchors: dict[str, int] = field(default_factory=dict)
     produced: list[Path] = field(default_factory=list)
+    #: How each task is laid out -- see `labsagent.present`. `classic` is the
+    #: old fixed order, and the default for every caller that does not choose.
+    style: str = "classic"
+    #: One line about this lab, for headers that have room for it.
+    tagline: str = ""
 
     def stem(self) -> str:
         """`Lab03_22F-1234` -- the shared basename for everything but the report."""

@@ -243,7 +243,8 @@ def describe(datasets, failures=()) -> str:
             "So there are no data files in your workspace. Do not go looking for "
             "them, do not read anything from outside your workspace, and do not "
             "invent substitute data. If a task cannot be done without the file, "
-            "say so and call record_task_result with status \"failed\".",
+            "call record_task_result with status \"blocked\" and say in `missing` "
+            "which data it needs.",
         ]
         return "\n".join(lines)
     if not items:

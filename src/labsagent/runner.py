@@ -52,6 +52,74 @@ def _clean_stderr(stderr: str) -> str:
     return "\n".join(keep)
 
 
+def run_sections(
+    sandbox: Sandbox,
+    entry_file: str,
+    stdin_values: list[str] | None = None,
+    timeout_s: int = DEFAULT_TIMEOUT_S,
+) -> list[dict] | None:
+    """Run a passed solution section by section: real output per `# %%` part.
+
+    Returns [{"title", "code", "lines", "figures"}] or None. None is the normal
+    answer for a program with fewer than two sections, one whose sections do
+    not each compile on their own, or one that does not run cleanly this way --
+    and every caller treats None as "keep the single block". Costs no model
+    tokens: it is one subprocess, run after the task has already passed.
+    """
+    from labsagent.capture.shim import CELL_MARK, FIG_MARK, split_cells
+
+    try:
+        source = sandbox.read_file(entry_file)
+    except Exception:  # noqa: BLE001 -- no file, no sections
+        return None
+    cells = split_cells(source)
+    if len(cells) < 2:
+        return None
+    for _title, code, _start in cells:
+        try:
+            compile(code, entry_file, "exec")
+        except SyntaxError:
+            return None
+
+    values = list(stdin_values or [])
+    sandbox.write_file(SHIM_NAME, SHIM_SRC.read_text(encoding="utf-8"))
+    sandbox.write_file(INPUTS_NAME, "\n".join(values) + ("\n" if values else ""))
+    try:
+        raw = sandbox.run(
+            ["python", SHIM_NAME, "--cells", entry_file, INPUTS_NAME], timeout=timeout_s
+        )
+    except Exception:  # noqa: BLE001 -- a decoration must never fail the task
+        return None
+    if raw.exit_code != 0 or raw.timed_out:
+        return None
+
+    outputs: list[list[str]] = [[] for _ in cells]
+    current = -1
+    for line in raw.stdout.splitlines():
+        if line.startswith(CELL_MARK):
+            try:
+                current = int(line[len(CELL_MARK):])
+            except ValueError:
+                return None
+            continue
+        if 0 <= current < len(outputs):
+            outputs[current].append(line)
+    figures: list[list[str]] = [[] for _ in cells]
+    import json
+
+    for line in raw.stderr.splitlines():
+        if line.startswith(FIG_MARK):
+            number, _, names = line[len(FIG_MARK):].partition(":")
+            try:
+                figures[int(number)] = list(json.loads(names))
+            except (ValueError, IndexError):
+                continue
+    return [
+        {"title": title, "code": code.strip("\n"), "lines": lines, "figures": figs}
+        for (title, code, _start), lines, figs in zip(cells, outputs, figures)
+    ]
+
+
 def run_solution(
     sandbox: Sandbox,
     entry_file: str,

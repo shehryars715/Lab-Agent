@@ -23,7 +23,7 @@ import docx
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 
-from labsagent.blocks import leading_prose
+from labsagent.blocks import _failure_note, gap_note, leading_prose
 from labsagent.models import TaskOutcome
 from labsagent.report.cover import CoverInfo, build_cover
 from labsagent.report.docx_utils import (
@@ -91,6 +91,17 @@ def _annotate_one(anchor: Paragraph, outcome: TaskOutcome) -> None:
     for block in leading_prose(outcome):
         cursor = _explanation(cursor, block.text)
 
+    # A theory question gets words, not an empty "Code:" block.
+    if not getattr(outcome.task, "needs_code", True):
+        if outcome.status == "failed":
+            cursor = _label(cursor, "Status:")
+            cursor = _explanation(cursor, f"Not answered: {outcome.error or 'unknown'}")
+            return
+        if outcome.explanation:
+            cursor = _explanation(cursor, outcome.explanation)
+        _answers(cursor, outcome)
+        return
+
     cursor = _label(cursor, CODE_LABEL)
     if outcome.code_text:
         cursor = _code_block(cursor, outcome.code_text)
@@ -99,11 +110,7 @@ def _annotate_one(anchor: Paragraph, outcome: TaskOutcome) -> None:
 
     if outcome.status == "failed":
         cursor = _label(cursor, "Status:")
-        cursor = _explanation(
-            cursor,
-            f"This task did not complete after {outcome.attempts} attempt(s). "
-            f"Error: {outcome.error or 'unknown'}",
-        )
+        cursor = _explanation(cursor, _failure_note(outcome))
         return
 
     cursor = _label(cursor, OUTPUT_LABEL)
@@ -112,8 +119,66 @@ def _annotate_one(anchor: Paragraph, outcome: TaskOutcome) -> None:
     for figure_path in outcome.figure_paths:
         cursor = _image(cursor, figure_path)
 
+    # Empty for every outcome without a gap, so older reports are unchanged.
+    if gap_note(outcome):
+        cursor = _explanation(cursor, gap_note(outcome))
     if outcome.explanation:
         cursor = _explanation(cursor, outcome.explanation)
+    _answers(cursor, outcome)
+
+
+def _answers(cursor: Paragraph, outcome: TaskOutcome) -> Paragraph:
+    """Each written answer as real text: the question in bold, then the answer.
+
+    This is the fix for the analysis that used to arrive as a terminal
+    screenshot. Nothing is added for an outcome without answers, so every
+    report built before this existed is unchanged.
+    """
+    for item in outcome.answers or []:
+        answer = str(item.get("answer") or "").strip()
+        if not answer:
+            continue
+        question = str(item.get("question") or "").strip()
+        if question:
+            cursor = _label(cursor, question)
+        cursor = _explanation(cursor, answer)
+    return cursor
+
+
+def _annotate_arranged(anchor: Paragraph, outcome: TaskOutcome, style: str) -> None:
+    """One task's work in a non-classic style, inserted under its anchor."""
+    from labsagent.present import arrange, vocabulary
+
+    words = vocabulary(style)
+    cursor = anchor
+    blocks = arrange(outcome, style)
+    # Only a SCREENSHOT duplicates the text output; a figure is something else.
+    has_shot = any(b.kind == "image" and b.role == "screenshot" for b in blocks)
+    labelled_output = False
+    answers_headed = False
+    for block in blocks:
+        if block.kind == "code":
+            cursor = _label(cursor, block.title or words.code)
+            cursor = _code_block(cursor, block.text)
+            labelled_output = False
+        elif block.kind == "error":
+            cursor = _label(cursor, "Status:")
+            cursor = _explanation(cursor, block.text)
+        elif block.kind == "image" and block.path is not None and Path(block.path).exists():
+            if not labelled_output:
+                cursor = _label(cursor, words.output)
+                labelled_output = True
+            cursor = _image(cursor, Path(block.path))
+        elif block.kind == "output" and not has_shot and block.text.strip():
+            cursor = _label(cursor, words.output)
+            cursor = _code_block(cursor, block.text)
+        elif block.kind == "prose":
+            if block.role == "answer" and words.answers and not answers_headed:
+                cursor = _label(cursor, words.answers)
+                answers_headed = True
+            if block.title:
+                cursor = _label(cursor, block.title)
+            cursor = _explanation(cursor, block.text)
 
 
 def annotate_manual(
@@ -122,6 +187,7 @@ def annotate_manual(
     outcomes: list[TaskOutcome],
     cover: CoverInfo | None = None,
     anchors: dict[str, int] | None = None,
+    style: str = "classic",
 ) -> Path:
     """Copy the manual and insert each task's work beneath its anchor.
 
@@ -164,7 +230,12 @@ def annotate_manual(
         build_cover(doc, cover)
 
     for anchor, outcome in resolved:
-        _annotate_one(anchor, outcome)
+        # `classic` keeps the original writer, byte for byte. Any other style
+        # is laid out by `present.arrange` and inserted block by block.
+        if style == "classic":
+            _annotate_one(anchor, outcome)
+        else:
+            _annotate_arranged(anchor, outcome, style)
 
     doc.save(str(out_path))
     return out_path

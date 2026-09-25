@@ -33,8 +33,9 @@ decide that is where the messages are built.
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from labsagent.models import Task, Transcript
@@ -44,19 +45,23 @@ from labsagent.usage import RunUsage
 # prefix of every explain call. Per-task values -- above all the LENGTH -- go in
 # the brief, never here. This is the rule web/server/pipeline.py follows with
 # NARRATION, applied a second time.
-EXPLAINER_PROMPT = """You write the short explanation that appears under a task in a university
+EXPLAINER_PROMPT = """You write the text part of a student's answer to one task in a university
 programming lab report.
 
 You are given a task statement, the final working program, and what that program printed when it
-ran. That is everything you need, and everything you get.
+ran. That is everything you need, and everything you get. Some tasks have no program: they are
+questions answered in words alone.
 
 How to write it:
 
-- Describe what the program does and how it does it. Name the constructs actually used -- input(),
-  int(), an f-string, a list comprehension, a slice -- because naming them is what the explanation
-  is for.
-- Write about the program in the third person. "The program reads two integers" is right. "I wrote
-  a program that reads two integers" is wrong.
+- The overview describes what the program does and how it does it. Name the constructs actually
+  used -- input(), int(), an f-string, a list comprehension, a slice -- because naming them is what
+  the overview is for. Write about the program in the third person: "The program reads two
+  integers" is right, "I wrote a program" is wrong.
+- When the brief lists written questions, answer each one directly, as the student would in the
+  report. Ground every answer in what the program printed and quote its actual numbers. Never
+  invent a number the output does not show; if it does not show something, say what the program
+  demonstrates instead.
 - Never mention attempts, errors, fixes, debugging, or how the program came to be. You did not see
   any of that, and it does not belong in a report.
 - Plain prose only. No markdown, no asterisks, no backticks, no headings, no bullet points, no
@@ -65,7 +70,12 @@ How to write it:
 - Match the VOICE of the example below, never its wording. It describes a different program than
   yours. Describe the program you were actually given.
 
-The voice and length to match, for a two-sentence explanation:
+When the brief lists NO written questions, reply with the overview as plain text and nothing else.
+When it DOES list written questions, reply with ONLY a JSON object, answers in question order:
+
+    {"overview": "...", "answers": ["answer to question 1", "answer to question 2"]}
+
+The voice and length to match, for a two-sentence overview:
 
     The program builds a running total across the prices in the list, applying the discount to each
     one before adding it. The formatted output uses an f-string with :.2f so the total always shows
@@ -79,6 +89,8 @@ The voice and length to match, for a two-sentence explanation:
 # feature is most likely to produce.
 SHORT_SENTENCES = 2
 LONG_SENTENCES = 5
+#: Per written answer. A question gets a paragraph, not an essay.
+ANSWER_SENTENCES = 4
 
 # Bounds on the brief. Output is what costs money here (2x the cache-miss input
 # rate under thinking mode), but an unbounded transcript from a program that
@@ -86,6 +98,8 @@ LONG_SENTENCES = 5
 # not improve past the first screenful.
 MAX_CODE_CHARS = 4000
 MAX_OUTPUT_LINES = 40
+#: A task with written questions gets more of its output: the answers quote it.
+MAX_EVIDENCE_LINES = 80
 
 # Same expression as web/server/trace.py, duplicated rather than imported: the
 # core must not depend on the web layer. Both exist because a plain-prose
@@ -127,7 +141,8 @@ def build_brief(task: Task, code_text: str, transcript: Transcript | None) -> st
     prompt the solver ran under, any other task. This function IS the isolation
     boundary -- it is worth reading as the specification of one.
     """
-    budget = sentence_budget(task)
+    questions = list(getattr(task, "written_questions", []) or [])
+    budget = SHORT_SENTENCES if questions else sentence_budget(task)
     code = code_text.strip()
     if len(code) > MAX_CODE_CHARS:
         code = code[:MAX_CODE_CHARS] + "\n# ... truncated ..."
@@ -135,20 +150,82 @@ def build_brief(task: Task, code_text: str, transcript: Transcript | None) -> st
     parts = [
         f"Task: {task.title}",
         f"\nWhat the task asked for:\n{task.statement.strip()}",
-        f"\nThe program:\n```python\n{code}\n```",
     ]
+    if code:
+        parts.append(f"\nThe program:\n```python\n{code}\n```")
+    else:
+        # NOT AN INVITATION TO RECALL RESULTS. "Answer from knowledge" alone
+        # got "The Technology category typically shows..." for a question
+        # about THIS lab's data -- a number-shaped guess. Say so instead.
+        parts.append(
+            "\nThis task has no program. Answer from knowledge of the subject. If a "
+            "question asks about specific results or data that were not computed "
+            "here, say that the answer comes from running the analysis rather than "
+            "guessing figures."
+        )
 
     if transcript is not None:
+        limit = MAX_EVIDENCE_LINES if questions else MAX_OUTPUT_LINES
         lines = transcript.display_lines()
-        if len(lines) > MAX_OUTPUT_LINES:
-            lines = lines[:MAX_OUTPUT_LINES] + ["... output truncated ..."]
+        if len(lines) > limit:
+            lines = lines[:limit] + ["... output truncated ..."]
         parts.append("\nWhat it printed when it ran:\n" + "\n".join(lines))
 
-    parts.append(
-        f"\nWrite the explanation now, in exactly {budget} "
-        f"{'sentence' if budget == 1 else 'sentences'}."
-    )
+    if questions:
+        numbered = "\n".join(f"{n}. {q}" for n, q in enumerate(questions, start=1))
+        parts.append(
+            f"\nWritten questions to answer, in this order:\n{numbered}\n"
+            f"\nReply with the JSON object. Write the overview in exactly {budget} "
+            f"sentences and each answer in at most {ANSWER_SENTENCES} sentences."
+        )
+    else:
+        parts.append(
+            f"\nWrite the overview now, in exactly {budget} "
+            f"{'sentence' if budget == 1 else 'sentences'}."
+        )
     return "\n".join(parts)
+
+
+@dataclass
+class WriteUp:
+    """The text half of a task's answer: an overview and one answer per question."""
+
+    overview: str = ""
+    answers: list[dict] = field(default_factory=list)
+
+
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
+
+
+def parse_writeup(text: str, questions: list[str]) -> WriteUp | None:
+    """Lenient: JSON when it parses, else the whole reply is the overview.
+
+    A bad reply must never cost the task its prose, and it must never raise --
+    the write-up is a decoration on a task that already succeeded.
+    """
+    raw = _FENCE.sub("", (text or "").strip())
+    data = None
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+    if not isinstance(data, dict):
+        overview = clamp_sentences(plain_text(raw), LONG_SENTENCES)
+        return WriteUp(overview=overview) if overview else None
+
+    overview = clamp_sentences(plain_text(str(data.get("overview") or "")), SHORT_SENTENCES)
+    replies = data.get("answers") or []
+    answers = []
+    for question, reply in zip(questions, replies):
+        if isinstance(reply, dict):
+            reply = reply.get("answer", "")
+        answer = clamp_sentences(plain_text(str(reply or "")), ANSWER_SENTENCES)
+        if answer:
+            answers.append({"question": question, "answer": answer})
+    if not overview and not answers:
+        return None
+    return WriteUp(overview=overview, answers=answers)
 
 
 @dataclass
@@ -157,8 +234,8 @@ class Explainer:
 
     A callable rather than a model, for the reason `Sandbox` and
     `ScreenshotBackend` are protocols: the orchestrator should depend on the
-    smallest interface that does the job. Tests pass a lambda, the CLI and the
-    web layer pass this, and none of them has to agree about model clients.
+    smallest interface that does the job. Tests pass a lambda, the web layer
+    and the eval pass this, and none of them has to agree about model clients.
 
     Returns None rather than raising when anything goes wrong. An explanation is
     a decoration on a task that already succeeded; letting its failure propagate
@@ -172,8 +249,11 @@ class Explainer:
 
     def __call__(
         self, task: Task, code_text: str, transcript: Transcript | None
-    ) -> str | None:
-        if not code_text.strip():
+    ) -> "str | WriteUp | None":
+        """A plain string for a task with no written questions (today's shape),
+        a `WriteUp` for one that has them. `solve_task` accepts both."""
+        questions = list(getattr(task, "written_questions", []) or [])
+        if not code_text.strip() and not questions:
             return None
         messages = [
             {"role": "system", "content": EXPLAINER_PROMPT},
@@ -188,5 +268,7 @@ class Explainer:
             self.usage.phase(self.phase).add_message(reply)
 
         text = reply.content if isinstance(reply.content, str) else str(reply.content)
+        if questions:
+            return parse_writeup(text, questions)
         cleaned = clamp_sentences(plain_text(text), sentence_budget(task))
         return cleaned or None

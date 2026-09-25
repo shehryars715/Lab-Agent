@@ -30,7 +30,7 @@ choose between them and write one line of text, which is the part a model is
 genuinely good at.
 
 `classic` is the default and is byte-identical to what this module produced
-before the layouts existed, so the CLI and the existing tests are unaffected.
+before the layouts existed, so the existing tests are unaffected.
 """
 
 from __future__ import annotations
@@ -370,7 +370,7 @@ def cover_from(
     the authoritative document for the course it belongs to.
 
     `layout` and `tagline` default to the previous behaviour, so existing
-    callers -- the CLI and the tests -- are unaffected by the new designs.
+    callers -- the tests -- are unaffected by the new designs.
     """
     return CoverInfo(
         lab_number=getattr(spec, "lab_number", "") or "",

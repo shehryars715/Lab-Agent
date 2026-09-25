@@ -51,7 +51,10 @@ def _task_to_dict(task: Task) -> dict[str, Any]:
         "sample_inputs": list(task.sample_inputs),
         "sample_output": task.sample_output,
         "wants_explanation": task.wants_explanation,
+        "written_questions": list(task.written_questions),
+        "needs_code": task.needs_code,
         "instruction": task.instruction,
+        "effort": task.effort,
     }
 
 
@@ -63,7 +66,10 @@ def _task_from_dict(data: dict[str, Any]) -> Task:
         sample_inputs=list(data.get("sample_inputs", [])),
         sample_output=data.get("sample_output"),
         wants_explanation=data.get("wants_explanation", False),
+        written_questions=list(data.get("written_questions") or []),
+        needs_code=data.get("needs_code", True),
         instruction=data.get("instruction", ""),
+        effort=data.get("effort", "standard"),
     )
 
 
@@ -107,6 +113,8 @@ def _outcome_to_dict(outcome: TaskOutcome) -> dict[str, Any]:
             else None
         ),
         "explanation": outcome.explanation,
+        "answers": [dict(a) for a in outcome.answers],
+        "sections": [dict(x) for x in outcome.sections],
         "attempts": outcome.attempts,
         "error": outcome.error,
         "cost_usd": outcome.cost_usd,
@@ -114,6 +122,9 @@ def _outcome_to_dict(outcome: TaskOutcome) -> dict[str, Any]:
         "attempt_errors": list(outcome.attempt_errors),
         "stopped_reason": outcome.stopped_reason,
         "produced": [dict(d) for d in outcome.produced],
+        "blocker": outcome.blocker,
+        "gap": outcome.gap,
+        "runs": outcome.runs,
     }
 
 
@@ -132,6 +143,8 @@ def _outcome_from_dict(data: dict[str, Any]) -> TaskOutcome:
             else None
         ),
         explanation=data.get("explanation"),
+        answers=[dict(a) for a in (data.get("answers") or [])],
+        sections=[dict(x) for x in (data.get("sections") or [])],
         attempts=data.get("attempts", 0),
         error=data.get("error"),
         # `.get` with a default, like every field added after the first manifest
@@ -142,6 +155,9 @@ def _outcome_from_dict(data: dict[str, Any]) -> TaskOutcome:
         attempt_errors=list(data.get("attempt_errors") or []),
         stopped_reason=data.get("stopped_reason"),
         produced=[dict(d) for d in (data.get("produced") or [])],
+        blocker=data.get("blocker"),
+        gap=data.get("gap"),
+        runs=data.get("runs", 0),
     )
 
 
@@ -156,6 +172,7 @@ def manifest_to_dict(manifest: RunManifest) -> dict[str, Any]:
         "cost_usd": manifest.cost_usd,
         "anchors": dict(manifest.anchors),
         "datasets": [dict(d) for d in manifest.datasets],
+        "followups": [dict(f) for f in manifest.followups],
     }
 
 
@@ -173,6 +190,7 @@ def manifest_from_dict(data: dict[str, Any]) -> RunManifest:
         # manifest was written: a run recorded before datasets existed must
         # still load, or resuming it becomes impossible.
         datasets=[dict(d) for d in (data.get("datasets") or [])],
+        followups=[dict(f) for f in (data.get("followups") or [])],
     )
 
 

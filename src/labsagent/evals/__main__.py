@@ -1,10 +1,7 @@
-"""The command line.
+"""The eval runner: `uv run python -m labsagent.evals`.
 
-`eval` is the first command here because it is the one that cannot live as an
-example script: an eval you have to remember how to invoke is an eval nobody
-runs, and an eval nobody runs is worse than no eval, because it looks like
-coverage. `run` belongs here too and is still in examples/solve_lab.py; moving
-it is a separate job with its own flags to get right.
+An eval you have to remember how to invoke is an eval nobody runs, so it lives
+beside the cases it runs. It spends real money -- see `--list` to look first.
 """
 
 from __future__ import annotations
@@ -16,27 +13,9 @@ import typer
 
 from labsagent.config import PROJECT_ROOT, load_settings
 
-app = typer.Typer(
-    add_completion=False,
-    help="Lab manual in, submission out.",
-    no_args_is_help=True,
-)
-
 DEFAULT_EVAL_ROOT = PROJECT_ROOT / "build" / "evals"
 
 
-@app.callback()
-def _root() -> None:
-    """Keep subcommand dispatch even while `eval` is the only command.
-
-    With a single registered command and no callback, typer collapses the app
-    into that command -- so `labsagent eval` parses "eval" as a stray argument
-    and fails. The callback makes it a group, which is also the shape `run`
-    will slot into.
-    """
-
-
-@app.command("eval")
 def evaluate(
     samples: int = typer.Option(
         1,
@@ -143,7 +122,7 @@ def evaluate(
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    app()
+    typer.run(evaluate)
 
 
 if __name__ == "__main__":

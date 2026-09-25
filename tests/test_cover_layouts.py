@@ -145,7 +145,7 @@ class TestLayoutSelection:
         assert all_text(typo) == all_text(classic)
 
     def test_default_is_classic(self, manual):
-        """The CLI and the existing tests depend on this staying true."""
+        """Every existing report depends on this staying true."""
         default = render(manual, FULL)
         explicit = render(manual, CoverInfo(**{**FULL.__dict__, "layout": "classic"}))
         assert all_text(default) == all_text(explicit)

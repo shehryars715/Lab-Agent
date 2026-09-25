@@ -79,6 +79,10 @@ export function stagesFor(run, question, { waiting = false, revision = false } =
     state.read = 'skipped'
     state.brief = 'skipped'
   }
+  // A follow-up that only rebuilds files skips the solve too, and says so.
+  for (const key of run.followup?.skip ?? []) {
+    if (key in state && state[key] !== 'failed') state[key] = 'skipped'
+  }
 
   if (failed) {
     // The stage that was in flight is the one that failed; if none was, the

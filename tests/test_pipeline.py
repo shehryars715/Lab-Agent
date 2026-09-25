@@ -72,6 +72,9 @@ def test_notes_steer_the_solver_without_entering_the_deliverable():
     assert "seed is 42" not in task.statement, "the student must not hand it in"
     assert task.statement == "Print the sum.", "the statement is untouched"
     assert "before your first tool call" not in task.statement
+    # Structural, now that narration is retired: the solver-only channel
+    # carries the student's notes and nothing that narrates.
+    assert "tool call" not in task.instruction
 
 
 def test_only_code_shaping_notes_reach_the_solver():

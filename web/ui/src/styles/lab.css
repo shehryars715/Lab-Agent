@@ -1021,3 +1021,24 @@
 .run-fail-detail[open] summary svg {
   transform: rotate(90deg);
 }
+
+/* Your details, offered after the files exist (identity moved to packaging). */
+.identity-form {
+  margin-top: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+.identity-title {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+.identity-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.identity-fields input {
+  flex: 1 1 10rem;
+  min-width: 0;
+}

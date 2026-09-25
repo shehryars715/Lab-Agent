@@ -70,8 +70,9 @@ First classify the document:
 If document_kind is "other", return an empty tasks list and stop. Do not invent
 tasks to fill the schema.
 
-Otherwise, identify every TASK the student must implement. Ignore objectives,
-headers, titles and closing remarks -- only tasks that require writing a program.
+Otherwise, identify every TASK the student must complete. Ignore objectives,
+headers, titles and closing remarks. A task is either something to program, or a
+question to answer in words (a theory or discussion question with nothing to run).
 
 For each task report:
 
@@ -85,6 +86,20 @@ For each task report:
   no values, choose simple sensible ones that satisfy the task.
 - wants_explanation: true only if the task explicitly asks the student to
   explain, discuss, describe or comment on their approach.
+- written_questions: the parts of the task the student must answer IN WORDS rather
+  than by what the program prints -- explain, analyse, compare, discuss, interpret,
+  justify, observe, "why". One short question per entry, e.g. "Why does the
+  perceptron fail on XOR?". Empty when the task only asks for a program.
+- needs_code: false ONLY for a pure theory question that asks for no program at
+  all AND whose answer does not depend on this lab's data or results. "Which
+  region shows the most variability in profit?" needs code: its answer has to be
+  computed, not recalled. Anything that says implement, write, compute, plot or
+  train is true.
+- effort: "basic" for a short introductory exercise -- read input, arithmetic, a
+  loop, string or list handling, one simple chart or one library call -- that a
+  student would finish in under about 30 lines. "standard" for anything with
+  several stages, an algorithm implemented from scratch, model training, or a
+  multi-step data pipeline. When unsure, "standard".
 - anchor_idx: the index of the LAST paragraph belonging to this task -- the
   paragraph the student's code and output should be inserted after. This is the
   final paragraph of the task's description, NOT the heading, and NOT the next
@@ -135,7 +150,12 @@ may be empty, is quoted below.
   uses a library's built-in dataset, or says the student may pick any dataset.
   "Use any dataset of your choice" is NOT a reference -- it names nothing.
   Do not invent a URL, do not guess a Kaggle slug, and do not put a description
-  here: only text the document actually contains.
+  here: only text the document actually contains. A paragraph ending in
+  "(link: ... -> https://...)" carries a hyperlink; copy that URL.
+- data_unlinked: datasets the DOCUMENT tells the student to obtain but gives NO
+  link, slug or file name for anywhere -- e.g. "the Superstore dataset from
+  Kaggle" when no link appears. One short description each. Empty when every
+  dataset it names has a link or a file name, or when any dataset will do.
 
 Return ONLY a JSON object matching this schema exactly:
 
@@ -157,6 +177,11 @@ class ExtractedTask(BaseModel):
     statement: str = Field(description="complete, self-contained requirement text")
     sample_inputs: list[str] = Field(default_factory=list)
     wants_explanation: bool = False
+    written_questions: list[str] = Field(default_factory=list)
+    needs_code: bool = True
+    # A string, not a Literal: an unexpected value must degrade to "standard",
+    # not fail validation and burn an ingest retry -- see `lab_number` below.
+    effort: str = "standard"
     anchor_idx: int = Field(description="index of the task's LAST paragraph")
     anchor_quote: str = Field(description="first 40 chars at anchor_idx, verbatim")
 
@@ -175,6 +200,9 @@ class ExtractedIntent(BaseModel):
     notes: str = ""
     datasets: list[str] = Field(
         default_factory=list, description="data the DOCUMENT names and does not supply"
+    )
+    data_unlinked: list[str] = Field(
+        default_factory=list, description="datasets it requires with no link or file"
     )
 
 
@@ -202,6 +230,15 @@ class AnchorRepair:
     reason: str
 
 
+def _starts(paragraph, quote: str) -> bool:
+    """Does this paragraph begin with the quote -- as stored, or as the model
+    saw it with its links appended? A short paragraph that is mostly a link
+    can only be quoted in the second form."""
+    head = quote[:30]
+    shown = paragraph.shown() if hasattr(paragraph, "shown") else paragraph.text
+    return paragraph.text.strip().startswith(head) or shown.strip().startswith(head)
+
+
 def _reconcile_anchor(
     extracted: ExtractedTask, manual: RawManual
 ) -> tuple[int, AnchorRepair | None]:
@@ -213,7 +250,7 @@ def _reconcile_anchor(
     def matches(idx: int) -> bool:
         if not (0 <= idx < len(paragraphs)):
             return False
-        return paragraphs[idx].text.strip().startswith(quote[:30]) if quote else False
+        return _starts(paragraphs[idx], quote) if quote else False
 
     if matches(extracted.anchor_idx):
         return extracted.anchor_idx, None
@@ -226,7 +263,7 @@ def _reconcile_anchor(
     if quote:
         # Exact prefix match anywhere in the document.
         for p in paragraphs:
-            if p.text.strip().startswith(quote[:30]):
+            if _starts(p, quote):
                 return p.idx, AnchorRepair(task_id, extracted.anchor_idx, p.idx, reason)
 
         # Fall back to closest fuzzy match.
@@ -264,13 +301,17 @@ def to_labspec(
             repairs.append(repair)
         task_id = f"task{item.task_number}"
         anchors[task_id] = anchor
+        questions = [q.strip() for q in item.written_questions if str(q).strip()][:6]
         tasks.append(
             Task(
                 id=task_id,
                 title=item.title,
                 statement=item.statement,
                 sample_inputs=list(item.sample_inputs),
-                wants_explanation=item.wants_explanation,
+                wants_explanation=item.wants_explanation or bool(questions),
+                written_questions=questions,
+                needs_code=bool(item.needs_code),
+                effort="basic" if str(item.effort).strip().lower() == "basic" else "standard",
             )
         )
 
@@ -313,6 +354,9 @@ SCHEMA_HINT = """{
       "statement": "string",
       "sample_inputs": ["5", "3"],
       "wants_explanation": false,
+      "written_questions": [],
+      "needs_code": true,
+      "effort": "basic",
       "anchor_idx": 8,
       "anchor_quote": "first 40 chars of the paragraph at anchor_idx"
     }
@@ -321,7 +365,8 @@ SCHEMA_HINT = """{
     "tasks_wanted": [],
     "artifacts": [],
     "notes": "",
-    "datasets": []
+    "datasets": [],
+    "data_unlinked": []
   }
 }"""
 
@@ -353,7 +398,9 @@ class Reading:
         return self.spec is not None and bool(self.spec.tasks)
 
 
-def _intent_from(extracted: ExtractedLab, known_ids: list[str], request: str = "") -> Intent:
+def _intent_from(
+    extracted: ExtractedLab, known_ids: list[str], request: str = "", manual=None
+) -> Intent:
     """Fold the model's `intent` block into the typed request object."""
     wanted = [f"task{n}" for n in extracted.intent.tasks_wanted]
     wanted = [t for t in wanted if t in known_ids]
@@ -377,8 +424,24 @@ def _intent_from(extracted: ExtractedLab, known_ids: list[str], request: str = "
         task_ids=wanted or None,
         artifacts=artifacts,
         notes=extracted.intent.notes.strip(),
-        datasets=[r.strip() for r in extracted.intent.datasets if str(r).strip()],
+        datasets=_datasets(extracted, manual, request),
+        data_unlinked=[
+            d.strip() for d in extracted.intent.data_unlinked if str(d).strip()
+        ][:3],
     )
+
+
+def _datasets(extracted: ExtractedLab, manual, request: str) -> list[str]:
+    """The model's references, checked against the document, plus the ones it
+    missed. See `data.refs.reconcile_datasets` for why both halves exist."""
+    model_refs = [r.strip() for r in extracted.intent.datasets if str(r).strip()]
+    if manual is None:
+        return model_refs
+    from labsagent.data.refs import reconcile_datasets
+
+    texts = [p.text for p in manual.paragraphs]
+    texts += [url for p in manual.paragraphs for _, url in getattr(p, "links", ())]
+    return reconcile_datasets(model_refs, texts, request)
 
 
 def extract_labspec(manual: RawManual, model, request: str = "") -> Reading:
@@ -431,7 +494,7 @@ def extract_labspec(manual: RawManual, model, request: str = "") -> Reading:
                 kind=extracted.document_kind,
                 confidence=extracted.confidence,
                 what_this_is=extracted.what_this_is,
-                intent=_intent_from(extracted, [t.id for t in spec.tasks], request),
+                intent=_intent_from(extracted, [t.id for t in spec.tasks], request, manual),
                 usage=_usage_from_handler(handler),
                 spec=spec,
                 anchors=anchors,

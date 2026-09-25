@@ -1,17 +1,11 @@
-"""Identity: extracted where possible, asked only where necessary, cached always."""
+"""Identity: extracted from the manual where possible; the rest comes from the browser."""
 
 from __future__ import annotations
 
 import pytest
 
 from labsagent.ingest.cover import extract_cover_facts
-from labsagent.profile import (
-    StudentProfile,
-    config_path,
-    load_profile,
-    resolve_profile,
-    save_profile,
-)
+from labsagent.profile import StudentProfile
 
 FRONT_MATTER = [
     "Faculty of Computing",
@@ -59,96 +53,6 @@ class TestCoverFacts:
         assert facts.date == "01/02/2026"
 
 
-class TestProfileStore:
-    def test_missing_file_is_an_empty_profile_not_an_error(self, tmp_path):
-        assert load_profile(tmp_path) == StudentProfile()
-
-    def test_roundtrip(self, tmp_path):
-        original = StudentProfile(name="Shehryar", cms_id="22F-1234", section="BSDS-02A")
-        save_profile(original, tmp_path)
-        assert load_profile(tmp_path) == original
-
-    def test_malformed_toml_degrades_to_empty(self, tmp_path):
-        config_path(tmp_path).write_text("this is not [ valid toml", encoding="utf-8")
-        assert load_profile(tmp_path) == StudentProfile()
-
-    def test_save_preserves_other_tables(self, tmp_path):
-        config_path(tmp_path).write_text(
-            '[model]\nname = "deepseek-flash"\n\n[student]\nname = "Old"\n',
-            encoding="utf-8",
-        )
-        save_profile(StudentProfile(name="New", cms_id="22F-1"), tmp_path)
-        text = config_path(tmp_path).read_text(encoding="utf-8")
-        assert "[model]" in text and 'name = "deepseek-flash"' in text
-        assert load_profile(tmp_path).name == "New"
-
-    def test_legacy_roll_no_key_is_still_read(self, tmp_path):
-        config_path(tmp_path).write_text(
-            '[student]\nname = "S"\nroll_no = "21F-9999"\n', encoding="utf-8"
-        )
-        assert load_profile(tmp_path).cms_id == "21F-9999"
-
-    def test_quotes_in_a_name_survive(self, tmp_path):
-        save_profile(StudentProfile(name='A "Nick" B', cms_id="22F-1"), tmp_path)
-        assert load_profile(tmp_path).name == 'A "Nick" B'
-
-    @pytest.mark.parametrize(
-        "cms,expected",
-        [("22F-1234", "22F-1234"), ("22F 1234", "22F-1234"), ("", "submission"),
-         ("../../etc/passwd", "etc-passwd")],
-    )
-    def test_slug_is_filename_safe(self, cms, expected):
-        assert StudentProfile(cms_id=cms).slug() == expected
-
-
-class TestResolve:
-    def test_complete_profile_asks_nothing(self, tmp_path, monkeypatch):
-        save_profile(StudentProfile(name="S", cms_id="22F-1"), tmp_path)
-        monkeypatch.setattr(
-            "builtins.input", lambda *a: pytest.fail("should not have prompted")
-        )
-        profile, asked = resolve_profile(tmp_path, interactive=True)
-        assert asked is False and profile.name == "S"
-
-    def test_non_interactive_never_blocks(self, tmp_path, monkeypatch):
-        """A prompt in a pipe is an outage, not a question."""
-        monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("blocked on input"))
-        profile, asked = resolve_profile(tmp_path, interactive=False)
-        assert asked is False
-        assert profile.name and profile.cms_id  # placeholders, not empties
-
-    def test_asks_only_for_what_is_missing(self, tmp_path, monkeypatch):
-        save_profile(StudentProfile(name="Shehryar"), tmp_path)
-        asked_labels = []
-
-        def fake_input(prompt=""):
-            asked_labels.append(prompt)
-            return "22F-1234"
-
-        monkeypatch.setattr("builtins.input", fake_input)
-        profile, asked = resolve_profile(tmp_path, interactive=True)
-        assert len(asked_labels) == 1
-        assert "CMS" in asked_labels[0]
-        assert profile.name == "Shehryar" and profile.cms_id == "22F-1234"
-        assert asked is True
-
-    def test_answers_are_persisted_so_the_next_run_is_silent(self, tmp_path, monkeypatch):
-        answers = iter(["Shehryar", "22F-1234"])
-        monkeypatch.setattr("builtins.input", lambda *a: next(answers))
-        resolve_profile(tmp_path, interactive=True)
-        assert load_profile(tmp_path) == StudentProfile(name="Shehryar", cms_id="22F-1234")
-
-    def test_overrides_win_over_the_cached_file(self, tmp_path):
-        save_profile(StudentProfile(name="Old", cms_id="00F-0"), tmp_path)
-        profile, asked = resolve_profile(
-            tmp_path, interactive=False, overrides={"name": "New"}
-        )
-        assert profile.name == "New" and asked is False
-
-    def test_eof_during_prompt_does_not_crash(self, tmp_path, monkeypatch):
-        def boom(*_a):
-            raise EOFError
-
-        monkeypatch.setattr("builtins.input", boom)
-        profile, _ = resolve_profile(tmp_path, interactive=True)
-        assert profile.name == ""  # empty, but the run survives
+def test_the_slug_is_filename_safe():
+    assert StudentProfile(name="A", cms_id="22F 1234/x").slug() == "22F-1234-x"
+    assert StudentProfile().slug() == "submission"

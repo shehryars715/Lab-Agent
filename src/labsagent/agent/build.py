@@ -81,6 +81,7 @@ def build_model(settings: Settings, phase: str = "solve"):
     effort = {
         "ingest": settings.ingest_reasoning_effort,
         "explain": settings.explain_reasoning_effort,
+        "fast": settings.basic_reasoning_effort,
     }.get(phase, settings.reasoning_effort)
     kwargs = {"reasoning_effort": effort} if effort else {}
     return ChatDeepSeek(
@@ -91,7 +92,23 @@ def build_model(settings: Settings, phase: str = "solve"):
     )
 
 
-def solver_config(settings: Settings, callbacks=()) -> dict:
+def fast_variant(model, settings: Settings):
+    """The solver model with thinking off, for a basic task's first attempt.
+
+    A COPY, NOT A NEW PARAMETER. `run_lab` takes one model from three callers
+    (web, eval, tests); varying reasoning per attempt through that signature
+    would touch all three. `model_copy` changes one field on a copy and leaves
+    the caller's instance alone. A scripted test model has no such field and
+    is returned as it is.
+    """
+    if model is None:
+        return build_model(settings, phase="fast")
+    if hasattr(model, "reasoning_effort") and hasattr(model, "model_copy"):
+        return model.model_copy(update={"reasoning_effort": settings.basic_reasoning_effort})
+    return model
+
+
+def solver_config(settings: Settings, callbacks=(), max_turns: int | None = None) -> dict:
     """The per-invoke config for one solver attempt.
 
     THE TURN CAP HAS TO BE SET HERE. deepagents binds `recursion_limit: 9_999`
@@ -104,7 +121,7 @@ def solver_config(settings: Settings, callbacks=()) -> dict:
     and being wrong in two places.
     """
     return {
-        "recursion_limit": 2 * settings.max_turns_per_attempt + 2,
+        "recursion_limit": 2 * (max_turns or settings.max_turns_per_attempt) + 2,
         "callbacks": list(callbacks),
     }
 
@@ -114,7 +131,7 @@ def build_explainer(settings: Settings, usage=None, model=None) -> Explainer:
 
     Every composition root wants the same thing here, and the interesting part
     -- that this phase runs WITHOUT reasoning -- should not have to be
-    remembered separately by the CLI, the web layer and the eval harness.
+    remembered separately by the web layer and the eval harness.
     """
     return Explainer(
         model=model if model is not None else build_model(settings, phase="explain"),

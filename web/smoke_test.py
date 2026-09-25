@@ -26,8 +26,7 @@ import requests
 
 # Running a script directly puts the SCRIPT's directory on sys.path, not the
 # working directory -- so `web.server` is not importable from here without
-# this, even though it is from the repo root. `examples/solve_lab.py` does the
-# same thing for `labsagent`, for the same reason.
+# this, even though it is from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Windows consoles default to a legacy codepage, so a UTF-8 arrow or dash in a
@@ -52,12 +51,11 @@ def check(label: str, ok: bool, detail: str = "") -> bool:
 
 
 def briefing_probe() -> None:
-    """Does the agent ask about a gap that is genuinely there?
+    """Does the briefing stay quiet about things it must not ask?
 
-    Separate from the main run because it needs a manual that is *incomplete*.
-    The fixture lab is fully specified, so the correct answer for it is zero
-    questions -- which proves nothing. This one leaves the data source
-    undefined on purpose, and the only useful behaviour is to notice.
+    A manual with an undefined data source and an open library choice: both
+    used to draw a question. Data is now the pipeline's to ask about, and a
+    library is the solver's to choose, so the right answer is no question.
     """
     from labsagent.models import LabSpec, Task
     from labsagent.agent.build import build_model
@@ -106,11 +104,17 @@ def briefing_probe() -> None:
     print(f"    cover: layout={plan.layout!r} tagline={plan.tagline!r}")
     print(f"    cost: ${usage.cost_usd:.6f}")
 
+    # DATA IS NO LONGER THE MODEL'S QUESTION (2026-09-25). This probe used to
+    # REQUIRE a model-written "which dataset?" -- the question that, on real
+    # runs, got asked about data already on its way. The missing-link case is
+    # now decided by code (`pipeline.data_question`) and unit-tested; what is
+    # checked here is that the model no longer asks about data or preferences.
     check(
-        "noticed the missing dataset",
-        any("dat" in (q["label"] + q["reason"]).lower() for q in plan.questions),
+        "the model did not ask about data",
+        not any("dat" in (q["label"] + q["reason"]).lower() for q in plan.questions),
         f"{len(plan.questions)} question(s)",
     )
+    check("at most one question, and it blocks a task", len(plan.questions) <= 1)
     check("every question says why it matters", all(q["reason"] for q in plan.questions))
     check("chose a real cover layout", plan.layout in ("classic", "rule", "banner", "split"))
     check("wrote a tagline specific to the lab", 0 < len(plan.tagline) <= 160)
@@ -122,21 +126,10 @@ def main() -> int:
         print(f"no manual at {manual}")
         return 2
 
-    # The server is not allowed to touch labsagent.toml. That file is the
-    # CLI's cache of who you are, and the browser is a less trusted input --
-    # this test used to back it up and restore it, because an earlier version
-    # wrote the form's answers straight into it. Now the guarantee is
-    # stronger, so the test is too: snapshot it and assert it is byte
-    # identical afterwards.
-    profile_file = Path("labsagent.toml")
-    before = profile_file.read_bytes() if profile_file.exists() else None
-
     code = run(manual)
     briefing_probe()
 
-    after = profile_file.read_bytes() if profile_file.exists() else None
     print()
-    check("the run did not touch labsagent.toml", before == after)
 
     print(f"\n  {len(passed)} passed, {len(failed)} failed")
     if failed:
@@ -200,7 +193,9 @@ def run(manual: Path) -> None:
                 def answer() -> None:
                     resp = requests.post(
                         f"{BASE}/api/runs/{job_id}/answers",
-                        json={"answers": {"name": NAME, "cms_id": CMS}},
+                        # Every question is optional now: skipping is the
+                        # path worth proving, because it must not stall.
+                        json={"answers": {}},
                         timeout=30,
                     )
                     print(f"  >> answered: {resp.status_code}")
@@ -221,8 +216,28 @@ def run(manual: Path) -> None:
     check("run reached the done state", "done" in kinds)
 
     phases = [e["key"] for e in events if e.get("type") == "phase"]
-    check("phases announced in order", len(phases) >= 5, " -> ".join(phases))
-    check("answers were accepted", answers_sent.is_set())
+    check("phases announced in order", len(phases) >= 3, " -> ".join(phases))
+    check("any pause was answered", "needs_input" not in kinds or answers_sent.is_set())
+
+    # -- identity at PACKAGING: add it after the files exist ---------------
+    # A rebuild, no model call. Its artifact frames replace the first ones.
+    resp = requests.post(
+        f"{BASE}/api/runs/{job_id}/identity", json={"name": NAME, "cms_id": CMS}, timeout=30
+    )
+    check("identity accepted after the run", resp.status_code == 202, str(resp.status_code))
+    seen_done = False
+    with requests.get(f"{BASE}/api/runs/{job_id}/events", stream=True, timeout=deadline) as again:
+        for raw in again.iter_lines(decode_unicode=True):
+            if not raw or not raw.startswith("data: "):
+                continue
+            payload = json.loads(raw[6:])
+            if payload.get("seq", 0) <= len(events):
+                continue
+            events.append(payload)
+            if payload.get("type") in ("done", "failed"):
+                seen_done = payload.get("type") == "done"
+                break
+    check("the files were rebuilt with the identity", seen_done)
 
     # -- the pause must come BEFORE the code ------------------------------
     # This is the whole point of moving it. The old interface asked after
@@ -241,8 +256,8 @@ def run(manual: Path) -> None:
         (i for i, e in enumerate(events) if e.get("type") == "needs_input"), None
     )
     check(
-        "questions were asked before any task was solved",
-        pause_at is not None and first_task is not None and pause_at < first_task,
+        "any question came before any task was solved",
+        pause_at is None or (first_task is not None and pause_at < first_task),
         f"pause at frame {pause_at}, first task at frame {first_task}",
     )
 
@@ -255,7 +270,10 @@ def run(manual: Path) -> None:
     # that it invents one, which is the failure mode, not the feature.
     # `briefing_probe` below is what actually exercises the mechanism, against
     # a manual with a real gap in it.
-    check("the pause still happened", "needs_input" in kinds)
+    # IDENTITY IS NO LONGER ASKED UP FRONT, and a run with nothing genuine to
+    # ask must not pause at all (2026-09-24).
+    check("no identity question up front", not ({"name", "cms_id"} & set(keys)))
+    check("no pause without a genuine question", "needs_input" not in kinds or bool(keys))
     check(
         "no question lacks a reason",
         all(q.get("reason") for q in asked.get("questions", []) if q.get("reason") is not None),
@@ -266,7 +284,7 @@ def run(manual: Path) -> None:
     print(f"\n  narration ({len(narration)}):")
     for n in narration[:4]:
         print(f"    {n['text'][:88]}")
-    check("the agent narrates what it is doing", len(narration) > 0, f"{len(narration)} lines")
+    check("progress is said in a few plain lines", 0 < len(narration) <= 6, f"{len(narration)} lines")
 
     artifacts = {e["key"]: e for e in events if e.get("type") == "artifact"}
     print(f"\n  artifacts: {sorted(artifacts)}")
@@ -347,9 +365,8 @@ def run(manual: Path) -> None:
         print(f"    {t}")
 
     check("tool activity streamed", len(activity) > 0, f"{len(activity)} frames")
-    check("writes were reported", any("writing" in t for t in texts))
-    check("runs were reported", any("running" in t for t in texts))
-    check("exit codes were reported", any(t.startswith("exit") for t in texts))
+    check("progress states are plain words", any(t in ("Writing the program", "Trying it out") for t in texts))
+    check("no filenames or exit codes in progress", not any(".py" in t or t.startswith("exit") for t in texts))
     check(
         "activity is attributed to a task",
         all(a.get("task_id") for a in activity),
@@ -393,9 +410,7 @@ def run(manual: Path) -> None:
                 if seen_revision:
                     revision_frames.append(payload)
 
-                if payload.get("type") == "narration" and payload.get("text", "").startswith(
-                    "Re-solving"
-                ):
+                if payload.get("type") == "followup":
                     seen_revision = True
                 elif payload.get("type") in ("done", "failed") and seen_revision:
                     break
@@ -414,7 +429,7 @@ def run(manual: Path) -> None:
         )
         check(
             "the revision narrated itself",
-            any(e.get("type") == "narration" and "Re-solving" in e.get("text", "") for e in rev_events),
+            any(e.get("type") == "followup" and e.get("action") == "change" for e in rev_events),
         )
         check(
             "the revision rebuilt the report",

@@ -94,6 +94,7 @@ export default function RunPanel({
   onSuggest,
   canRevise,
   celebrate = false,
+  onIdentity = null,
 }) {
   const run = entry.state
   const parked = waiting && !run.summary && !run.error && !entry.superseded
@@ -224,6 +225,8 @@ export default function RunPanel({
             </p>
           )}
 
+          {onIdentity && run.artifacts.length > 0 && <IdentityForm onSubmit={onIdentity} />}
+
           {emitFailureLines(run.emitFailures).length > 0 && (
             <ul className="emit-failures">
               {emitFailureLines(run.emitFailures).map((f) => (
@@ -259,6 +262,43 @@ export default function RunPanel({
   )
 }
 
+/** Optional, after the files exist. Your name only ever reached the cover and
+ *  the filenames, so asking for it before any code was written held up the run
+ *  for nothing. Submitting rebuilds the files; no model is called. */
+function IdentityForm({ onSubmit }) {
+  const [values, setValues] = useState({ name: '', cms_id: '' })
+  const [hidden, setHidden] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  if (hidden) return null
+  const set = (key) => (e) => setValues((v) => ({ ...v, [key]: e.target.value }))
+  async function submit(e) {
+    e.preventDefault()
+    if (!values.name.trim() && !values.cms_id.trim()) return
+    setBusy(true)
+    const failure = await onSubmit(values)
+    setBusy(false)
+    if (failure) setError(failure)
+    else setHidden(true)
+  }
+  return (
+    <form className="identity-form" onSubmit={submit} aria-label="Add your details">
+      <p className="identity-title">Put your name on it? <span className="field-optional">optional</span></p>
+      <div className="identity-fields">
+        <input aria-label="Your name" placeholder="Your name" value={values.name} onChange={set('name')} />
+        <input aria-label="CMS ID" placeholder="CMS ID" value={values.cms_id} onChange={set('cms_id')} />
+        <button type="submit" className="btn btn-secondary" disabled={busy}>
+          {busy ? 'Updating…' : 'Add to my files'}
+        </button>
+        <button type="button" className="btn btn-quiet" onClick={() => setHidden(true)}>
+          Not now
+        </button>
+      </div>
+      {error && <p className="field-err" role="alert">{error}</p>}
+    </form>
+  )
+}
+
 export function StageRail({ stages, draw = true }) {
   return (
     <ol className="stages" aria-label="Progress">
@@ -277,9 +317,25 @@ export function StageRail({ stages, draw = true }) {
   )
 }
 
+/** What a task row says. Plain words only: the raw reason ("no successful run
+ *  of task3.py (ran: probe.py)") is kept for the hover title, never the row. */
 function taskSide(task) {
+  if (task.status === 'running' && task.error && task.attempts > 1) {
+    return { text: 'Hit a snag — trying again', tone: 'live', detail: task.error }
+  }
   if (task.status === 'running' && task.activity) return { text: task.activity, tone: 'live' }
-  if (task.status === 'failed' && task.error) return { text: task.error, tone: 'error' }
+  // STOPPED IS NOT FAILED. The task did not lose; something it needed was not
+  // here. The full sentence is in the closing message and on hover -- the row
+  // has a fixed height, so it carries the short form.
+  if (task.status === 'failed' && task.blocker) {
+    return { text: 'Stopped — needs something that isn’t here', tone: 'error', detail: task.blocker }
+  }
+  if (task.status === 'failed') {
+    return { text: 'Couldn’t get this one working', tone: 'error', detail: task.error }
+  }
+  if (task.status === 'passed' && task.gap) {
+    return { text: 'Done, except one part', tone: 'live', detail: task.gap }
+  }
   return null
 }
 
@@ -300,10 +356,6 @@ function TaskList({ run }) {
         const task = run.tasks[id]
         if (!task) return null
         const side = taskSide(task)
-        const attempts =
-          task.maxAttempts > 0 && (task.status === 'running' || task.attempts > 1)
-            ? `try ${task.attempts}/${task.maxAttempts}`
-            : null
         return (
           <li className={`task is-${task.status}`} key={id} style={{ '--i': i }}>
             <StatusMark status={task.status} draw={task.status === 'passed'} />
@@ -315,12 +367,11 @@ function TaskList({ run }) {
                 // Keyed on the text so a new line cross-fades in rather than
                 // swapping hard -- and the slot has a fixed height, so it never
                 // reflows the list under someone reading it.
-                <span className={`task-activity tone-${side.tone}`} key={side.text} title={side.text}>
+                <span className={`task-activity tone-${side.tone}`} key={side.text} title={side.detail || side.text}>
                   {side.text}
                 </span>
               )}
             </span>
-            {attempts && <span className="task-meta num">{attempts}</span>}
             <span className="sr-only">, {STATUS_WORDS[task.status] ?? task.status}</span>
           </li>
         )

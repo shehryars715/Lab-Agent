@@ -1,8 +1,4 @@
-"""Settings. Deliberately minimal -- only what Phase 1 needs.
-
-Expanded in Phase 3 when the run store and retry policy arrive. Building the
-full labsagent.toml schema now would be speculative.
-"""
+"""Settings, read from `.env`. Every knob the harness has lives here."""
 
 from __future__ import annotations
 
@@ -42,7 +38,10 @@ class Settings(BaseSettings):
     model_name: str = "deepseek-flash"
     temperature: float = 0.0
     timeout_s: int = 30
-    max_retries_per_task: int = 3
+    # Two, not three: an honest "blocked" is never retried at all, and a third
+    # fresh-context attempt at the same failure was the costliest way to learn
+    # nothing (the `impossible` eval spent 12 calls reaching the same wall).
+    max_retries_per_task: int = 2
 
     # CIRCUIT BREAKERS, NOT TARGETS. Healthy labs run 5-6 model calls and about
     # $0.0007 per task, so these sit roughly an order of magnitude above normal
@@ -58,6 +57,12 @@ class Settings(BaseSettings):
     max_turns_per_attempt: int = 30
     max_cost_per_task_usd: float = 0.02
     max_cost_per_run_usd: float = 0.15
+
+    # A BASIC task's first attempt (ingest labels it) runs without thinking and
+    # under a tighter turn cap -- write, run, record is 3 turns, so 12 leaves
+    # room for a few fixes and not for polishing. A failure retries as standard.
+    basic_max_turns: int = 12
+    basic_reasoning_effort: str | None = "none"
 
     # A task's data products are copied into the workspaces of the tasks that
     # reference it. Capped because the point is to stop later tasks hunting for

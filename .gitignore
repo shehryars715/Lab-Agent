@@ -71,3 +71,7 @@ Thumbs.db
 # already excludes one of them -- keeping the rest would be half a fixture set.
 web/fixtures/inputs/
 web/fixtures/matrix_out/
+
+# Docs stay local -- only the README is published
+*.md
+!/README.md

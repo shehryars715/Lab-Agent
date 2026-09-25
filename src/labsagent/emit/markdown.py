@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from labsagent.blocks import blocks_for
+from labsagent.present import arrange
 from labsagent.emit import EmitContext, register
 
 
@@ -39,7 +39,7 @@ def render(ctx: EmitContext) -> str:
         task = outcome.task
         out += [f"## {task.title or task.id}", "", task.statement.strip(), ""]
 
-        for block in blocks_for(outcome):
+        for block in arrange(outcome, ctx.style):
             if block.kind == "code":
                 out += [f"```{block.lang}", block.text.rstrip(), "```", ""]
             elif block.kind == "output":
@@ -50,6 +50,8 @@ def render(ctx: EmitContext) -> str:
             elif block.kind == "error":
                 out += [f"> **Not completed.** {block.text.strip()}", ""]
             elif block.kind == "prose":
+                if block.title:
+                    out += [f"**{block.title.strip()}**", ""]
                 out += [block.text.strip(), ""]
 
     return "\n".join(out).rstrip() + "\n"

@@ -78,7 +78,16 @@ function currentRun(state) {
  */
 function patchRun(state, patch, extra = {}) {
   const index = state.entries.findIndex((e) => e.kind === 'run' && !e.state.finishedAt)
-  const at = index === -1 ? state.entries.length - 1 : index
+  // Nothing in flight: a rebuild after the finish (your name added, a question
+  // answered) updates the LAST run in place rather than being dropped.
+  let last = -1
+  for (let i = state.entries.length - 1; i >= 0; i -= 1) {
+    if (state.entries[i].kind === 'run') {
+      last = i
+      break
+    }
+  }
+  const at = index === -1 ? last : index
   if (at < 0 || state.entries[at]?.kind !== 'run') return state
   const entry = state.entries[at]
   const next = {
@@ -152,7 +161,9 @@ function applyCoreEvent(state, e) {
           attempts: e.attempts,
           cost: e.cost_usd,
           activity: null,
-          error: e.status === 'passed' ? null : run.tasks[e.task_id]?.error,
+          error: e.status === 'passed' ? null : e.blocker || run.tasks[e.task_id]?.error,
+          blocker: e.blocker || null,
+          gap: e.gap || null,
         }),
       }))
 
@@ -219,6 +230,33 @@ export function reduce(state, frame) {
   switch (frame.type) {
     case 'phase':
       return patchRun(base, { phase: frame.key, phaseLabel: frame.label })
+
+    // What kind of follow-up this turned out to be. A QUESTION changes no
+    // files, so it must not replace the result on screen: the empty run entry
+    // the message opened is removed and the previous run stands.
+    case 'followup': {
+      if (frame.action !== 'answer') {
+        return patchRun(base, { followup: { action: frame.action, skip: frame.skip ?? [] } })
+      }
+      const entries = base.entries.slice()
+      let opened = -1
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        if (entries[i].kind === 'run') {
+          opened = i
+          break
+        }
+      }
+      if (opened !== -1 && !entries[opened].state.summary && !entries[opened].state.error) {
+        entries.splice(opened, 1)
+      }
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        if (entries[i].kind === 'run') {
+          entries[i] = { ...entries[i], superseded: false }
+          break
+        }
+      }
+      return { ...base, entries }
+    }
 
     case 'narration':
       return push(base, {

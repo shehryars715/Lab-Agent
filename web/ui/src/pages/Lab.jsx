@@ -4,8 +4,10 @@ import {
   formatUsd,
   historyDownloadUrl,
   loadHistoryRun,
+  loadIdentity,
   reviseRun,
   saveIdentity,
+  setIdentity,
   submitAnswers,
 } from '../api'
 import ArtifactList from '../components/ArtifactList'
@@ -99,7 +101,10 @@ function statusOf(state) {
 }
 
 function LiveLab({ lab, title, announce, onRetry, onEdit }) {
-  const { state, lost, dropped, beginRevision } = useRunStream(lab.jobId, { revisions: lab.revisions })
+  const { state, lost, dropped, beginRevision, reconnect } = useRunStream(lab.jobId, {
+    revisions: lab.revisions,
+  })
+  const [known, setKnown] = useState(() => Boolean(loadIdentity().name))
   const [submitting, setSubmitting] = useState(false)
   const [answerError, setAnswerError] = useState(null)
   const scrollerRef = useRef(null)
@@ -188,8 +193,10 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
       setSubmitting(true)
       setAnswerError(null)
       try {
+        // No saveIdentity here: the pause no longer asks who you are, so these
+        // values are answers about the lab -- and saving them REPLACED the
+        // stored name and CMS number with {datasets: "..."}.
         await submitAnswers(lab.jobId, values)
-        saveIdentity(values)
       } catch (e) {
         setAnswerError(
           /not waiting/i.test(e.message)
@@ -229,6 +236,23 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
 
   const suggest = useCallback((text) => composerRef.current?.fill(text), [])
 
+  // Your details go on the files AFTER they exist: a rebuild, no model call,
+  // and remembered in this browser so the next lab never asks.
+  const addIdentity = useCallback(
+    async (values) => {
+      saveIdentity({ ...loadIdentity(), ...values })
+      setKnown(true)
+      try {
+        await setIdentity(lab.jobId, values)
+        reconnect()
+        return null
+      } catch (e) {
+        return `Couldn’t update the files (${e.message}). Your details are saved for next time.`
+      }
+    },
+    [lab.jobId, reconnect],
+  )
+
   // Pair each run with the question asked in its stretch, and number the runs.
   let runIndex = -1
   let stretchQuestion = null
@@ -244,7 +268,7 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
         ? { disabled: true, placeholder: 'Answer the quick check above first' }
         : !run?.summary
           ? { disabled: true, placeholder: 'I’m on it — changes open up when this run finishes' }
-          : { disabled: false, placeholder: 'Ask for a change — “redo task 3 with pandas”' }
+          : { disabled: false, placeholder: 'Ask a question, or for a change — “why does task 3 fail?”' }
 
   return (
     <div className="lab">
@@ -309,6 +333,7 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
                 onSuggest={suggest}
                 canRevise={canRevise && entry.id === lastRunId}
                 celebrate={entry.id === celebrateId}
+                onIdentity={canRevise && entry.id === lastRunId && !known ? addIdentity : null}
               />
             )
           })}
@@ -342,7 +367,7 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
             placeholder={composerState.placeholder}
             note={
               canRevise
-                ? 'I redo only the tasks your change touches, so it costs a fraction of a run.'
+                ? 'Questions get an answer, not a re-run. Changes redo only what they touch.'
                 : ' '
             }
             onSubmit={revise}

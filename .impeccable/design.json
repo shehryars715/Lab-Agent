@@ -1,0 +1,1022 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-23T19:30:57.334205+00:00",
+  "title": "Design System: Labs-Agent",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Midnight Plum Ground",
+        "canonical": "#141114",
+        "oklch": "oklch(18.3% 0.008 325.9)",
+        "tonalRamp": [
+          "#0d0a0d",
+          "#272427",
+          "#444144",
+          "#646064",
+          "#858185",
+          "#a8a3a8",
+          "#ccc7cc",
+          "#f1edf1"
+        ]
+      },
+      "bg-raised": {
+        "role": "neutral",
+        "displayName": "Raised Plum",
+        "canonical": "#1a161a",
+        "oklch": "oklch(20.7% 0.010 325.9)",
+        "tonalRamp": [
+          "#0d0a0d",
+          "#282328",
+          "#454045",
+          "#645f64",
+          "#868086",
+          "#a8a3a8",
+          "#cdc7cd",
+          "#f2ecf2"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Panel Plum",
+        "canonical": "#211c20",
+        "oklch": "oklch(23.4% 0.011 332.7)",
+        "tonalRamp": [
+          "#0e0a0d",
+          "#282327",
+          "#464044",
+          "#655f64",
+          "#868085",
+          "#a9a3a8",
+          "#cec7cc",
+          "#f3ecf2"
+        ]
+      },
+      "surface-2": {
+        "role": "neutral",
+        "displayName": "Well Plum",
+        "canonical": "#2a2429",
+        "oklch": "oklch(26.9% 0.013 331.4)",
+        "tonalRamp": [
+          "#0e090e",
+          "#292328",
+          "#464045",
+          "#665f64",
+          "#878086",
+          "#aaa2a9",
+          "#cec6cd",
+          "#f4ecf2"
+        ]
+      },
+      "surface-3": {
+        "role": "neutral",
+        "displayName": "Pressed Plum",
+        "canonical": "#352d33",
+        "oklch": "oklch(30.8% 0.016 334.7)",
+        "tonalRamp": [
+          "#0f090e",
+          "#2a2228",
+          "#473f45",
+          "#675e65",
+          "#897f86",
+          "#aca2a9",
+          "#d0c6cd",
+          "#f5ebf3"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#2e282d",
+        "oklch": "oklch(28.5% 0.012 331.4)",
+        "tonalRamp": [
+          "#0e090e",
+          "#292328",
+          "#464045",
+          "#665f64",
+          "#878086",
+          "#aaa2a9",
+          "#cec6cd",
+          "#f4ecf2"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong Hairline",
+        "canonical": "#463d44",
+        "oklch": "oklch(37.2% 0.017 333.5)",
+        "tonalRamp": [
+          "#10090e",
+          "#2a2229",
+          "#483f46",
+          "#675e65",
+          "#897f87",
+          "#aca1a9",
+          "#d0c5ce",
+          "#f6eaf3"
+        ]
+      },
+      "line-control": {
+        "role": "neutral",
+        "displayName": "Control Line",
+        "canonical": "#7a6e75",
+        "oklch": "oklch(55.2% 0.018 341.8)",
+        "tonalRamp": [
+          "#11080d",
+          "#2b2228",
+          "#493e45",
+          "#695d64",
+          "#8b7e85",
+          "#aea1a8",
+          "#d2c5cc",
+          "#f8eaf2"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#f4eeea",
+        "oklch": "oklch(95.3% 0.008 56.3)",
+        "tonalRamp": [
+          "#0e0a08",
+          "#282421",
+          "#46413e",
+          "#65605d",
+          "#86817e",
+          "#a9a4a0",
+          "#cec8c4",
+          "#f3ede9"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink Secondary",
+        "canonical": "#c7bdbb",
+        "oklch": "oklch(80.6% 0.012 31.1)",
+        "tonalRamp": [
+          "#100908",
+          "#2a2322",
+          "#48403e",
+          "#685f5d",
+          "#89807e",
+          "#aca2a1",
+          "#d1c6c4",
+          "#f6ecea"
+        ]
+      },
+      "ink-3": {
+        "role": "neutral",
+        "displayName": "Ink Tertiary",
+        "canonical": "#aa9f9e",
+        "oklch": "oklch(71.2% 0.013 23.8)",
+        "tonalRamp": [
+          "#100909",
+          "#2b2322",
+          "#493f3f",
+          "#685e5e",
+          "#8a7f7f",
+          "#ada2a1",
+          "#d2c6c5",
+          "#f7ebea"
+        ]
+      },
+      "ink-ghost": {
+        "role": "neutral",
+        "displayName": "Ghost Ink",
+        "canonical": "#877b82",
+        "oklch": "oklch(59.6% 0.018 341.7)",
+        "tonalRamp": [
+          "#10080d",
+          "#2b2228",
+          "#493e45",
+          "#695d64",
+          "#8a7e85",
+          "#ada1a8",
+          "#d2c5cc",
+          "#f8eaf2"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Electric Coral",
+        "canonical": "#ff6a4d",
+        "oklch": "oklch(70.6% 0.188 32.9)",
+        "tonalRamp": [
+          "#220000",
+          "#4c0300",
+          "#7a1805",
+          "#ae290e",
+          "#dc492d",
+          "#fe755a",
+          "#fdb4a4",
+          "#ffe9e4"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Electric Coral Hover",
+        "canonical": "#ff8166",
+        "oklch": "oklch(74.1% 0.159 33.4)",
+        "tonalRamp": [
+          "#220000",
+          "#490900",
+          "#7a1803",
+          "#a83219",
+          "#d0573d",
+          "#f87b60",
+          "#fdb4a4",
+          "#ffe9e4"
+        ]
+      },
+      "accent-mark": {
+        "role": "primary",
+        "displayName": "Coral Mark",
+        "canonical": "#ff6a4d",
+        "oklch": "oklch(70.6% 0.188 32.9)",
+        "tonalRamp": [
+          "#220000",
+          "#4c0300",
+          "#7a1805",
+          "#ae290e",
+          "#dc492d",
+          "#fe755a",
+          "#fdb4a4",
+          "#ffe9e4"
+        ]
+      },
+      "accent-ink": {
+        "role": "primary",
+        "displayName": "Coral Ink",
+        "canonical": "#ff7d61",
+        "oklch": "oklch(73.4% 0.164 33.5)",
+        "tonalRamp": [
+          "#210000",
+          "#4a0700",
+          "#7b1500",
+          "#aa2f14",
+          "#d2543a",
+          "#fa795d",
+          "#ffb4a2",
+          "#fee9e4"
+        ]
+      },
+      "on-accent": {
+        "role": "primary",
+        "displayName": "Coal Ember",
+        "canonical": "#1d0c07",
+        "oklch": "oklch(17.9% 0.032 38.1)",
+        "tonalRamp": [
+          "#160603",
+          "#33201a",
+          "#513c36",
+          "#725b54",
+          "#947c75",
+          "#b89f97",
+          "#dcc3bb",
+          "#fee9e3"
+        ]
+      },
+      "accent-soft": {
+        "role": "primary",
+        "displayName": "Coral Wash",
+        "canonical": "rgb(255 106 77 / 0.13)",
+        "oklch": "oklch(70.6% 0.188 32.9)",
+        "tonalRamp": [
+          "#220000",
+          "#4c0300",
+          "#7a1805",
+          "#ae290e",
+          "#dc492d",
+          "#fe755a",
+          "#fdb4a4",
+          "#ffe9e4"
+        ]
+      },
+      "accent-line": {
+        "role": "primary",
+        "displayName": "Coral Edge",
+        "canonical": "rgb(255 106 77 / 0.5)",
+        "oklch": "oklch(70.6% 0.188 32.9)",
+        "tonalRamp": [
+          "#220000",
+          "#4c0300",
+          "#7a1805",
+          "#ae290e",
+          "#dc492d",
+          "#fe755a",
+          "#fdb4a4",
+          "#ffe9e4"
+        ]
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "Failure Rose",
+        "canonical": "#f27092",
+        "oklch": "oklch(70.9% 0.162 5.7)",
+        "tonalRamp": [
+          "#200007",
+          "#4b001d",
+          "#7c0336",
+          "#a72a53",
+          "#ce5074",
+          "#f77496",
+          "#fdb1c0",
+          "#ffe8ec"
+        ]
+      },
+      "danger-soft": {
+        "role": "secondary",
+        "displayName": "Rose Wash",
+        "canonical": "rgb(242 112 146 / 0.12)",
+        "oklch": "oklch(70.9% 0.162 5.7)",
+        "tonalRamp": [
+          "#200007",
+          "#4b001d",
+          "#7c0336",
+          "#a72a53",
+          "#ce5074",
+          "#f77496",
+          "#fdb1c0",
+          "#ffe8ec"
+        ]
+      },
+      "danger-line": {
+        "role": "secondary",
+        "displayName": "Rose Edge",
+        "canonical": "rgb(242 112 146 / 0.45)",
+        "oklch": "oklch(70.9% 0.162 5.7)",
+        "tonalRamp": [
+          "#200007",
+          "#4b001d",
+          "#7c0336",
+          "#a72a53",
+          "#ce5074",
+          "#f77496",
+          "#fdb1c0",
+          "#ffe8ec"
+        ]
+      },
+      "code-string": {
+        "role": "tertiary",
+        "displayName": "Code String Sand",
+        "canonical": "#e2bb8a",
+        "oklch": "oklch(81.5% 0.078 72.7)",
+        "tonalRamp": [
+          "#170700",
+          "#352000",
+          "#5b3a04",
+          "#7c5a2a",
+          "#9f7b4c",
+          "#c39e6d",
+          "#e9c290",
+          "#feebd4"
+        ]
+      },
+      "code-number": {
+        "role": "tertiary",
+        "displayName": "Code Number Mauve",
+        "canonical": "#d9a6c4",
+        "oklch": "oklch(78.1% 0.072 342.8)",
+        "tonalRamp": [
+          "#1d0013",
+          "#3c142e",
+          "#5c324c",
+          "#7e516c",
+          "#a1718e",
+          "#c594b1",
+          "#ebb7d6",
+          "#fee7f4"
+        ]
+      },
+      "plot-ground": {
+        "role": "neutral",
+        "displayName": "Plot Paper",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "focus": {
+        "role": "primary",
+        "displayName": "Focus Coral",
+        "canonical": "#ff8a70",
+        "oklch": "oklch(75.6% 0.148 33.6)",
+        "tonalRamp": [
+          "#220000",
+          "#490900",
+          "#7a1801",
+          "#a43821",
+          "#cb5b43",
+          "#f37f65",
+          "#feb4a3",
+          "#fee9e4"
+        ]
+      },
+      "bg-light": {
+        "role": "neutral",
+        "displayName": "Paper Ground (light)",
+        "canonical": "#fbf8f6",
+        "oklch": "oklch(98.1% 0.004 56.4)",
+        "tonalRamp": [
+          "#0d0b09",
+          "#272523",
+          "#444140",
+          "#63615f",
+          "#848280",
+          "#a7a4a2",
+          "#cbc8c6",
+          "#f1eeec"
+        ]
+      },
+      "bg-raised-light": {
+        "role": "neutral",
+        "displayName": "Raised Paper (light)",
+        "canonical": "#f4efec",
+        "oklch": "oklch(95.5% 0.007 53.4)",
+        "tonalRamp": [
+          "#0e0a09",
+          "#282422",
+          "#45413f",
+          "#64605e",
+          "#86817f",
+          "#a9a4a1",
+          "#cdc8c5",
+          "#f2edea"
+        ]
+      },
+      "surface-light": {
+        "role": "neutral",
+        "displayName": "Panel White (light)",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "surface-2-light": {
+        "role": "neutral",
+        "displayName": "Well Paper (light)",
+        "canonical": "#f2ece9",
+        "oklch": "oklch(94.7% 0.008 48.7)",
+        "tonalRamp": [
+          "#0e0a08",
+          "#282422",
+          "#46413e",
+          "#65605d",
+          "#86817e",
+          "#a9a4a1",
+          "#cec8c5",
+          "#f3edea"
+        ]
+      },
+      "surface-3-light": {
+        "role": "neutral",
+        "displayName": "Pressed Paper (light)",
+        "canonical": "#e8e0dc",
+        "oklch": "oklch(91.2% 0.010 48.6)",
+        "tonalRamp": [
+          "#0f0a08",
+          "#292421",
+          "#47403d",
+          "#66605c",
+          "#88817d",
+          "#aba39f",
+          "#cfc7c3",
+          "#f5ede9"
+        ]
+      },
+      "line-light": {
+        "role": "neutral",
+        "displayName": "Hairline (light)",
+        "canonical": "#e7dfdb",
+        "oklch": "oklch(90.9% 0.010 48.6)",
+        "tonalRamp": [
+          "#0f0a08",
+          "#292421",
+          "#47403d",
+          "#66605c",
+          "#88817d",
+          "#aba39f",
+          "#cfc7c3",
+          "#f5ede9"
+        ]
+      },
+      "line-strong-light": {
+        "role": "neutral",
+        "displayName": "Strong Hairline (light)",
+        "canonical": "#d1c6c2",
+        "oklch": "oklch(83.4% 0.014 41.2)",
+        "tonalRamp": [
+          "#100907",
+          "#2b2320",
+          "#49403c",
+          "#685f5b",
+          "#8a807c",
+          "#ada29f",
+          "#d1c6c2",
+          "#f7ece8"
+        ]
+      },
+      "line-control-light": {
+        "role": "neutral",
+        "displayName": "Control Line (light)",
+        "canonical": "#8f8380",
+        "oklch": "oklch(62.0% 0.015 34.3)",
+        "tonalRamp": [
+          "#110907",
+          "#2c2220",
+          "#4a3f3d",
+          "#6a5e5b",
+          "#8b7f7c",
+          "#aea29f",
+          "#d3c6c3",
+          "#f9ebe8"
+        ]
+      },
+      "ink-light": {
+        "role": "neutral",
+        "displayName": "Ink (light)",
+        "canonical": "#1f1a1d",
+        "oklch": "oklch(22.5% 0.010 341.2)",
+        "tonalRamp": [
+          "#0e0a0c",
+          "#282326",
+          "#464043",
+          "#655f63",
+          "#878084",
+          "#a9a3a7",
+          "#cec7cb",
+          "#f3ecf0"
+        ]
+      },
+      "ink-2-light": {
+        "role": "neutral",
+        "displayName": "Ink Secondary (light)",
+        "canonical": "#54494d",
+        "oklch": "oklch(41.8% 0.016 353.8)",
+        "tonalRamp": [
+          "#11080c",
+          "#2c2226",
+          "#493f43",
+          "#695e62",
+          "#8b7f83",
+          "#aea1a6",
+          "#d2c5ca",
+          "#f8eaef"
+        ]
+      },
+      "ink-3-light": {
+        "role": "neutral",
+        "displayName": "Ink Tertiary (light)",
+        "canonical": "#65595b",
+        "oklch": "oklch(47.6% 0.016 6.3)",
+        "tonalRamp": [
+          "#11080a",
+          "#2c2224",
+          "#4a3f41",
+          "#6a5e60",
+          "#8b7f81",
+          "#afa1a3",
+          "#d3c5c7",
+          "#f9eaed"
+        ]
+      },
+      "ink-ghost-light": {
+        "role": "neutral",
+        "displayName": "Ghost Ink (light)",
+        "canonical": "#827673",
+        "oklch": "oklch(57.6% 0.016 34.3)",
+        "tonalRamp": [
+          "#110907",
+          "#2c2220",
+          "#4a3f3d",
+          "#6a5e5b",
+          "#8b7f7c",
+          "#afa29f",
+          "#d3c6c2",
+          "#f9ebe8"
+        ]
+      },
+      "accent-hover-light": {
+        "role": "primary",
+        "displayName": "Electric Coral Hover (light)",
+        "canonical": "#ff5634",
+        "oklch": "oklch(67.9% 0.211 33.2)",
+        "tonalRamp": [
+          "#210000",
+          "#4a0700",
+          "#7b1500",
+          "#b02503",
+          "#e53b16",
+          "#fa795e",
+          "#ffb4a3",
+          "#fee9e4"
+        ]
+      },
+      "accent-mark-light": {
+        "role": "primary",
+        "displayName": "Coral Mark (light)",
+        "canonical": "#e04a2c",
+        "oklch": "oklch(61.5% 0.192 33.2)",
+        "tonalRamp": [
+          "#230000",
+          "#4a0800",
+          "#7a1702",
+          "#af2707",
+          "#dd4729",
+          "#f97a5f",
+          "#feb4a3",
+          "#fee9e4"
+        ]
+      },
+      "accent-ink-light": {
+        "role": "primary",
+        "displayName": "Coral Ink (light)",
+        "canonical": "#bf3419",
+        "oklch": "oklch(53.5% 0.180 32.8)",
+        "tonalRamp": [
+          "#220000",
+          "#4b0600",
+          "#7b1400",
+          "#b02404",
+          "#d84d32",
+          "#fb785e",
+          "#fbb5a6",
+          "#fee9e4"
+        ]
+      },
+      "danger-light": {
+        "role": "secondary",
+        "displayName": "Failure Rose (light)",
+        "canonical": "#c0264f",
+        "oklch": "oklch(53.3% 0.188 11.9)",
+        "tonalRamp": [
+          "#200004",
+          "#4b0017",
+          "#7d062d",
+          "#b21244",
+          "#da4264",
+          "#fd7088",
+          "#fdb1ba",
+          "#fee8ea"
+        ]
+      },
+      "code-string-light": {
+        "role": "tertiary",
+        "displayName": "Code String Sand (light)",
+        "canonical": "#875314",
+        "oklch": "oklch(49.1% 0.101 65.3)",
+        "tonalRamp": [
+          "#180600",
+          "#391e00",
+          "#603700",
+          "#885415",
+          "#ac753b",
+          "#d1985e",
+          "#f7bc82",
+          "#feebd9"
+        ]
+      },
+      "code-number-light": {
+        "role": "tertiary",
+        "displayName": "Code Number Mauve (light)",
+        "canonical": "#9a3b73",
+        "oklch": "oklch(50.1% 0.142 347.0)",
+        "tonalRamp": [
+          "#1f0011",
+          "#47012f",
+          "#721350",
+          "#973871",
+          "#bd5b93",
+          "#e47eb6",
+          "#feacd7",
+          "#fee7f2"
+        ]
+      },
+      "focus-light": {
+        "role": "primary",
+        "displayName": "Focus Coral (light)",
+        "canonical": "#d4472a",
+        "oklch": "oklch(59.2% 0.182 33.4)",
+        "tonalRamp": [
+          "#220000",
+          "#4b0600",
+          "#7c1300",
+          "#ac2d11",
+          "#d94c2f",
+          "#fc785c",
+          "#fcb5a5",
+          "#ffe9e4"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The home greeting, one per page; 2rem at 640px and below."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Lab heading and empty-state titles; 1.375rem on narrow screens."
+      },
+      "title-section": {
+        "displayName": "Section Title",
+        "purpose": "About section heads."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Run panel and briefing titles; the wordmark at 1rem."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Interface default text."
+      },
+      "body-prose": {
+        "displayName": "Prose",
+        "purpose": "Agent sentences, draft note, About, markdown preview at a 60ch measure."
+      },
+      "body-sm": {
+        "displayName": "Body Small",
+        "purpose": "Buttons, nav links, field labels, secondary copy."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Stage labels, chips, date-group titles, sentence case."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "File names, task activity, attempt counts, time and cost figures, with tabular figures."
+      },
+      "mono-2xs": {
+        "displayName": "Mono Small",
+        "purpose": "Stage details (\"2 tasks\", \"0/2\") and kbd hints."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-1",
+        "value": "0 1px 2px rgb(0 0 0 / 0.35)",
+        "light": "0 1px 2px rgb(60 30 30 / 0.08)",
+        "purpose": "Rest: the composer, the new-lab button, the selected segment of a segmented control or theme switch."
+      },
+      {
+        "name": "shadow-3",
+        "value": "0 24px 60px -20px rgb(0 0 0 / 0.75), 0 4px 14px -4px rgb(0 0 0 / 0.4)",
+        "light": "0 24px 60px -24px rgb(60 30 30 / 0.3), 0 4px 14px -4px rgb(60 30 30 / 0.1)",
+        "purpose": "Overlay: the open drawer and the toast only."
+      },
+      {
+        "name": "working-edge",
+        "value": "inset 0 1px 0 0 var(--accent-line)",
+        "purpose": "State, not depth: the top edge of a run panel while it works."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.25, 1, 0.5, 1)",
+        "purpose": "Quart out: every arrival and hover."
+      },
+      {
+        "name": "ease-in-out",
+        "value": "cubic-bezier(0.65, 0, 0.35, 1)",
+        "purpose": "State flips, theme cross-fade, shimmer sweeps."
+      },
+      {
+        "name": "ease-exit",
+        "value": "cubic-bezier(0.5, 0, 0.75, 0)",
+        "purpose": "Departures."
+      },
+      {
+        "name": "dur-fast",
+        "value": "160ms",
+        "purpose": "Hover, press, chip and colour changes."
+      },
+      {
+        "name": "dur-base",
+        "value": "240ms",
+        "purpose": "List rows, entries, disclosures, toasts, theme flip."
+      },
+      {
+        "name": "dur-slow",
+        "value": "380ms",
+        "purpose": "Page arrival, stage strike, connector fill, result rise, sidebar slide."
+      },
+      {
+        "name": "rise",
+        "value": "8px",
+        "purpose": "Arrival translate; half for soft enters; 0 under reduced motion."
+      },
+      {
+        "name": "stagger",
+        "value": "30ms",
+        "purpose": "Sidebar list stagger, index clamped at twelve rows; 0 under reduced motion."
+      },
+      {
+        "name": "tick-draw",
+        "value": "460ms ease-out, stroke-dashoffset 100 to 0",
+        "purpose": "Ticks that draw themselves; 70ms per stage, 45ms per task (capped at 8)."
+      },
+      {
+        "name": "arc-spin",
+        "value": "900ms linear infinite",
+        "purpose": "The running arc, the only mark that moves; stopped under reduced motion."
+      },
+      {
+        "name": "celebration",
+        "value": "badge-pop 480ms + eight coral sparks 700ms after 260ms",
+        "purpose": "Once, only for a finish watched live; removed under reduced motion; never on a lab read from disk."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "drawer",
+        "value": "899px",
+        "purpose": "At or below: sidebar becomes an off-canvas drawer with scrim and top bar."
+      },
+      {
+        "name": "narrow",
+        "value": "640px",
+        "purpose": "At or below: display 2rem, panels pad 16px, run head stacks, artifact actions wrap."
+      },
+      {
+        "name": "compact",
+        "value": "480px",
+        "purpose": "At or below: the stage rail tightens further."
+      },
+      {
+        "name": "coarse-pointer",
+        "value": "(pointer: coarse)",
+        "purpose": "Controls grow to 44px; row actions always visible on hover: none."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one coral-filled action per view: Download on the headline file, Looks good — go, Try again.",
+      "html": "<button class=\"ds-btn ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 4v11m0 0l-4-4m4 4l4-4M5 20h14\"/></svg>Download</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px; border-radius: 999px; border: 1px solid transparent; font-family: var(--font-text); font-size: 0.8125rem; font-weight: 520; cursor: pointer; transition: background-color 160ms cubic-bezier(0.25,1,0.5,1), border-color 160ms cubic-bezier(0.25,1,0.5,1), color 160ms cubic-bezier(0.25,1,0.5,1), transform 160ms cubic-bezier(0.25,1,0.5,1); } .ds-btn:active { transform: scale(0.97); } .ds-btn:focus-visible { outline: 2px solid var(--focus, #ff8a70); outline-offset: 2px; } .ds-btn-primary { background: var(--accent, #ff6a4d); color: var(--on-accent, #1d0c07); } .ds-btn-primary:hover { background: var(--accent-hover, #ff8166); }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Every other action: control-line outline on surface-2.",
+      "html": "<button class=\"ds-btn ds-btn-secondary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 4v11m0 0l-4-4m4 4l4-4M5 20h14\"/></svg>Download</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px; border-radius: 999px; border: 1px solid transparent; font-family: var(--font-text); font-size: 0.8125rem; font-weight: 520; cursor: pointer; transition: background-color 160ms cubic-bezier(0.25,1,0.5,1), border-color 160ms cubic-bezier(0.25,1,0.5,1), color 160ms cubic-bezier(0.25,1,0.5,1), transform 160ms cubic-bezier(0.25,1,0.5,1); } .ds-btn:active { transform: scale(0.97); } .ds-btn:focus-visible { outline: 2px solid var(--focus, #ff8a70); outline-offset: 2px; } .ds-btn-secondary { background: var(--surface-2, #2a2429); border-color: var(--line-control, #7a6e75); color: var(--ink, #f4eeea); } .ds-btn-secondary:hover { background: var(--surface-3, #352d33); }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Low-weight actions such as Preview; no fill at rest.",
+      "html": "<button class=\"ds-btn ds-btn-quiet\">Preview</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px; border-radius: 999px; border: 1px solid transparent; font-family: var(--font-text); font-size: 0.8125rem; font-weight: 520; cursor: pointer; transition: background-color 160ms cubic-bezier(0.25,1,0.5,1), border-color 160ms cubic-bezier(0.25,1,0.5,1), color 160ms cubic-bezier(0.25,1,0.5,1), transform 160ms cubic-bezier(0.25,1,0.5,1); } .ds-btn:active { transform: scale(0.97); } .ds-btn:focus-visible { outline: 2px solid var(--focus, #ff8a70); outline-offset: 2px; } .ds-btn-quiet { background: transparent; color: var(--ink-2, #c7bdbb); padding: 0 12px; } .ds-btn-quiet:hover { background: var(--surface-2, #2a2429); color: var(--ink, #f4eeea); }"
+    },
+    {
+      "name": "Format Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Toggle for Files to produce in the briefing only; selected fills its ring.",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip\" aria-pressed=\"true\">Word report</button><button class=\"ds-chip\" aria-pressed=\"false\">Notebook</button></div>",
+      "css": ".ds-chips { display: flex; gap: 6px; } .ds-chip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px 0 10px; border-radius: 999px; border: 1px solid var(--line-control, #7a6e75); background: transparent; color: var(--ink-2, #c7bdbb); font-family: var(--font-text); font-size: 0.75rem; font-weight: 520; cursor: pointer; transition: background-color 160ms cubic-bezier(0.25,1,0.5,1), border-color 160ms cubic-bezier(0.25,1,0.5,1), color 160ms cubic-bezier(0.25,1,0.5,1); } .ds-chip::before { content: ''; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; opacity: 0.7; } .ds-chip:hover { background: var(--surface-2, #2a2429); color: var(--ink, #f4eeea); } .ds-chip[aria-pressed='true'] { background: var(--accent-soft, rgb(255 106 77 / 0.13)); border-color: var(--accent, #ff6a4d); color: var(--accent-ink, #ff7d61); } .ds-chip[aria-pressed='true']::before { background: currentColor; opacity: 1; } .ds-chip:focus-visible { outline: 2px solid var(--focus, #ff8a70); outline-offset: 2px; }"
+    },
+    {
+      "name": "Composer",
+      "kind": "input",
+      "refersTo": "composer",
+      "description": "The calm centred composer: formats requested in words, coral send, focus ring outside the 22px box.",
+      "html": "<div class=\"ds-composer\"><textarea class=\"ds-composer-input\" rows=\"2\" placeholder=\"Drop in a lab or paste the tasks\"></textarea><div class=\"ds-composer-bar\"><button class=\"ds-send\" aria-label=\"Send\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 19V5m0 0l-6 6m6-6l6 6\"/></svg></button></div></div>",
+      "css": ".ds-composer { display: flex; flex-direction: column; width: 100%; max-width: 46rem; padding: 12px 12px 12px 16px; border-radius: 22px; background: var(--surface, #211c20); border: 1px solid var(--line-control, #7a6e75); box-shadow: var(--shadow-1, 0 1px 2px rgb(0 0 0 / 0.35)); transition: border-color 160ms cubic-bezier(0.25,1,0.5,1); } .ds-composer:focus-within { border-color: var(--accent, #ff6a4d); outline: 2px solid var(--focus, #ff8a70); outline-offset: 2px; } .ds-composer-input { resize: none; border: 0; outline: none; background: transparent; font-family: var(--font-text); font-size: 1rem; line-height: 1.5; color: var(--ink, #f4eeea); } .ds-composer-input::placeholder { color: var(--ink-3, #aa9f9e); } .ds-composer-bar { display: flex; margin-top: 8px; } .ds-send { display: grid; place-items: center; width: 36px; height: 36px; margin-left: auto; border: 0; border-radius: 999px; background: var(--accent, #ff6a4d); color: var(--on-accent, #1d0c07); cursor: pointer; transition: background-color 160ms cubic-bezier(0.25,1,0.5,1), transform 160ms cubic-bezier(0.25,1,0.5,1); } .ds-send:hover { background: var(--accent-hover, #ff8166); } .ds-send:active { transform: scale(0.92); } .ds-send:focus-visible { outline: 2px solid var(--focus, #ff8a70); outline-offset: 2px; }"
+    },
+    {
+      "name": "Briefing Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "A briefing question: label, the reason it is asked, and a 42px inset input.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">Your full name</span><span class=\"ds-field-reason\">Goes on the cover page.</span><input class=\"ds-field-input\" value=\"Test Student\"></label>",
+      "css": ".ds-field { display: flex; flex-direction: column; gap: 6px; font-family: var(--font-text); } .ds-field-label { font-size: 0.8125rem; font-weight: 600; color: var(--ink, #f4eeea); } .ds-field-reason { font-size: 0.8125rem; color: var(--ink-3, #aa9f9e); } .ds-field-input { height: 42px; padding: 0 12px; border-radius: 8px; background: var(--bg, #141114); border: 1px solid var(--line-control, #7a6e75); color: var(--ink, #f4eeea); font: inherit; font-size: 0.9375rem; transition: border-color 160ms cubic-bezier(0.25,1,0.5,1); } .ds-field-input:hover { border-color: var(--ink-ghost, #877b82); } .ds-field-input:focus-visible { border-color: var(--accent, #ff6a4d); outline: 2px solid var(--focus, #ff8a70); outline-offset: 1px; }"
+    },
+    {
+      "name": "Lab Link",
+      "kind": "nav",
+      "refersTo": "nav-lab-link",
+      "description": "Sidebar lab row: status mark plus title; current takes surface-3.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-lab-link\" aria-current=\"page\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" stroke=\"var(--ink-3)\" stroke-width=\"1.6\"/><path d=\"M5 8.3l2 2 4-4.4\" stroke=\"var(--ink)\" stroke-width=\"1.9\"/></svg><span>Lab 04 · Loops and lists</span></a><a class=\"ds-lab-link\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" stroke=\"var(--ink-3)\" stroke-width=\"1.6\"/><path d=\"M5 8.3l2 2 4-4.4\" stroke=\"var(--ink)\" stroke-width=\"1.9\"/></svg><span>Sum of Two Integers</span></a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; width: 268px; padding: 12px; background: var(--bg-raised, #1a161a); } .ds-lab-link { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px; border-radius: 8px; color: var(--ink-2, #c7bdbb); font-family: var(--font-text); font-size: 0.8125rem; text-decoration: none; transition: background-color 160ms cubic-bezier(0.25,1,0.5,1), color 160ms cubic-bezier(0.25,1,0.5,1); } .ds-lab-link:hover { background: var(--surface-2, #2a2429); color: var(--ink, #f4eeea); } .ds-lab-link[aria-current='page'] { background: var(--surface-3, #352d33); color: var(--ink, #f4eeea); font-weight: 520; } .ds-lab-link:focus-visible { outline: 2px solid var(--focus, #ff8a70); outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Marks",
+      "kind": "custom",
+      "refersTo": "status-mark",
+      "description": "The state vocabulary: pending, running, waiting, done, partial, failed, lost.",
+      "html": "<div class=\"ds-marks\"><svg class=\"ds-mark\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" class=\"g\" stroke-dasharray=\"2.4 2.6\"/></svg><svg class=\"ds-mark\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" class=\"g\"/><circle cx=\"8\" cy=\"8\" r=\"6.2\" class=\"arc\" pathLength=\"100\"/></svg><svg class=\"ds-mark\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" class=\"a\"/><circle cx=\"8\" cy=\"8\" r=\"2.3\" class=\"dot\"/></svg><svg class=\"ds-mark\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" class=\"d\"/><path d=\"M5 8.3l2 2 4-4.4\" class=\"t\" pathLength=\"100\"/></svg><svg class=\"ds-mark\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" class=\"d\"/><path d=\"M5 8.3l2 2 4-4.4\" class=\"t\"/><circle cx=\"13\" cy=\"3\" r=\"2.4\" class=\"notch\"/></svg><svg class=\"ds-mark\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" class=\"r\"/><path d=\"M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4\" class=\"x\"/></svg><svg class=\"ds-mark\" viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6.2\" class=\"g\"/><path d=\"M3.6 12.4 12.4 3.6\" class=\"s\"/></svg></div>",
+      "css": ".ds-marks { display: flex; gap: 14px; } .ds-mark { width: 20px; height: 20px; overflow: visible; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; } .ds-mark .g { stroke: var(--ink-ghost, #877b82); } .ds-mark .arc { stroke: var(--accent-mark, #ff6a4d); stroke-width: 1.9; stroke-dasharray: 30 100; transform-origin: 8px 8px; animation: ds-spin 900ms linear infinite; } .ds-mark .a { stroke: var(--accent-mark, #ff6a4d); } .ds-mark .dot { fill: var(--accent-mark, #ff6a4d); stroke: none; } .ds-mark .d { stroke: var(--ink-3, #aa9f9e); } .ds-mark .t { stroke: var(--ink, #f4eeea); stroke-width: 1.9; } .ds-mark .t[pathLength] { stroke-dasharray: 100; animation: ds-draw 460ms cubic-bezier(0.25,1,0.5,1) both; } .ds-mark .notch { fill: var(--danger, #f27092); stroke: var(--bg-raised, #1a161a); stroke-width: 1.5; } .ds-mark .r, .ds-mark .x { stroke: var(--danger, #f27092); } .ds-mark .s { stroke: var(--ink-3, #aa9f9e); } @keyframes ds-spin { to { transform: rotate(360deg); } } @keyframes ds-draw { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } } @media (prefers-reduced-motion: reduce) { .ds-mark .arc { animation: none; } .ds-mark .t[pathLength] { animation: none; stroke-dasharray: none; } }"
+    },
+    {
+      "name": "Run Panel",
+      "kind": "card",
+      "refersTo": "run-panel",
+      "description": "The working panel: flat surface, hairline, coral inset top edge while it works, stage rail inside.",
+      "html": "<section class=\"ds-run\"><h3 class=\"ds-run-title\">Solving your lab</h3><p class=\"ds-run-sub\">Writing task 2 of 3</p><div class=\"ds-rail\"><span class=\"ds-stage is-done\">Read<small>3 tasks</small></span><span class=\"ds-stage is-done\">Plan<small></small></span><span class=\"ds-stage is-done\">Brief<small></small></span><span class=\"ds-stage is-running\">Solve<small>1/3</small></span><span class=\"ds-stage\">Package<small></small></span></div></section>",
+      "css": ".ds-run { display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 16px; background: var(--surface, #211c20); border: 1px solid var(--line-strong, #463d44); box-shadow: inset 0 1px 0 0 var(--accent-line, rgb(255 106 77 / 0.5)); font-family: var(--font-text); color: var(--ink, #f4eeea); } .ds-run-title { margin: 0; font-family: var(--font-display); font-size: 1.125rem; font-weight: 600; line-height: 1.35; letter-spacing: -0.015em; } .ds-run-sub { margin: 0; font-size: 0.8125rem; color: var(--ink-3, #aa9f9e); } .ds-rail { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; border-top: 1px solid var(--line, #2e282d); padding-top: 12px; } .ds-stage { display: flex; flex-direction: column; font-size: 0.75rem; font-weight: 520; color: var(--ink-3, #aa9f9e); } .ds-stage small { font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 400; min-height: 1.35em; } .ds-stage.is-done { color: var(--ink-2, #c7bdbb); } .ds-stage.is-running { color: var(--ink, #f4eeea); font-weight: 600; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Run Panel",
+    "overview": "Every lab is a pipeline you can watch. The system borrows its grammar from CI pipelines and IDE run panels rather than from chat wrappers: five stages present as ghosts from the first frame, each struck forward when it goes live, each drawing its own tick when it completes, and the run folding into its result in place with every earlier step still legible. Progress is real state drawn as marks, never a spinner and a paragraph.\n\nThe world is a warm-tinted near-black in stepped surfaces, built for a student alone at a laptop after midnight with the lights off, with a light theme that is a full twin rather than a filter. Neutrals lean a few degrees toward the coral so every grey reads as one warm family. Electric coral is the only accent and is spent on edges, the active mark, and the single action that moves the lab forward. Rose, a different hue, carries failure and always travels with a mark. Density is product-UI calm: a 46rem working column, a 268px labs sidebar, content as the hero.\n\nRefused, as confirmed by the user: the generic SaaS dashboard look, purple-blue gradients, cards inside cards, heavy glassmorphism, bounce easing, emoji overload.",
+    "keyCharacteristics": [
+      "Warm near-black ground in five stepped layers; light theme re-picked role by role.",
+      "One accent, electric coral, on edges, the active mark and one primary action per view.",
+      "Every state is a drawn mark (ring, arc, dot, tick, notch, cross, strike), never colour alone.",
+      "Bricolage Grotesque for titles, Geist for reading, Geist Mono for files, figures and machine output.",
+      "One quart-out curve family, short rises, ticks that draw themselves, one celebration.",
+      "Flat panels divided by hairlines; shadow only where something floats."
+    ],
+    "rules": [
+      {
+        "name": "The Edge-Not-Fill Rule",
+        "body": "Coral lives on edges, the active mark and the one primary action in a view. A panel is never filled coral; a working run shows coral as a 1px inset top line and nowhere else.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Go Rule",
+        "body": "A view carries at most one coral-filled action: the thing that moves the lab forward. Every other action is secondary (control-line outline on surface-2) or quiet.",
+        "section": "colors"
+      },
+      {
+        "name": "The Twin Rule",
+        "body": "Light is not dark inverted. Every role is re-picked for its ground; coral splits into fill, mark and ink so each clears its own contrast bar in both themes (WCAG 2.2 AA: 4.5:1 text, 3:1 marks, controls and focus).",
+        "section": "colors"
+      },
+      {
+        "name": "The Control Line Rule",
+        "body": "A control's boundary is line-control, always. line-strong is decoration; a control drawn with it fails 3:1.",
+        "section": "colors"
+      },
+      {
+        "name": "The Titles-Only Display Rule",
+        "body": "Bricolage sets titles and the wordmark, nothing else. When a briefing collapses to its done state, its title drops back to Geist.",
+        "section": "typography"
+      },
+      {
+        "name": "The Machine-Speaks-Mono Rule",
+        "body": "If a program, the file system or a counter produced it, it is set in Geist Mono with tabular figures, so numbers that change in place never jitter.",
+        "section": "typography"
+      },
+      {
+        "name": "The Sentence-Case Rule",
+        "body": "Labels are sentence case at normal tracking. No uppercase tracked labels anywhere in the system.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Panel Rule",
+        "body": "Run panels, briefings, notices and previews are flat, bordered by a hairline. A shadow on a panel means it floats; nothing in the column floats.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Well-Not-Card Rule",
+        "body": "Inside a panel, structure is rows and hairlines. The only nested box is an inset well one step darker (preview, fail detail, input) on bg, never a raised card inside a card.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do read every colour, size, radius and duration from tokens.css; the tokens are the single source of truth for both themes.",
+      "Do give every state a mark from the Status Mark vocabulary, paired with its word.",
+      "Do keep one coral-filled action per view and draw every other boundary with line-control.",
+      "Do use coral mark for strokes and coral ink for text, never the fill coral, so each clears contrast in light mode.",
+      "Do move with the one curve family: quart-out arrivals at 160, 240 or 380ms, rises of 8px, list staggers of 30ms capped at twelve rows, transform and opacity plus stroke-dashoffset for ticks.",
+      "Do keep short fades under reduced motion while removing rises, staggers, spins and shimmers; spinners stop on a legible arc.",
+      "Do reserve the coral-spark celebration for a finish the student watched live; a lab read back from disk replays nothing.",
+      "Do set files, figures and machine output in Geist Mono with tabular figures."
+    ],
+    "donts": [
+      "Don't fill panels, text or backgrounds with gradients, and never purple-blue; the only gradients are motion sweeps (skeleton shimmer, stage connector shimmer) running transparent to a token and back.",
+      "Don't put a card inside a card; nest only an inset well on bg.",
+      "Don't use bounce, overshoot or elastic easing.",
+      "Don't use heavy glassmorphism or backdrop blur.",
+      "Don't carry state by colour alone; rose never appears without a mark or words.",
+      "Don't add format chips, keyboard hints or example prompts to the home composer; formats are requested in words.",
+      "Don't set uppercase tracked labels or eyebrow text above titles.",
+      "Don't use emoji or text glyphs as icons; icons are inline SVG."
+    ]
+  }
+}

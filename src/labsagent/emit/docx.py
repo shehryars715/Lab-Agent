@@ -26,7 +26,8 @@ from pathlib import Path
 import docx as pydocx
 from docx.shared import Inches, Pt
 
-from labsagent.blocks import FIGURE, SCREENSHOT, blocks_for
+from labsagent.blocks import FIGURE, SCREENSHOT
+from labsagent.present import arrange, vocabulary
 from labsagent.emit import EmitContext, register
 from labsagent.ingest.readers import produces_anchors
 from labsagent.report.cover import build_cover
@@ -67,6 +68,7 @@ def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
     """A report for a run that had no source document to annotate."""
     doc = pydocx.Document()
 
+    words = vocabulary(ctx.style)
     for outcome in ctx.outcomes:
         task = outcome.task
         doc.add_heading(task.title or task.id, level=1)
@@ -74,16 +76,22 @@ def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
             _prose(doc, task.statement.strip())
 
         wrote_output_label = False
-        for block in blocks_for(outcome):
+        answers_headed = False
+        blocks = arrange(outcome, ctx.style)
+        for block in blocks:
             if block.kind == "code":
-                _label(doc, CODE_LABEL)
+                if block.title:
+                    doc.add_heading(block.title, level=3)
+                else:
+                    _label(doc, words.code if ctx.style != "classic" else CODE_LABEL)
                 _code(doc, block.text)
+                wrote_output_label = False
             elif block.kind == "error":
                 _label(doc, "Status:")
                 _prose(doc, block.text)
             elif block.kind == "image" and block.path is not None:
                 if not wrote_output_label:
-                    _label(doc, OUTPUT_LABEL)
+                    _label(doc, words.output if ctx.style != "classic" else OUTPUT_LABEL)
                     wrote_output_label = True
                 if Path(block.path).exists():
                     para = doc.add_paragraph()
@@ -92,18 +100,24 @@ def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
                     )
                     tighten(para, before=2, after=4)
             elif block.kind == "output" and not any(
-                b.kind == "image" and b.role in (SCREENSHOT, FIGURE)
-                for b in blocks_for(outcome)
+                b.kind == "image"
+                and b.role in ((SCREENSHOT, FIGURE) if ctx.style == "classic" else (SCREENSHOT,))
+                for b in blocks
             ):
                 # Only fall back to the raw text when no screenshot exists --
                 # otherwise the report would show the same output twice.
-                _label(doc, OUTPUT_LABEL)
+                _label(doc, words.output if ctx.style != "classic" else OUTPUT_LABEL)
                 wrote_output_label = True
                 for line in block.text.splitlines():
                     para = doc.add_paragraph()
                     style_code_run(para.add_run(line or " "))
                     tighten(para)
             elif block.kind == "prose":
+                if block.role == "answer" and words.answers and not answers_headed:
+                    doc.add_heading(words.answers, level=2)
+                    answers_headed = True
+                if block.title:
+                    _label(doc, block.title)
                 _prose(doc, block.text)
 
     if ctx.cover is not None:
@@ -137,6 +151,7 @@ class DocxEmitter:
                     ctx.outcomes,
                     cover=ctx.cover,
                     anchors=ctx.anchors,
+                    style=ctx.style,
                 )
             ]
         return [build_fresh(ctx, out_path)]

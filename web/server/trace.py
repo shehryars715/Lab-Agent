@@ -151,9 +151,24 @@ class ToolTracer(BaseCallbackHandler):
         self.task_id = ""
         self._open: dict[Any, str] = {}
         self._last_text = ""
+        self._last_state: tuple[str, str] | None = None
 
     def _send(self, text: str, tone: str = "") -> None:
         self.emit({"type": "activity", "task_id": self.task_id, "text": text, "tone": tone})
+
+    def _state(self, text: str, tone: str = "") -> None:
+        """A plain progress state, sent only when it CHANGES.
+
+        No filenames, no exit codes: "Trying it out" instead of "running
+        task2.py", "Fixing a problem" instead of "exit 1 -- fixing". A write
+        and a run per attempt used to be four frames; now the row changes only
+        when what is happening changes.
+        """
+        key = (self.task_id, text)
+        if key == self._last_state:
+            return
+        self._last_state = key
+        self._send(text, tone)
 
     def on_llm_end(self, response, **kwargs) -> None:
         """The model's own words, between its tool calls.
@@ -168,18 +183,12 @@ class ToolTracer(BaseCallbackHandler):
         silence here is normal rather than a bug, and emitting an empty frame
         for it would put blank lines in the transcript.
         """
-        text = _plain(_text_of(response))
-        if not text:
-            return
-        # Tool-call arguments are echoed back in some provider responses as
-        # JSON. That is not narration, and rendering it would show the user
-        # raw function arguments dressed up as a sentence.
-        if text.lstrip().startswith("{") and text.rstrip().endswith("}"):
-            return
-        if text == self._last_text:
-            return
-        self._last_text = text
-        self.emit({"type": "narration", "task_id": self.task_id, "text": text})
+        # RETIRED 2026-09-24. The solver's own sentences used to stream into the
+        # chat as narration, written in its working register ("KeyError on
+        # 'species', fixing") and several per task -- too technical and too
+        # frequent. Progress is now said by the harness in plain words (see
+        # `_state`), so the model's text is deliberately not forwarded.
+        return
 
     def on_tool_start(self, serialized, input_str, *, run_id=None, **kwargs) -> None:
         name = (serialized or {}).get("name", "")
@@ -189,12 +198,13 @@ class ToolTracer(BaseCallbackHandler):
         args = _inputs(input_str, kwargs)
 
         if name == "write_file":
-            self._send(f"writing {_basename(args.get('file_path')) or 'the solution'}")
+            # After a failed run, a rewrite IS the fix -- keep saying so rather
+            # than flipping back to "Writing" as if starting over.
+            if self._last_state and self._last_state[1] == "Fixing a problem":
+                return
+            self._state("Writing the program")
         elif name == "run_solution":
-            self._send(f"running {_basename(args.get('entry_file')) or 'it'}")
-        elif name == "record_task_result":
-            status = args.get("status", "")
-            self._send(f"recording result: {status}", "" if status == "passed" else "warn")
+            self._state("Trying it out")
 
     def on_tool_end(self, output, *, run_id=None, **kwargs) -> None:
         name = self._open.pop(run_id, "")
@@ -206,15 +216,12 @@ class ToolTracer(BaseCallbackHandler):
         match = _EXIT.search(str(output))
         if not match:
             return
-        code = int(match.group(1))
-        self._send(
-            "exit 0" if code == 0 else f"exit {code} — fixing",
-            "ok" if code == 0 else "warn",
-        )
+        if int(match.group(1)) != 0:
+            self._state("Fixing a problem", "warn")
 
     def on_tool_error(self, error, *, run_id=None, **kwargs) -> None:
         if self._open.pop(run_id, ""):
-            self._send(f"tool failed: {str(error)[:80]}", "bad")
+            self._state("Fixing a problem", "warn")
 
 
 @contextmanager

@@ -31,6 +31,13 @@ class Task:
     sample_inputs: list[str] = field(default_factory=list)
     sample_output: str | None = None
     wants_explanation: bool = False
+    #: Parts of the task answered in WORDS, not by the program -- "why does it
+    #: fail", "compare the two". Kept apart from the code so the solver prints
+    #: evidence and the writer turns it into prose. Printing the essay was the
+    #: defect: it landed in a terminal screenshot instead of the report.
+    written_questions: list[str] = field(default_factory=list)
+    #: False for a pure theory question: nothing to run, only words to write.
+    needs_code: bool = True
     #: Steering for the SOLVER only -- narration rules, the student's
     #: code-shaping notes. Kept apart from `statement` because `statement` is
     #: what the deliverables print: fold the two together and the .py, .md and
@@ -38,6 +45,10 @@ class Task:
     #: sentence..." into the submitted file. Persisted with the task so a
     #: resumed run asks the same question it originally asked.
     instruction: str = ""
+    #: "basic" | "standard", read by ingest. A basic task's first attempt runs
+    #: without the model's thinking step and with a tighter turn cap; if it
+    #: fails, the retry runs as standard. Persisted so a resume runs the same way.
+    effort: str = "standard"
 
 
 @dataclass(frozen=True)
@@ -107,6 +118,12 @@ class TaskOutcome:
     figure_paths: list[Path] = field(default_factory=list)
     transcript: Transcript | None = None
     explanation: str | None = None
+    #: The written answers, as {"question", "answer"} dicts, in task order.
+    answers: list[dict] = field(default_factory=list)
+    #: Real per-part output, one {"title", "code", "output", "figures"} per
+    #: `# %%` section, from an instrumented run after the task passed. Empty
+    #: when the program has no sections; every emitter then uses the whole run.
+    sections: list[dict] = field(default_factory=list)
     attempts: int = 0
     error: str | None = None
     blocks: list[Block] | None = None
@@ -123,6 +140,18 @@ class TaskOutcome:
     stopped_reason: str | None = None
     #: Data files this task produced, for the next task that references it.
     produced: list[dict] = field(default_factory=list)
+    #: WHY THE TASK STOPPED, for the student, in one plain sentence -- set when
+    #: the environment lacks something the task needs (a library, a readable
+    #: format, the data). `status` stays "failed" so every consumer that knows
+    #: two statuses keeps working; this field is what says "not tried, and why"
+    #: instead of "did not complete after N attempts".
+    blocker: str | None = None
+    #: A task that PASSED except for one part it could not do, said plainly.
+    #: The honest version of what used to be a stand-in that claimed a pass.
+    gap: str | None = None
+    #: run_solution calls across every attempt -- the write/run/fix cycles a
+    #: person watching the run sees, which were recorded nowhere before.
+    runs: int = 0
 
 
 @dataclass
@@ -145,3 +174,7 @@ class RunManifest:
     #: it a second time -- and so the record says what the code was run against,
     #: which is the difference between a reproducible result and a number.
     datasets: list[dict] = field(default_factory=list)
+    #: One entry per follow-up: what kind it was, what it touched, what it
+    #: cost. `usage`/`cost_usd` above are the RUNNING TOTAL -- a revision used
+    #: to overwrite them, so the first pass's cost was lost.
+    followups: list[dict] = field(default_factory=list)

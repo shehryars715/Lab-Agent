@@ -13,11 +13,15 @@ sandbox cannot leak between runs.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool, tool
 
+from labsagent.prose import PROSE_WARN_LINES, prose_lines
 from labsagent.runner import run_solution as _run_solution
 from labsagent.sandbox.base import DEFAULT_TIMEOUT_S, Sandbox
 
@@ -62,6 +66,10 @@ class TaskRecorder:
     entry_file: str | None = None
     status: str | None = None
     notes: str = ""
+    #: The agent's one plain sentence for the student when something the task
+    #: needs is not available -- with "blocked", or with "passed" when one
+    #: part could not be done.
+    missing: str = ""
     attempts: int = 0
     warnings: list[str] = field(default_factory=list)
     #: Every run_solution call this ATTEMPT made, in order.
@@ -154,6 +162,31 @@ def _sha_of(sandbox: Sandbox, entry_file: str) -> str | None:
         return None
 
 
+#: "No module named 'seaborn'" -- the moment the solver learns a library is
+#: absent, which is the moment it used to start writing a stand-in for it.
+_MISSING_MODULE = re.compile(r"ModuleNotFoundError: No module named '([\w.]+)'")
+
+
+def missing_module(stderr: str, workdir) -> str | None:
+    """The top-level package a run could not import, if it is truly absent.
+
+    A module the agent wrote itself (a helper file in the workspace) is not
+    missing from the environment; neither is one that imports fine here.
+    """
+    match = _MISSING_MODULE.search(stderr or "")
+    if not match:
+        return None
+    top = match.group(1).split(".")[0]
+    if (Path(workdir) / f"{top}.py").exists() or (Path(workdir) / top).is_dir():
+        return None
+    try:
+        if importlib.util.find_spec(top) is not None:
+            return None
+    except (ImportError, ValueError):
+        pass
+    return top
+
+
 def build_tools(
     sandbox: Sandbox,
     recorder: TaskRecorder,
@@ -199,25 +232,64 @@ def build_tools(
             parts.append(f"stderr:\n{outcome.result.stderr}")
         for warning in outcome.warnings:
             parts.append(f"warning: {warning}")
+        # A NUDGE AT THE MOMENT OF ACTION. The prompt already says "print
+        # results, not essays"; a prompt asks and mostly obliges. The tool
+        # result is the one place the agent is guaranteed to look next, so the
+        # reminder costs a sentence and never fails the task.
+        # THE MOMENT IT WOULD START IMPROVISING. A missing library used to be
+        # met with a hand-written stand-in -- a fake seaborn.histplot that then
+        # "passed" -- or a probe script trying pip. The prompt says not to; this
+        # says it again at the one place the agent is guaranteed to look next.
+        absent = missing_module(outcome.result.stderr, sandbox.workdir)
+        if absent:
+            parts.append(
+                f"warning: {absent} is not installed here and cannot be installed (no pip, "
+                "no internet). Do not write your own version of it or a stand-in. If the "
+                "task can be done properly with the libraries that are available, do "
+                f"that. If the task needs {absent}, stop: call record_task_result with "
+                'status "blocked" and say in `missing` what could not be done.'
+            )
+        prose = prose_lines(outcome.result.stdout)
+        if len(prose) >= PROSE_WARN_LINES:
+            parts.append(
+                f"warning: your program printed {len(prose)} lines of explanatory prose. "
+                "Print results only; the written answer is produced separately from "
+                "this output."
+            )
         return "\n\n".join(parts)
 
-    @tool
+    # RETURN_DIRECT ENDS THE LOOP HERE. The reply used to say "Stop now", and
+    # the model still needed one more paid turn to read it and stop -- one call
+    # in every task, a fifth of a healthy basic one. langchain's agent factory
+    # exits when every tool called in a turn is return_direct.
+    @tool(return_direct=True)
     def record_task_result(
         entry_file: str,
-        status: Literal["passed", "failed"],
+        status: Literal["passed", "failed", "blocked"],
         notes: str = "",
+        missing: str = "",
     ) -> str:
-        """Declare this task finished and stop working on it.
+        """Declare this task finished. Call it exactly once, as your final action.
 
-        Call this exactly once, as your final action. Use status "passed" when
-        run_solution exited 0 and produced the output the task asked for. Use
-        "failed" when you cannot get it working -- a recorded failure is far
-        more useful than a false success, because the report shows what went
-        wrong instead of claiming a result that is not there.
+        status:
+          "passed"  run_solution exited 0 and printed what the task asked for.
+          "failed"  you had everything you needed but could not get it working.
+                    An honest failure is far more useful than a false success.
+          "blocked" the task needs something this environment does not have:
+                    a library that is not installed, a file format nothing here
+                    can read, data you were not given, internet access, a
+                    screen, camera or GPU, or a language other than Python.
+                    Stop as soon as you know. Never build a substitute.
+
+        missing: with "blocked", or with "passed" when one part of the task could
+        not be done, ONE plain sentence for the student saying what is missing
+        and what they can do -- no code, no error names. For example: "I can't
+        open .sav files here, so please send the data as a CSV or Excel file."
         """
         recorder.entry_file = entry_file
         recorder.status = status
         recorder.notes = notes
-        return f"Recorded {entry_file} as {status}. Stop now and summarise briefly."
+        recorder.missing = missing
+        return f"Recorded {entry_file} as {status}."
 
     return [run_solution, record_task_result]

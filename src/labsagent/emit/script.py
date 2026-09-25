@@ -57,6 +57,8 @@ def render(ctx: EmitContext) -> str:
                 lines += _comment(block.text)
                 lines.append("")
             elif block.kind == "prose":
+                if block.title:
+                    lines += _comment(f"Q: {block.title}")
                 lines += _comment(block.text)
                 lines.append("")
 

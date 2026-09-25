@@ -23,15 +23,8 @@ async function readError(res) {
 
 // Identity lives here, in this browser, and nowhere else.
 //
-// PLAN.md §7 says browser localStorage; the first version of this instead
-// wrote it to the server's labsagent.toml, which is the CLI's cache. That
-// "shared identity" looked like a feature until a browser form silently
-// rewrote the name the CLI had cached -- which is precisely what the CLI's
-// "asked once, remembered" behaviour is supposed to do, on a file the browser
-// had no business touching.
-//
-// The cost is that the two can disagree. That is the cheaper of the two
-// failures, and it is the one taken deliberately.
+// The server is stateless about who you are: identity is sent with each
+// request and never written to disk there.
 const IDENTITY_KEY = 'labsagent.identity'
 
 export function loadIdentity() {
@@ -80,6 +73,17 @@ export async function reviseRun(jobId, feedback) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ feedback }),
+  })
+  if (!res.ok) throw new Error(await readError(res))
+  return res.json()
+}
+
+/** Put the student's details on a finished run's files. A rebuild, no model call. */
+export async function setIdentity(jobId, identity) {
+  const res = await fetch(`/api/runs/${jobId}/identity`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(identity),
   })
   if (!res.ok) throw new Error(await readError(res))
   return res.json()

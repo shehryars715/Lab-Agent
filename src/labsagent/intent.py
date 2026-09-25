@@ -112,6 +112,10 @@ class Intent:
     #: Empty means the manual named no data, which is the common case and must
     #: stay the cheap one: no network, no question, no change to the prompt.
     datasets: list[str] = field(default_factory=list)
+    #: Datasets the manual REQUIRES but gives no link, slug or file for -- "the
+    #: Superstore dataset from Kaggle" with nothing to download. The one case
+    #: that justifies stopping to ask: see `web/server/pipeline.py`.
+    data_unlinked: list[str] = field(default_factory=list)
 
     @property
     def is_lab(self) -> bool:

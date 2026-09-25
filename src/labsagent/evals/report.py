@@ -62,6 +62,10 @@ class CaseSummary:
         return [s.attempts_total for s in self.samples]
 
     @property
+    def runs(self) -> list[int]:
+        return [s.runs_total for s in self.samples]
+
+    @property
     def flaky(self) -> bool:
         """Samples of the same case disagreed about whether it passed."""
         return self.count > 1 and 0 < self.clean_count < self.count
@@ -118,6 +122,7 @@ def render_table(summaries: list[CaseSummary]) -> str:
             "ran",
             "matched",
             "attempts",
+            "runs",
             "cost $",
             "secs",
         )
@@ -131,6 +136,7 @@ def render_table(summaries: list[CaseSummary]) -> str:
                 _ratio(summary.ran),
                 _ratio(summary.matched),
                 _spread([float(a) for a in summary.attempts], ".1f"),
+                _spread([float(r) for r in summary.runs], ".1f"),
                 _spread(summary.costs, ".5f"),
                 _spread(summary.durations, ".0f"),
             )
@@ -155,6 +161,7 @@ def render_table(summaries: list[CaseSummary]) -> str:
             _ratio(ran),
             _ratio(matched),
             "",
+            str(sum(r for s in summaries for r in s.runs)),
             f"{sum(all_costs):.5f}",
             f"{sum(d for s in summaries for d in s.durations):.0f}",
         )
@@ -197,6 +204,7 @@ def as_dict(summaries: list[CaseSummary], samples: int) -> dict:
                 "cost_usd": summary.costs,
                 "duration_s": [round(d, 2) for d in summary.durations],
                 "attempts": summary.attempts,
+                "runs": summary.runs,
                 "findings": summary.findings,
                 "errors": summary.errors,
                 "usage": [s.usage for s in summary.samples],

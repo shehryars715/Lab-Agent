@@ -60,35 +60,90 @@ KAGGLE_SLUG = re.compile(r"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*$")
 
 _KAGGLE_HOSTS = ("kaggle.com", "www.kaggle.com")
 
+#: First path segments of kaggle.com pages that are NOT an owner's dataset.
+#: `/code/<user>/<notebook>` has the owner/name shape, and reading it as a
+#: dataset slug sends a notebook's name to the dataset API.
+_NOT_DATASET_PAGES = frozenset({
+    "c", "competitions", "code", "kernels", "notebooks", "learn", "discussions",
+    "discussion", "models", "docs", "account", "settings", "search", "rankings",
+    "organizations", "work", "benchmarks", "static", "api", "users", "t",
+})
+
+#: `kaggle datasets download -d owner/name`, the command a manual pastes.
+_KAGGLE_COMMAND = re.compile(
+    r"\bkaggle\s+(datasets|competitions)\s+download\s+(?:-d|-c|--dataset|--competition)\s+"
+    r"([A-Za-z0-9][\w.-]*(?:/[A-Za-z0-9][\w.-]*)?)",
+    re.IGNORECASE,
+)
+
+#: A reference typed into a sentence arrives wrapped or punctuated:
+#: "(https://kaggle.com/...)", "<url>", "uciml/iris." -- none of it is the ref.
+_WRAPPING = "<>()[]{}\"'`"
+_TRAILING_PUNCT = ".,;:!?"
+
 USER_AGENT = "labsagent/0.1 (+dataset fetch)"
 
 
 # --------------------------------------------------------------- classifying
 
 
+def clean_ref(ref: str) -> str:
+    """The reference without the sentence around it. A scheme-less
+    `www.kaggle.com/...` or `kaggle.com/...` gains `https://`."""
+    ref = (ref or "").strip().strip(_WRAPPING).rstrip(_TRAILING_PUNCT).strip(_WRAPPING)
+    low = ref.lower()
+    if low.startswith(("www.", "kaggle.com/")):
+        ref = "https://" + ref
+    return ref
+
+
+def _kaggle_path(ref: str) -> list[str] | None:
+    """Path segments of a kaggle.com URL, or None for anything else."""
+    parsed = urllib.parse.urlparse(ref)
+    if parsed.scheme in ("http", "https") and parsed.netloc.lower() in _KAGGLE_HOSTS:
+        return [p for p in parsed.path.split("/") if p]
+    return None
+
+
 def kaggle_slug(ref: str) -> str | None:
-    """`owner/name` from a bare slug or a kaggle.com dataset URL, else None."""
-    ref = (ref or "").strip().rstrip("/")
+    """`owner/name` from a bare slug, a kaggle.com dataset URL in any of its
+    shapes, or a `kaggle datasets download -d` command. Else None."""
+    command = _KAGGLE_COMMAND.search(ref or "")
+    if command and command.group(1).lower() == "datasets" and "/" in command.group(2):
+        return command.group(2)
+
+    ref = clean_ref(ref).rstrip("/")
     if not ref:
         return None
 
-    parsed = urllib.parse.urlparse(ref)
-    if parsed.scheme in ("http", "https") and parsed.netloc.lower() in _KAGGLE_HOSTS:
-        parts = [p for p in parsed.path.split("/") if p]
-        # /datasets/<owner>/<name> and the older /<owner>/<name>
-        if parts and parts[0] == "datasets":
+    parts = _kaggle_path(ref)
+    if parts is not None:
+        # /datasets/<owner>/<name>[/data|/versions/2] and the older /<owner>/<name>
+        if parts and parts[0].lower() == "datasets":
             parts = parts[1:]
-        if len(parts) >= 2 and parts[0] not in ("c", "competitions"):
+        if len(parts) >= 2 and parts[0].lower() not in _NOT_DATASET_PAGES:
             return f"{parts[0]}/{parts[1]}"
         return None
 
-    if parsed.scheme:
+    if urllib.parse.urlparse(ref).scheme:
         return None
     return ref if KAGGLE_SLUG.match(ref) else None
 
 
+def kaggle_competition(ref: str) -> str | None:
+    """The competition name from `kaggle.com/c/<name>`, `/competitions/<name>`
+    or `kaggle competitions download -c <name>`. Else None."""
+    command = _KAGGLE_COMMAND.search(ref or "")
+    if command and command.group(1).lower() == "competitions":
+        return command.group(2)
+    parts = _kaggle_path(clean_ref(ref).rstrip("/"))
+    if parts and len(parts) >= 2 and parts[0].lower() in ("c", "competitions"):
+        return parts[1]
+    return None
+
+
 def classify(ref: str) -> str:
-    """"path" | "url" | "kaggle". The order of these checks is the whole trick.
+    """"path" | "url" | "kaggle" | "competition". The order of these checks is the whole trick.
 
     A local path is tested FIRST by asking the filesystem, because a relative
     path like "data/iris.csv" also matches the Kaggle slug shape. Existence is
@@ -107,7 +162,9 @@ def classify(ref: str) -> str:
         pass
     if kaggle_slug(ref):
         return "kaggle"
-    if urllib.parse.urlparse(ref).scheme in ("http", "https"):
+    if kaggle_competition(ref):
+        return "competition"
+    if urllib.parse.urlparse(clean_ref(ref)).scheme in ("http", "https"):
         return "url"
     raise DataError(
         f"I do not know how to get {ref!r}. Give me a file, a https:// link, "
@@ -170,6 +227,38 @@ def _adopt(path: Path, dest_dir: Path, origin: str, ref: str, taken: set[str]) -
 #: can be converted -- see `_adopt_all` and `data/normalise.py`.
 EXCEL_SUFFIXES = (".xlsx", ".xlsm", ".xls")
 
+#: Formats that are only data if a library to read them is installed. Asked of
+#: the interpreter at runtime, so installing one later lifts the refusal with
+#: no code change -- the list of accepted suffixes can no longer promise a
+#: format the environment cannot open.
+_ENGINES = {".xls": ("xlrd",), ".parquet": ("pyarrow", "fastparquet")}
+
+
+def unreadable_reason(path: Path) -> str | None:
+    """A plain sentence when nothing installed can open this file, else None.
+
+    STOP AT THE DOOR, NOT IN THE SOLVER. An .xls that reaches a task arrives as
+    "binary file; not previewed", and the solver's options are to fail or to
+    write its own parser -- which one run spent fifteen minutes doing. Refusing
+    it here costs nothing and says what would work instead.
+    """
+    import importlib.util
+
+    suffix = Path(path).suffix.lower()
+    engines = _ENGINES.get(suffix)
+    if not engines or any(importlib.util.find_spec(e) for e in engines):
+        return None
+    name = Path(path).name
+    if suffix == ".xls":
+        return (
+            f"I can't open {name} here: it is the old .xls Excel format, which "
+            "nothing installed can read. Please save it as .xlsx or .csv and attach it again."
+        )
+    return (
+        f"I can't open {name} here: nothing installed can read {suffix} files. "
+        "Please send the data as a CSV or Excel (.xlsx) file."
+    )
+
 
 def _adopt_all(
     path: Path,
@@ -192,6 +281,9 @@ def _adopt_all(
     was given; it is simply not returned as a `Dataset`, so nothing copies or
     describes it.
     """
+    reason = unreadable_reason(path)
+    if reason:
+        raise DataError(reason)
     adopted = _adopt(path, dest_dir, origin, ref, taken)
     if not convert_excel or adopted.path.suffix.lower() not in EXCEL_SUFFIXES:
         return [adopted]
@@ -414,6 +506,41 @@ def from_url(
     ]
 
 
+def _kaggle_refusal(kind: str, handle: str, exc: Exception) -> str:
+    """What a Kaggle failure means, in words a student can act on.
+
+    kagglehub raises HTTP errors with the status buried in the message. The raw
+    text ("403 Client Error: Forbidden for url: https://...") is true and
+    useless in a chat; the status says which of three things to do next.
+    """
+    text = str(exc)
+    if kind == "competition":
+        page = f"https://www.kaggle.com/competitions/{handle}"
+        if "403" in text or "Forbidden" in text or "401" in text:
+            return (
+                f"Kaggle only shares the {handle} competition data after you accept its "
+                f"rules. Open {page}/rules, accept them, then send the lab again -- or "
+                "download the files yourself and attach them."
+            )
+        if "404" in text or "Not Found" in text:
+            return f"Kaggle has no competition called {handle}. Check the link in the manual."
+    else:
+        if "404" in text or "Not Found" in text:
+            return (
+                f"Kaggle has no public dataset at {handle}. Check the link in the manual, "
+                "or download the file yourself and attach it."
+            )
+        if "403" in text or "Forbidden" in text or "401" in text:
+            return (
+                f"Kaggle would not let me download {handle} -- it may be private, or need "
+                "you to accept its terms first. Download it yourself and attach the file."
+            )
+    return (
+        f"I could not download {handle} from Kaggle ({text[:120]}). Download it "
+        "yourself and attach the file."
+    )
+
+
 def from_kaggle(
     ref: str,
     dest_dir: Path,
@@ -423,16 +550,22 @@ def from_kaggle(
     max_bytes: int = MAX_DATASET_BYTES,
     convert_excel: bool = True,
 ) -> list[Dataset]:
-    """Download a Kaggle dataset by slug, via kagglehub's own local cache.
+    """Download a Kaggle dataset -- or competition -- via kagglehub's local cache.
 
     The import and the credential check are both guarded so the failure is a
     sentence the student can act on. "kagglehub is not installed" and "add
     KAGGLE_KEY to .env" are fixable; a ModuleNotFoundError traceback in a chat
     window is not.
+
+    COMPETITIONS ARE THE SAME JOB WITH A DIFFERENT CALL. `kaggle.com/c/titanic`
+    used to be fetched as a web page and refused as "a typeless file".
     """
     slug = kaggle_slug(ref)
-    if not slug:
+    competition = None if slug else kaggle_competition(ref)
+    if not (slug or competition):
         raise DataError(f"{ref!r} is not a Kaggle dataset reference")
+    handle = slug or competition
+    kind = "dataset" if slug else "competition"
 
     try:
         import kagglehub
@@ -449,33 +582,29 @@ def from_kaggle(
         os.environ.setdefault("KAGGLE_KEY", key)
     elif not (os.environ.get("KAGGLE_KEY") or (Path.home() / ".kaggle" / "kaggle.json").exists()):
         raise DataError(
-            f"Kaggle dataset {slug} needs credentials. Put KAGGLE_USERNAME and "
+            f"Kaggle {kind} {handle} needs credentials. Put KAGGLE_USERNAME and "
             "KAGGLE_KEY in .env (Kaggle > Settings > API > Create New Token), "
             "or download the file and attach it instead."
         )
 
     try:
-        cached = Path(kagglehub.dataset_download(slug))
+        download = kagglehub.dataset_download if slug else kagglehub.competition_download
+        cached = Path(download(handle))
     except Exception as exc:  # noqa: BLE001 -- kagglehub raises several unrelated types
-        raise DataError(f"could not download Kaggle dataset {slug}: {exc}"[:300]) from exc
+        raise DataError(_kaggle_refusal(kind, handle, exc)) from exc
 
     candidates = _pick([cached] if cached.is_file() else list(cached.rglob("*")))
     if not candidates:
-        raise DataError(f"Kaggle dataset {slug} downloaded, but held no readable data files.")
+        raise DataError(f"Kaggle {kind} {handle} downloaded, but held no readable data files.")
 
-    taken: set[str] = set()
-    found: list[Dataset] = []
-    for path in candidates:
-        if path.stat().st_size > max_bytes:
-            continue
-        found.extend(
-            _adopt_all(
-                path, dest_dir, "kaggle", slug, taken, convert_excel=convert_excel
-            )
-        )
+    found, refused = _adopt_each(
+        candidates, dest_dir, "kaggle", handle, set(), convert_excel, max_bytes=max_bytes
+    )
     if not found:
         raise DataError(
-            f"every file in Kaggle dataset {slug} is over the "
+            refused[0]
+            if refused
+            else f"every file in Kaggle {kind} {handle} is over the "
             f"{max_bytes // 1024 // 1024} MB limit."
         )
     return found
@@ -521,17 +650,33 @@ def _from_zip(
     except zipfile.BadZipFile as exc:
         raise DataError(f"{archive.name} is not a readable zip: {exc}") from exc
 
-    found = [
-        dataset
-        for path in _pick(list(staging.rglob("*")))
-        for dataset in _adopt_all(
-            path, dest_dir, origin, ref, taken, convert_excel=convert_excel
-        )
-    ]
+    found, refused = _adopt_each(
+        _pick(list(staging.rglob("*"))), dest_dir, origin, ref, taken, convert_excel
+    )
     shutil.rmtree(staging, ignore_errors=True)
     if not found:
-        raise DataError(f"{archive.name} held no readable data files.")
+        raise DataError(refused[0] if refused else f"{archive.name} held no readable data files.")
     return found
+
+
+def _adopt_each(paths, dest_dir, origin, ref, taken, convert_excel=True, max_bytes=None):
+    """Adopt every file that can be read; say why the others could not.
+
+    One unreadable member (a .parquet beside the .csv) must not cost the
+    readable ones -- the same rule `acquire` applies to a dead link.
+    """
+    found: list[Dataset] = []
+    refused: list[str] = []
+    for path in paths:
+        if max_bytes is not None and path.stat().st_size > max_bytes:
+            continue
+        try:
+            found.extend(
+                _adopt_all(path, dest_dir, origin, ref, taken, convert_excel=convert_excel)
+            )
+        except DataError as exc:
+            refused.append(str(exc))
+    return found, refused
 
 
 # ------------------------------------------------------------------ dispatch
@@ -553,7 +698,7 @@ def resolve(
         return from_path(
             ref, dest_dir, max_bytes=max_bytes, convert_excel=convert_excel
         )
-    if kind == "kaggle":
+    if kind in ("kaggle", "competition"):
         return from_kaggle(
             ref,
             dest_dir,
@@ -563,7 +708,7 @@ def resolve(
             convert_excel=convert_excel,
         )
     return from_url(
-        ref,
+        clean_ref(ref),
         dest_dir,
         max_bytes=max_bytes,
         timeout_s=timeout_s,

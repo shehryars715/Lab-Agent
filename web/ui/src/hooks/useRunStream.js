@@ -97,14 +97,20 @@ export function useRunStream(jobId, { revisions = [] } = {}) {
   // drop and reconnect forever. Close it; a revision reopens via the counter.
   // The check is on the LAST run entry: "any finished" stays true forever once
   // the first run completes, and would kill the stream a revision needs.
+  // Keyed on the finish TIME, not a boolean: a rebuild after the run finished
+  // (adding your name, an answered question) finishes again, and the stream
+  // it reopened must close again too.
   const run = lastRun(state)
-  const finished = Boolean(run?.state.finishedAt)
+  const finishedAt = run?.state.finishedAt ?? null
   useEffect(() => {
-    if (finished && sourceRef.current) {
+    if (finishedAt && sourceRef.current) {
       sourceRef.current.close()
       sourceRef.current = null
     }
-  }, [finished])
+  }, [finishedAt])
+
+  /** Reopen the stream without starting a new entry -- for a rebuild in place. */
+  const reconnect = useCallback(() => setRevision((n) => n + 1), [])
 
   /** Open a revision locally, then reconnect. Returns the boundary to store. */
   const beginRevision = useCallback((text) => {
@@ -116,5 +122,5 @@ export function useRunStream(jobId, { revisions = [] } = {}) {
     return { text, afterSeq }
   }, [])
 
-  return { state, lost, dropped, beginRevision }
+  return { state, lost, dropped, beginRevision, reconnect }
 }

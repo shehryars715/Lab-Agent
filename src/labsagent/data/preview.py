@@ -43,6 +43,44 @@ EXCERPT_CHARS = 400
 
 _SEPARATORS = {".tsv": "\t", ".tab": "\t"}
 
+#: Suffixes read as delimited text, and therefore subject to an encoding.
+_TEXT_SUFFIXES = (".csv", ".tsv", ".tab", ".txt", ".data", ".dat")
+
+#: Bytes checked when guessing an encoding. A stray byte past this is possible
+#: and rare; reading 100 MB to rule it out is not worth it on every file.
+ENCODING_SCAN_BYTES = 8 * 1024 * 1024
+
+
+def detect_encoding(path: Path) -> str | None:
+    """None for plain UTF-8, else the codec a program must pass to read it.
+
+    WHY THIS EXISTS. Kaggle's Superstore CSV is Windows-1252. `read_csv` with
+    its UTF-8 default raised on byte 0xa0, the profile fell back to "not
+    tabular", and the solver was told nothing about the columns of a perfectly
+    ordinary table -- then met the same UnicodeDecodeError itself and spent
+    cycles discovering the encoding by trial. Said once here, it is one
+    `encoding=` argument, and the handed-in .py also opens the student's own
+    copy of the file, which a silently transcoded one would not.
+    """
+    try:
+        with Path(path).open("rb") as handle:
+            head = handle.read(ENCODING_SCAN_BYTES)
+    except OSError:
+        return None
+    if head.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    for codec in ("utf-8", "cp1252"):
+        try:
+            head.decode(codec)
+        except UnicodeDecodeError as exc:
+            # A multi-byte character cut in half by the scan limit is not a
+            # wrong guess.
+            if codec == "utf-8" and exc.start >= len(head) - 3:
+                return None
+            continue
+        return None if codec == "utf-8" else codec
+    return "latin-1"
+
 
 def _human(size: int) -> str:
     value = float(size)
@@ -85,7 +123,7 @@ def _is_binary(path: Path) -> bool:
     return head.startswith(_BINARY_MAGIC) or b"\x00" in head
 
 
-def _excerpt(path: Path) -> str:
+def _excerpt(path: Path, encoding: str | None = None) -> str:
     """Head of the file, for anything pandas cannot make a table of.
 
     Binary is refused outright. "Here is a file I could not read" is useful to
@@ -97,17 +135,17 @@ def _excerpt(path: Path) -> str:
         suffix = path.suffix.lower() or "no extension"
         return (
             f"    binary file ({suffix}); not previewed. If a task needs data "
-            "from it, say so and record the task as failed."
+            "from it, record the task as blocked -- do not try to parse it yourself."
         )
     try:
-        head = path.read_text(encoding="utf-8", errors="replace")[:EXCERPT_CHARS]
+        head = path.read_text(encoding=encoding or "utf-8", errors="replace")[:EXCERPT_CHARS]
     except OSError as exc:
         return f"    (could not be read: {exc})"
     body = "\n".join(f"      {line}" for line in head.splitlines()[:6])
     return f"    not tabular; first bytes:\n{body}"
 
 
-def _read_sample(path: Path, suffix: str):
+def _read_sample(path: Path, suffix: str, encoding: str | None = None):
     """A capped DataFrame, or None if this file is not tabular."""
     try:
         import pandas as pd
@@ -130,6 +168,7 @@ def _read_sample(path: Path, suffix: str):
             nrows=INFER_ROWS,
             sep=sep,
             engine="python" if sep is None else "c",
+            encoding=encoding or "utf-8",
         )
     except Exception:  # noqa: BLE001 -- any parse failure means "not tabular"
         return None
@@ -157,10 +196,11 @@ def profile(path: Path) -> str:
         return f"  {path.name} -- unreadable ({exc})"
 
     suffix = path.suffix.lower()
-    frame = _read_sample(path, suffix)
+    encoding = detect_encoding(path) if suffix in _TEXT_SUFFIXES else None
+    frame = _read_sample(path, suffix, encoding)
 
     if frame is None or not len(getattr(frame, "columns", [])):
-        return f"  {path.name} -- {_human(size)}\n{_excerpt(path)}"
+        return f"  {path.name} -- {_human(size)}\n{_excerpt(path, encoding)}"
 
     columns = list(frame.columns)[:MAX_COLUMNS]
     hidden = len(frame.columns) - len(columns)
@@ -181,6 +221,10 @@ def profile(path: Path) -> str:
         f"  {path.name} -- {shape}, {_human(size)}",
         f"    columns: {names}",
     ]
+    if encoding:
+        lines.append(
+            f'    text encoding: {encoding} -- open it with encoding="{encoding}"'
+        )
     rows = _sample_rows(frame, columns)
     if rows:
         lines.append(f"    first {len(rows)} row(s): " + " | ".join(rows))

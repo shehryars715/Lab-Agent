@@ -50,13 +50,27 @@ class Block:
     lang: str = "python"
     path: Path | None = None
     role: str = ""
+    #: A lead for prose that answers something -- the written question.
+    title: str = ""
 
 
 def _failure_note(outcome) -> str:
+    # A STOPPED TASK IS NOT A FAILED ONE. "Did not complete after 1 attempt"
+    # reads as the agent trying and losing; the truth is that something it
+    # needed was not there, and the sentence says what.
+    blocker = getattr(outcome, "blocker", None)
+    if blocker:
+        return f"Not done: {blocker}"
     return (
         f"This task did not complete after {outcome.attempts} attempt(s). "
         f"Error: {outcome.error or 'unknown'}"
     )
+
+
+def gap_note(outcome) -> str:
+    """"" unless the task passed with one part it could not do."""
+    gap = getattr(outcome, "gap", None)
+    return f"Not done: {gap}" if gap else ""
 
 
 def blocks_for(outcome) -> list[Block]:
@@ -69,6 +83,14 @@ def blocks_for(outcome) -> list[Block]:
     """
     if outcome.blocks:
         return list(outcome.blocks)
+
+    task = getattr(outcome, "task", None)
+    if task is not None and not getattr(task, "needs_code", True):
+        # A theory question: words only. No "no solution was produced" code
+        # block, because no solution was ever asked for.
+        if outcome.status == "failed":
+            return [Block("error", text=_failure_note(outcome))]
+        return _prose_of(outcome)
 
     out: list[Block] = [Block("code", text=outcome.code_text or NO_SOLUTION)]
 
@@ -86,9 +108,22 @@ def blocks_for(outcome) -> list[Block]:
     for figure in outcome.figure_paths:
         out.append(Block("image", path=Path(figure), role=FIGURE))
 
+    if gap_note(outcome):
+        out.append(Block("prose", text=gap_note(outcome), role="gap"))
+    return out + _prose_of(outcome)
+
+
+def _prose_of(outcome) -> list[Block]:
+    """The overview, then one titled block per written answer."""
+    out: list[Block] = []
     if outcome.explanation:
         out.append(Block("prose", text=outcome.explanation))
-
+    for item in getattr(outcome, "answers", None) or []:
+        answer = str(item.get("answer") or "").strip()
+        if answer:
+            out.append(
+                Block("prose", text=answer, role="answer", title=str(item.get("question") or ""))
+            )
     return out
 
 
