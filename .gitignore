@@ -75,3 +75,4 @@ web/fixtures/matrix_out/
 # Docs stay local -- only the README is published
 *.md
 !/README.md
+.impeccable/
