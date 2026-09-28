@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Paste this into Lightsail's "Add launch script" box when creating the
 # instance (Ubuntu 24.04). It runs once, as root, on first boot, and prepares
 # the machine; it does not start the app, because the app needs a .env with
