@@ -133,6 +133,13 @@ export const Info = icon(
     <path d="M12 7.6v.1" strokeWidth="2.4" />
   </>,
 )
+export const SignOut = icon(
+  <>
+    <path d="M10 4.5H6.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2H10" />
+    <path d="m15 7.5 4.5 4.5-4.5 4.5" />
+    <path d="M19.5 12H9.5" />
+  </>,
+)
 export const Sun = icon(
   <>
     <circle cx="12" cy="12" r="3.8" />

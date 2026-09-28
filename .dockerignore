@@ -1,0 +1,33 @@
+# What the image must never contain, and what it simply does not need.
+# The build context is sent to Docker in full before the Dockerfile runs, so
+# everything listed here is also time not spent copying.
+
+# secrets: compose passes .env in at run time; baking it in would put the
+# DeepSeek key in every layer and every copy of the image
+.env
+.env.*
+!.env.example
+
+# local state and output
+runs/
+build/
+brag-output*/
+.venv/
+**/node_modules/
+web/ui/dist/
+**/__pycache__/
+.pytest_cache/
+
+# not for the server
+.git/
+.claude/
+.impeccable/
+Learning/
+labs/
+logos/
+tests/
+web/fixtures/
+web/*_test.py
+*.docx
+*.md
+!README.md

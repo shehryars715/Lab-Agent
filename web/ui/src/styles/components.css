@@ -538,6 +538,67 @@
   text-align: center;
 }
 
+/* ------------------------------------------------------------ sign-in */
+
+/* Outside the shell: no sidebar, nothing behind it but the ground. The same
+   field and button styles as the briefing form, so it reads as this app. */
+.login {
+  min-height: 100dvh;
+  display: grid;
+  /* The track, not the card, carries the width: minmax(0, ...) lets it shrink
+     below 22rem on a phone instead of a percentage resolving against itself. */
+  grid-template-columns: minmax(0, 22rem);
+  justify-content: center;
+  align-content: center;
+  padding: var(--space-8) var(--gutter) 12vh;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  animation: enter var(--dur-slow) var(--ease-out) both;
+}
+
+.login-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
+}
+
+.login-title {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.02em;
+}
+
+.login-sub {
+  margin-top: var(--space-2);
+  color: var(--ink-2);
+}
+
+.login-submit {
+  width: 100%;
+}
+
+/* Always in the flow, so an error appearing does not shove the button. */
+.login-error {
+  min-height: 1.5em;
+  margin-top: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-card {
+    animation: none;
+  }
+}
+
 /* Keyboard hints mean nothing on a touch screen. */
 @media (hover: none) and (pointer: coarse) {
   .new-lab kbd,

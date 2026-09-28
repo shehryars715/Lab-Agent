@@ -71,7 +71,26 @@ uv run python -m uvicorn web.server.app:app --port 8000
 For development, run `npm run dev` in `web/ui` alongside the server (Vite proxies
 `/api`, port 5173).
 
-It binds to `127.0.0.1` and has no accounts yet — see [Status](#status).
+It binds to `127.0.0.1` with no sign-in. To serve it to someone else, see [Deploying](#deploying).
+
+## Deploying
+
+One small server, two containers: Caddy takes ports 80 and 443 and gets the HTTPS
+certificate; the app sits behind it with no public port.
+
+```bash
+# on an Ubuntu server with Docker (deploy/lightsail-launch.sh prepares one)
+git clone https://github.com/shehryars715/Lab-Agent.git && cd Lab-Agent
+cp .env.example .env    # DEEPSEEK_API_KEY, LABSAGENT_USER, LABSAGENT_PASSWORD,
+                        # SITE_ADDRESS, ACME_EMAIL
+docker compose up -d --build
+```
+
+- Setting both `LABSAGENT_USER` and `LABSAGENT_PASSWORD` turns on a sign-in page. One
+  account, a signed cookie, seven days. A restart signs everyone out.
+- It runs as a single worker, because live runs are held in memory.
+- The agent's programs run as an unprivileged user inside the app's container. That is
+  not an isolated sandbox yet.
 
 ## How it works
 
@@ -119,8 +138,8 @@ FastAPI + server-sent events · React + Vite.
 
 ## Status
 
-Working end to end on one machine, for one person. Next: run agent code in an isolated
-cloud sandbox, then host it for a few classmates with Google sign-in.
+Working end to end, hosted on one server behind a single sign-in. Next: run agent code in
+an isolated cloud sandbox, then open it to a few classmates with Google sign-in.
 
 ## License
 

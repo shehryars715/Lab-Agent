@@ -13,6 +13,7 @@ import {
   PanelLeft,
   Pencil,
   Search,
+  SignOut,
   Sun,
   Trash,
 } from './Icons'
@@ -50,6 +51,7 @@ export default function Sidebar({
   onRename,
   searchRef,
   route,
+  onSignOut = null,
 }) {
   const [query, setQuery] = useState('')
   const filtered = useMemo(() => searchLabs(items, query), [items, query])
@@ -186,6 +188,11 @@ export default function Sidebar({
           >
             <ThemeIcon size={18} />
           </button>
+          {onSignOut && (
+            <button type="button" className="rail-btn" onClick={onSignOut} aria-label="Sign out" title="Sign out">
+              <SignOut />
+            </button>
+          )}
         </div>
 
         {/* ---------------------------------------------------- full panel */}
@@ -298,6 +305,11 @@ export default function Sidebar({
               <Info size={17} />
               <span>About</span>
             </a>
+            {onSignOut && (
+              <button type="button" className="foot-link foot-icon" onClick={onSignOut} aria-label="Sign out" title="Sign out">
+                <SignOut size={17} />
+              </button>
+            )}
             <div className="theme-switch" role="radiogroup" aria-label="Theme">
               {THEMES.map((t) => {
                 const { Icon, label } = THEME_META[t]

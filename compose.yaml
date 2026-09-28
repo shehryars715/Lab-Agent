@@ -1,0 +1,41 @@
+# One server, two containers.
+#
+#   internet --443--> caddy --http--> app:8000
+#
+# Caddy owns the public ports and the HTTPS certificate; the app publishes no
+# port at all, so the only way in is through Caddy. Both read .env from this
+# directory: the app for its keys and the sign-in, Caddy for SITE_ADDRESS.
+#
+#   docker compose up -d --build     first run, and after every `git pull`
+#   docker compose logs -f app       watch a run
+services:
+  app:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      # Past runs survive a rebuild. Without this they live in the container
+      # and vanish with it on every deploy.
+      - runs:/app/runs
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env, e.g. 13-50-1-2.sslip.io}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env, for certificate notices}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Where the certificate is kept. Lose it and Caddy asks for a new one
+      # on every restart, which is how certificate rate limits get hit.
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  runs:
+  caddy_data:
+  caddy_config:

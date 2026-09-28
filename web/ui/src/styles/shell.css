@@ -434,6 +434,15 @@
   color: var(--ink);
 }
 
+/* Sign out: an icon beside About. The auto margin keeps it there and leaves
+   the theme switch at the far end, as it is when sign-in is off. */
+.foot-icon {
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+  margin-right: auto;
+}
+
 .theme-switch {
   display: flex;
   gap: 2px;
@@ -581,6 +590,10 @@
   .search,
   .foot-link {
     min-height: 44px;
+  }
+
+  .foot-icon {
+    width: 44px;
   }
 
   .lab-actions {

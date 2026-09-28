@@ -1,0 +1,18 @@
+# Caddy: HTTPS in front of the app. Both values come from .env via compose.
+#
+# A hostname as the site address is what turns on automatic HTTPS: Caddy
+# answers Let's Encrypt's challenge on :80, stores the certificate in the
+# caddy_data volume, renews it, and redirects http to https. If Let's Encrypt
+# refuses (sslip.io shares ONE rate limit with everyone who uses it), Caddy
+# falls back to ZeroSSL on its own -- which is what the email is for.
+{
+	email {$ACME_EMAIL}
+}
+
+{$SITE_ADDRESS} {
+	# No `encode` (gzip) here on purpose: compressing a response means
+	# buffering it, and the run stream is server-sent events that must reach
+	# the browser the moment each one is written. Caddy flushes
+	# text/event-stream immediately as long as nothing sits in between.
+	reverse_proxy app:8000
+}

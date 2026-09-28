@@ -24,16 +24,17 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from labsagent.config import PROJECT_ROOT, load_settings
 
-from . import history
+from . import auth, history
 from .jobs import HEARTBEAT_S, JobRegistry
 from labsagent.data import DATA_SUFFIXES
 from labsagent.ingest.readers import ACCEPTED_SUFFIXES
@@ -66,6 +67,8 @@ MAX_DATA_FILES = 8
 ZIP_MAGIC = b"PK"
 
 app = FastAPI(title="Labs-Agent", docs_url="/api/docs", openapi_url="/api/openapi.json")
+# A no-op unless LABSAGENT_USER and LABSAGENT_PASSWORD are both set. See auth.py.
+app.add_middleware(auth.RequireLogin)
 registry = JobRegistry()
 
 UI_DIST = PROJECT_ROOT / "web" / "ui" / "dist"
@@ -77,6 +80,11 @@ class Answers(BaseModel):
 
 class Feedback(BaseModel):
     feedback: str
+
+
+class Login(BaseModel):
+    username: str = ""
+    password: str = ""
 
 
 class Identity(BaseModel):
@@ -98,6 +106,45 @@ def health() -> dict:
         "api_key_configured": settings.configured,
         "ui_built": UI_DIST.is_dir(),
     }
+
+
+# --------------------------------------------------------------------- sign-in
+
+
+@app.get("/api/session")
+def session(request: Request) -> dict:
+    return {"required": auth.settings.enabled, "signed_in": auth.signed_in(request)}
+
+
+# `def`, not `async def`: FastAPI runs a sync route on a worker thread, so the
+# failure delay parks that thread and never the event loop every SSE stream
+# shares.
+@app.post("/api/login")
+def login(body: Login, request: Request, response: Response) -> dict:
+    if not auth.settings.enabled:
+        return {"signed_in": True}
+    if not auth.credentials_match(body.username, body.password):
+        time.sleep(auth.FAILURE_DELAY_S)
+        raise HTTPException(401, "That username and password do not match.")
+    response.set_cookie(
+        auth.COOKIE,
+        auth.mint(),
+        max_age=auth.SESSION_S,
+        # Page scripts cannot read it, so an XSS bug cannot lift it.
+        httponly=True,
+        samesite="lax",
+        # https behind Caddy (uvicorn trusts its X-Forwarded-Proto), plain http
+        # on localhost -- where a Secure cookie would never be sent back.
+        secure=request.url.scheme == "https",
+        path="/",
+    )
+    return {"signed_in": True}
+
+
+@app.post("/api/logout")
+def logout(response: Response) -> dict:
+    response.delete_cookie(auth.COOKIE, path="/")
+    return {"signed_in": False}
 
 
 # There is deliberately no GET /api/profile. Identity lives in the browser

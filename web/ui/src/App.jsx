@@ -31,7 +31,8 @@ function friendly(error) {
   return msg
 }
 
-export default function App() {
+/** `onSignOut` is null unless the server requires a sign-in (see AuthGate). */
+export default function App({ onSignOut = null }) {
   const route = useRoute()
   const [theme, setTheme] = useTheme()
   const [collapsed, toggleCollapsed] = useCollapsed()
@@ -280,6 +281,7 @@ export default function App() {
         onRename={renameLab}
         searchRef={searchRef}
         route={route}
+        onSignOut={onSignOut}
       />
 
       <div className="main" {...(narrow && drawerOpen ? { inert: true } : null)}>

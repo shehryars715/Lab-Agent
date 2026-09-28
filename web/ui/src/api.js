@@ -10,6 +10,10 @@
  *  string (our own HTTPException) or an array (pydantic validation). Both
  *  happen; treating one as the other gives "undefined" in the UI. */
 async function readError(res) {
+  // A 401 anywhere means the sign-in cookie expired or the server restarted
+  // with a new key. Every failed call already comes through here, so this one
+  // line is what sends the whole app back to the sign-in form (AuthGate).
+  if (res.status === 401) window.dispatchEvent(new Event(SIGNED_OUT))
   try {
     const body = await res.json()
     const detail = body?.detail
@@ -19,6 +23,49 @@ async function readError(res) {
     /* non-JSON body -- fall through to the status line */
   }
   return `${res.status} ${res.statusText}`
+}
+
+// ------------------------------------------------------------ sign-in
+//
+// The cookie is HttpOnly, so this code never sees it: the browser attaches it
+// to every same-origin request -- fetch, downloads, and the EventSource stream
+// alike -- which is why nothing else in this file had to change.
+
+export const SIGNED_OUT = 'labsagent:signed-out'
+
+/** { required, signed_in }. A server that cannot be reached is treated as
+ *  "no sign-in needed", so the app loads and shows its usual offline message
+ *  instead of a sign-in form that could never succeed. */
+export async function getSession() {
+  try {
+    const res = await fetch('/api/session')
+    if (!res.ok) return { required: false, signed_in: true }
+    return await res.json()
+  } catch {
+    return { required: false, signed_in: true }
+  }
+}
+
+/** Not routed through readError: a wrong password is a 401 too, and it must
+ *  not announce "signed out" to an app that was never signed in. */
+export async function login(username, password) {
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (res.ok) return
+  let detail = `${res.status} ${res.statusText}`
+  try {
+    detail = (await res.json())?.detail ?? detail
+  } catch {
+    /* keep the status line */
+  }
+  throw new Error(detail)
+}
+
+export async function logout() {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {})
 }
 
 // Identity lives here, in this browser, and nowhere else.
@@ -137,6 +184,7 @@ export function formatWhen(ms) {
 
 export async function listHistory(limit = 6) {
   const res = await fetch(`/api/history?limit=${limit}`)
+  if (res.status === 401) window.dispatchEvent(new Event(SIGNED_OUT))
   if (!res.ok) return []
   const body = await res.json()
   return body.runs ?? []
