@@ -17,6 +17,14 @@ or a script.
 - When it can't do something, it says so.
 - It only asks when it truly can't continue.
 
+## Try it
+
+**Live beta:** https://13-234-218-86.sslip.io
+
+Sign-in is private during the beta. Email **shehryar0707@gmail.com** for the sign-in
+details. Found a bug or something odd? [Open an issue](https://github.com/shehryars715/Lab-Agent/issues)
+or email the same address.
+
 ## What it does
 
 - **Reads any lab document** — `.docx`, `.ipynb`, `.pdf`, `.md`/`.txt`, or a lab pasted
