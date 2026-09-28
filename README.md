@@ -21,6 +21,8 @@ or a script.
 
 **Live beta:** https://13-234-218-86.sslip.io
 
+**Demo video:** [watch it on Google Drive](https://drive.google.com/file/d/1gtvc-fbrtU2Wimju0rBokxiwoOFU7NQ2/view)
+
 Sign-in is private during the beta. Email **shehryar0707@gmail.com** for the sign-in
 details. Found a bug or something odd? [Open an issue](https://github.com/shehryars715/Lab-Agent/issues)
 or email the same address.
