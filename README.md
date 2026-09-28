@@ -17,11 +17,34 @@ or a script.
 - When it can't do something, it says so.
 - It only asks when it truly can't continue.
 
+## See it work
+
+**Attach the lab and press send.** The manual and its dataset go in with one line:
+"Word report, please."
+
+![The Labs-Agent home screen: a lab manual and its CSV are dropped into the composer, "Word report, please." is typed, and send is pressed](docs/demo/1-attach.gif)
+
+**It writes, runs and checks each task.** The real Lab 07 run, sped up: 3 of 3 tasks passed,
+34 s end to end. The agent trace on the right lists the tool calls it made.
+
+![The run panel moving through Read, Plan, Brief, Solve and Package while three task rows tick off, ending on "Your draft is ready to check" with the Word report attached](docs/demo/2-run.gif)
+
+**It does the assembly.** The screenshots, pasting and formatting take 30–60 minutes a lab
+by hand (an estimate). Lab 07 took 34 seconds (measured 2026-09-26).
+
+![Seven chores ticked off one by one, from "Run the program" to "Export, zip, upload", beside 30–60 minutes by hand against 34 seconds for Labs-Agent](docs/demo/3-time-saved.gif)
+
+**Versus general AI coding agents.** They write the code fast, but the screenshots, pasting
+and formatting are still yours. Their figures are rough estimates, not measured: about 300k
+input and 20k output tokens a lab, at list API prices as of 2026-09-26.
+
+![A comparison table: Claude, Codex and Antigravity at 35–70 minutes and about $0.60 to $1.20 a lab, against Labs-Agent at 34 seconds and $0.002](docs/demo/4-versus.gif)
+
+Full video, with sound (34 s): [watch it on Google Drive](https://drive.google.com/file/d/1gtvc-fbrtU2Wimju0rBokxiwoOFU7NQ2/view)
+
 ## Try it
 
 **Live beta:** https://13-234-218-86.sslip.io
-
-**Demo video:** [watch it on Google Drive](https://drive.google.com/file/d/1gtvc-fbrtU2Wimju0rBokxiwoOFU7NQ2/view)
 
 Sign-in is private during the beta. Email **shehryar0707@gmail.com** for the sign-in
 details. Found a bug or something odd? [Open an issue](https://github.com/shehryars715/Lab-Agent/issues)
