@@ -25,7 +25,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from labsagent.blocks import Block
+from labsagent.blocks import LEAD, Block
 from labsagent.data.refs import candidate_tokens, split_refs
 from labsagent.errors import DataError
 
@@ -281,7 +281,9 @@ def provenance_block(datasets) -> Block | None:
     parts = [
         f"{d.name} ({d.source_note})" if d.source_note else d.name for d in items
     ]
-    return Block("prose", text=f"Data used: {'; '.join(parts)}.")
+    # Marked LEAD: it is context for the whole run, placed before the first
+    # task's work, and `leading_prose` only takes prose marked this way.
+    return Block("prose", text=f"Data used: {'; '.join(parts)}.", role=LEAD)
 
 
 __all__ = [

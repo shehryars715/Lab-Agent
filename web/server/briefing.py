@@ -81,6 +81,8 @@ decide yourself.
 
 NEVER ask about:
   - data or datasets (handled separately, before you are asked anything)
+  - results, code or files from a previous lab or earlier work (also handled
+    separately)
   - which library, method or approach to use -- choose one yourself
   - output format, layout, style, plots or wording -- choose yourself
   - what to do if something is missing or fails -- there are no fallbacks
@@ -210,7 +212,8 @@ class Plan:
 
 def _slug(value: str, taken: set[str]) -> str:
     base = _SLUG.sub("_", (value or "").strip().lower()).strip("_") or "answer"
-    if base[0].isdigit():
+    # "prereq_" is a family of keys code consumes (see pipeline.is_structural).
+    if base[0].isdigit() or base.startswith("prereq_"):
         base = f"q_{base}"
     candidate, n = base, 2
     while candidate in taken:
@@ -327,7 +330,10 @@ def read_briefing(
     )
 
     handler = UsageMetadataCallbackHandler()
-    taken: set[str] = set()
+    # Keys code already owns. A model question slugged "datasets" would
+    # otherwise have its answer consumed as data references instead of
+    # reaching the solver. (The prereq_ family is kept out by `_slug`.)
+    taken: set[str] = {"datasets", "artifacts"}
 
     for _ in range(BRIEFING_ATTEMPTS):
         try:

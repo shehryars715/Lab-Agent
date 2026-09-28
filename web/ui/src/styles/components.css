@@ -194,13 +194,15 @@
   color: var(--ink);
 }
 
-.chip[aria-pressed='true'] {
+.chip[aria-pressed='true'],
+.chip[aria-checked='true'] {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent-ink);
 }
 
-.chip[aria-pressed='true']::before {
+.chip[aria-pressed='true']::before,
+.chip[aria-checked='true']::before {
   background: currentColor;
   opacity: 1;
 }

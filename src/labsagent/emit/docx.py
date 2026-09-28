@@ -26,7 +26,7 @@ from pathlib import Path
 import docx as pydocx
 from docx.shared import Inches, Pt
 
-from labsagent.blocks import FIGURE, SCREENSHOT
+from labsagent.blocks import has_screenshot_twin
 from labsagent.present import arrange, vocabulary
 from labsagent.emit import EmitContext, register
 from labsagent.ingest.readers import produces_anchors
@@ -78,7 +78,7 @@ def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
         wrote_output_label = False
         answers_headed = False
         blocks = arrange(outcome, ctx.style)
-        for block in blocks:
+        for index, block in enumerate(blocks):
             if block.kind == "code":
                 if block.title:
                     doc.add_heading(block.title, level=3)
@@ -99,13 +99,12 @@ def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
                         str(block.path), width=Inches(IMAGE_WIDTH_IN)
                     )
                     tighten(para, before=2, after=4)
-            elif block.kind == "output" and not any(
-                b.kind == "image"
-                and b.role in ((SCREENSHOT, FIGURE) if ctx.style == "classic" else (SCREENSHOT,))
-                for b in blocks
-            ):
-                # Only fall back to the raw text when no screenshot exists --
-                # otherwise the report would show the same output twice.
+            elif block.kind == "output" and not has_screenshot_twin(blocks, index):
+                # Only fall back to the raw text when this output has no
+                # terminal picture -- decided per output, not per task, so a
+                # section layout shows each section's picture. (Classic used
+                # to hide the text whenever ANY figure existed, which lost the
+                # output of a run whose screenshot was missing.)
                 _label(doc, words.output if ctx.style != "classic" else OUTPUT_LABEL)
                 wrote_output_label = True
                 for line in block.text.splitlines():

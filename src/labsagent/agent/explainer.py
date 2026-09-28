@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from labsagent.models import Task, Transcript
+from labsagent.prerequisites import writer_lines
 from labsagent.usage import RunUsage
 
 # Kept byte-stable for the same reason SOLVER_PROMPT is: it is the cacheable
@@ -64,6 +65,9 @@ How to write it:
   demonstrates instead.
 - Never mention attempts, errors, fixes, debugging, or how the program came to be. You did not see
   any of that, and it does not belong in a report.
+- Never state facts about work you were not shown -- a previous lab, the student's earlier choices
+  or files. What this program computes is this program's result, not the student's earlier work.
+  If a question asks about something the brief does not contain, say it was not provided.
 - Plain prose only. No markdown, no asterisks, no backticks, no headings, no bullet points, no
   code blocks.
 - Write exactly as many sentences as the brief asks for. Not more.
@@ -171,6 +175,13 @@ def build_brief(task: Task, code_text: str, transcript: Transcript | None) -> st
             lines = lines[:limit] + ["... output truncated ..."]
         parts.append("\nWhat it printed when it ran:\n" + "\n".join(lines))
 
+    # What the report may claim about work from outside this lab -- supplied,
+    # recreated here, or not provided. Without it the writer saw this run's
+    # own filtering code and described it as the student's Lab 02.
+    outside = writer_lines(task)
+    if outside:
+        parts.append(outside)
+
     if questions:
         numbered = "\n".join(f"{n}. {q}" for n, q in enumerate(questions, start=1))
         parts.append(
@@ -195,21 +206,102 @@ class WriteUp:
 
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
+#: A reply that is (or tries to be) the JSON object, even a broken one.
+_LOOKS_LIKE_JSON = re.compile(r'^\s*\{|"(?:overview|answers)"\s*:')
+_JSON_STRING = r'"((?:[^"\\]|\\.)*)"'
+
+
+def _json_object(raw: str) -> dict | None:
+    """The first JSON object in the reply, tolerating what models add.
+
+    `strict=False` accepts a literal newline inside a string -- a model writing
+    a two-paragraph answer does exactly that, and strict parsing rejects it.
+    `raw_decode` stops at the object's end, so trailing chatter is ignored.
+    """
+    start = raw.find("{")
+    if start < 0:
+        return None
+    try:
+        data, _ = json.JSONDecoder(strict=False).raw_decode(raw[start:])
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _unescape(value: str) -> str:
+    try:
+        return json.loads(f'"{value}"', strict=False)
+    except ValueError:
+        return value.replace('\\"', '"').replace("\\n", " ")
+
+
+def _salvage(raw: str) -> dict:
+    """What can be read out of a JSON reply that will not parse -- unescaped
+    quotes, a cut-off final string. Whole strings only; a truncated one is
+    dropped rather than printed half-finished."""
+    data: dict = {}
+    # Up to the next key first: that survives an unescaped quote INSIDE the
+    # text ("the "best" one"), which a JSON-string pattern would cut short.
+    found = re.search(r'"overview"\s*:\s*"(.*?)"\s*,\s*"answers"\s*:', raw, re.S) or re.search(
+        r'"overview"\s*:\s*' + _JSON_STRING, raw, re.S
+    )
+    if found:
+        data["overview"] = _unescape(found.group(1))
+    listed = re.search(r'"answers"\s*:\s*\[(.*)', raw, re.S)
+    if listed:
+        body = listed.group(1)
+        if '"answer"' in body:
+            data["answers"] = [
+                _unescape(s) for s in re.findall(r'"answer"\s*:\s*' + _JSON_STRING, body, re.S)
+            ]
+        else:
+            closed = body.rfind("]")
+            items = body[:closed] if closed >= 0 else body
+            pieces = re.split(r'"\s*,\s*"', items.strip())
+            complete = []
+            for n, piece in enumerate(pieces):
+                last = n == len(pieces) - 1
+                text = piece.strip()
+                if n == 0:
+                    text = text.removeprefix('"')
+                if last:
+                    # A final string with no closing quote was cut off.
+                    if not text.endswith('"'):
+                        break
+                    text = text[:-1]
+                complete.append(_unescape(text))
+            data["answers"] = [a for a in complete if a.strip()]
+    return data
+
+
+def overview_of(text: str) -> str:
+    """A plain-prose reply as-is; a JSON-shaped one reduced to its overview.
+
+    THE LEAK THIS CLOSES. A write-up whose JSON would not parse used to be kept
+    whole as "the overview", so the Word report printed `{"overview": "...",
+    "answers": [...]}` verbatim under the task. Text that looks like JSON is
+    never prose: it is parsed, salvaged, or dropped.
+    """
+    raw = _FENCE.sub("", (text or "").strip())
+    if not _LOOKS_LIKE_JSON.search(raw):
+        return raw
+    data = _json_object(raw) or _salvage(raw)
+    return str(data.get("overview") or "")
 
 
 def parse_writeup(text: str, questions: list[str]) -> WriteUp | None:
-    """Lenient: JSON when it parses, else the whole reply is the overview.
+    """Lenient: JSON when it parses (or can be salvaged), else plain prose is
+    the overview -- but a JSON-shaped reply is never printed as prose.
 
     A bad reply must never cost the task its prose, and it must never raise --
     the write-up is a decoration on a task that already succeeded.
     """
     raw = _FENCE.sub("", (text or "").strip())
     data = None
-    if raw.startswith("{"):
-        try:
-            data = json.loads(raw)
-        except ValueError:
-            data = None
+    if _LOOKS_LIKE_JSON.search(raw):
+        data = _json_object(raw) or _salvage(raw)
+        if not data:
+            return None
     if not isinstance(data, dict):
         overview = clamp_sentences(plain_text(raw), LONG_SENTENCES)
         return WriteUp(overview=overview) if overview else None
@@ -270,5 +362,7 @@ class Explainer:
         text = reply.content if isinstance(reply.content, str) else str(reply.content)
         if questions:
             return parse_writeup(text, questions)
-        cleaned = clamp_sentences(plain_text(text), sentence_budget(task))
+        # Asked for plain text, a model still sometimes answers with the JSON
+        # object -- the same leak as above, on the other path.
+        cleaned = clamp_sentences(plain_text(overview_of(text)), sentence_budget(task))
         return cleaned or None

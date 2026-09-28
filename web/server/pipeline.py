@@ -18,6 +18,7 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
+from labsagent import capabilities, credits
 from labsagent import events as ev
 from labsagent.agent.build import build_explainer, build_model
 from labsagent.blocks import blocks_for
@@ -32,6 +33,15 @@ from labsagent.ingest.labspec import extract_labspec
 from labsagent.intent import Intent, scope
 from labsagent.models import LabSpec, TaskOutcome
 from labsagent.orchestrator import run_lab
+from labsagent.prerequisites import (
+    KEY_PREFIX,
+    OMITTED,
+    PROVIDED,
+    RECREATED,
+    Needed,
+    attach,
+    has_omitted,
+)
 from labsagent.profile import ASK_ORDER, StudentProfile
 from labsagent.report.cover import cover_from
 from labsagent.runstore import RunStore
@@ -65,6 +75,14 @@ IDENTITY_KEYS = {k for k, _ in ASK_ORDER} | {"section", "program"}
 RESERVED_KEYS = IDENTITY_KEYS | {"artifacts", "datasets"}
 
 
+def is_structural(key: str) -> bool:
+    """Consumed by code, never passed on as prose. The prerequisite answers are
+    a family (`prereq_1`, `prereq_1_value`, ...), so an exact-match set cannot
+    hold them -- and a prerequisite choice leaking into the notes would reach
+    the solver as "- prereq_1: omit"."""
+    return key in RESERVED_KEYS or str(key).startswith(KEY_PREFIX)
+
+
 def answered_notes(questions: list[dict], answers: dict[str, str]) -> str:
     """The agent's own questions and what the student replied, as prose.
 
@@ -79,13 +97,13 @@ def answered_notes(questions: list[dict], answers: dict[str, str]) -> str:
     lines = [
         f"- {labels.get(key, key)}: {str(value).strip()}"
         for key, value in answers.items()
-        if key not in RESERVED_KEYS and str(value).strip()
+        if not is_structural(key) and str(value).strip()
     ]
     # A SKIPPED QUESTION STILL HAS AN ANSWER: the default the card promised.
     # Passing it on is what makes "if you skip, I'll ..." true.
     for q in questions:
         key, default = q.get("key"), str(q.get("default") or "").strip()
-        if key in RESERVED_KEYS or not default or str(answers.get(key) or "").strip():
+        if is_structural(key) or not default or str(answers.get(key) or "").strip():
             continue
         # NEUTRAL, NOT "THESE WIN". A skipped default arrived in the solver's
         # prompt under "where they conflict with the task text, these win" --
@@ -116,7 +134,9 @@ def dataset_refs_in(answers: dict[str, str]) -> list[str]:
     """
     found: list[str] = []
     for key, value in (answers or {}).items():
-        if key in RESERVED_KEYS:
+        # A prerequisite the student pastes in is earlier WORK, not data to
+        # download -- a link inside it must not be fetched as a dataset.
+        if is_structural(key):
             continue
         for token in candidate_tokens(str(value or "")):
             if not token or token in found:
@@ -209,6 +229,108 @@ def data_question(intent: Intent, uploads) -> dict | None:
     }
 
 
+#: The card's choices -> what each means to the solver, writer and report.
+PREREQ_CHOICES = {"provide": PROVIDED, "omit": OMITTED, "recreate": RECREATED}
+
+
+def _task_phrase(task_ids) -> str:
+    """("task1", "task2", "task5") -> "Tasks 1, 2 and 5"."""
+    numbers = [str(t).replace("task", "") for t in task_ids]
+    if len(numbers) == 1:
+        return f"Task {numbers[0]}"
+    return "Tasks " + ", ".join(numbers[:-1]) + " and " + numbers[-1]
+
+
+def prerequisite_questions(needed: list[Needed], spec) -> tuple[list[Needed], list[dict]]:
+    """One required field per missing input the SCOPED tasks rely on.
+
+    OWNED BY CODE, LIKE THE DATA QUESTION. Ingest read (and quoted) what the
+    manual relies on from outside itself; whether it is here is a fact; and
+    what to do without it is the student's decision, never the agent's. Each
+    field offers exactly the choices that are honest for that input: "recreate"
+    only when ingest judged it rebuildable from what this lab provides.
+
+    Returns the inputs that survived scoping (asking about Lab 02 when the
+    student only wants task 3, which never mentions it, is noise) and their
+    fields, in the same order.
+    """
+    in_scope = {t.id for t in spec.tasks}
+    kept = [
+        replace(item, task_ids=tuple(t for t in item.task_ids if t in in_scope))
+        for item in needed
+    ]
+    kept = [item for item in kept if item.task_ids]
+    questions: list[dict] = []
+    for n, item in enumerate(kept, start=1):
+        options = [
+            {"value": "provide", "label": "I'll give it"},
+            {"value": "omit", "label": "Leave those parts out"},
+        ]
+        if item.recreatable:
+            options.append(
+                {
+                    "value": "recreate",
+                    "label": "Recreate it"
+                    + (f" from {item.recreate_from}" if item.recreate_from else ""),
+                    "hint": "It will be labelled as recreated in the report.",
+                }
+            )
+        one = len(item.task_ids) == 1
+        questions.append(
+            {
+                "key": f"{KEY_PREFIX}{n}",
+                "kind": "prerequisite",
+                "label": item.what,
+                "reason": (
+                    f"{_task_phrase(item.task_ids)} rel{'ies' if one else 'y'} on this, "
+                    "and it isn't in what you sent."
+                ),
+                "hint": item.detail,
+                "options": options,
+                "value": "",
+                "default": "",
+                "required": True,
+            }
+        )
+    return kept, questions
+
+
+def resolve_prerequisites(
+    kept: list[Needed], questions: list[dict], answers: dict[str, str]
+) -> dict[int, tuple[str, str]] | None:
+    """The student's decision for every missing input, or None to stop.
+
+    None for anything short of a complete, valid answer: a timeout or "Stop
+    here" ({}), a missing or unknown choice, "recreate" where it was never
+    offered, or "I'll give it" with nothing given. The user decided this
+    (2026-09-26): without an explicit answer the run solves nothing.
+    """
+    decisions: dict[int, tuple[str, str]] = {}
+    for index, (item, question) in enumerate(zip(kept, questions)):
+        key = question["key"]
+        resolution = PREREQ_CHOICES.get(str(answers.get(key) or "").strip().lower())
+        if resolution is None or (resolution == RECREATED and not item.recreatable):
+            return None
+        value = str(answers.get(f"{key}_value") or "").strip()
+        if resolution == PROVIDED and not value:
+            return None
+        decisions[index] = (resolution, value[:4000])
+    return decisions
+
+
+def prerequisite_stop(kept: list[Needed]) -> str:
+    """Why the run stopped, in one paragraph (the UI shows it in a <p>)."""
+    whats = "; ".join(item.what[0].lower() + item.what[1:] for item in kept if item.what)
+    can_recreate = any(item.recreatable for item in kept)
+    return (
+        f"I stopped before writing any code: this lab relies on work from outside it "
+        f"that isn't here ({whats}). Send the lab again with it pasted into your "
+        "message, or choose to leave those parts out"
+        + (" or to recreate them" if can_recreate else "")
+        + " when I ask."
+    )
+
+
 def closing_needs(outcomes) -> str:
     """What is left to finish, in the words each task stopped with. "" if nothing.
 
@@ -216,10 +338,14 @@ def closing_needs(outcomes) -> str:
     of something did not hold up the others; this is where the student hears
     about it, once, with every blocker in one place.
     """
+    # A gap on a task whose missing input the student CHOSE to leave out is
+    # that choice, not a request: asking for it again here would be asking
+    # for what they already declined. A blocker is still always reported.
     items = [
         (o.task.title or o.task.id, o.blocker or o.gap)
         for o in outcomes
-        if getattr(o, "blocker", None) or getattr(o, "gap", None)
+        if getattr(o, "blocker", None)
+        or (getattr(o, "gap", None) and not has_omitted(o.task))
     ]
     if not items:
         return ""
@@ -431,7 +557,7 @@ def _acquire(
 def wire_event(event: ev.Event) -> dict[str, Any]:
     """An event dataclass -> JSON-safe dict for the browser.
 
-    Two transformations, both deliberate.
+    Three transformations, all deliberate.
 
     JSON SAFETY. `dataclasses.asdict` is the convenient call and it chokes here
     for the same reason it chokes in `runstore.py`: `at` is a `datetime`, which
@@ -447,6 +573,12 @@ def wire_event(event: ev.Event) -> dict[str, Any]:
     """
     payload = {k: v for k, v in asdict(event).items() if k != "at"}
     payload.pop("path", None)
+    # CREDITS, NOT DOLLARS. The core prices in USD (what the provider bills);
+    # the browser only ever sees credits. Live events carry EXACT credits so a
+    # running total does not round each task up; the settled charge is the
+    # job summary's `credits`.
+    if "cost_usd" in payload:
+        payload["credits"] = credits.exact(payload.pop("cost_usd"))
     payload["kind"] = event.kind
     payload["at"] = event.at.isoformat()
     return payload
@@ -741,6 +873,41 @@ def run_job(
                 }
             )
 
+        # -- 2b. can this environment do these tasks at all? ----------------
+        #
+        # A LIMIT IS CHECKED WHERE THE WORK IS SCOPED, NOT WHERE IT RUNS. An
+        # HTML/CSS lab used to reach the solver, whose last instruction is
+        # "write task1.py", and came back as Python that prints HTML -- marked
+        # passed, with the web pages never delivered. The solver was the first
+        # and worst place to discover the lab was not Python.
+        #
+        # REFUSE THE WHOLE LAB (decided 2026-09-26), on the SCOPED spec -- so
+        # "only tasks 2-4" still works when task 1 is out of scope. Before the
+        # briefing call and before any run directory: nothing is charged,
+        # exactly like a document that is not a lab.
+        out_of_scope = capabilities.check(spec, reading.requirements)
+        if out_of_scope:
+            job.publish(
+                {
+                    "type": "out_of_scope",
+                    "tasks": [
+                        {"id": o.task_id, "title": o.title, "reasons": o.reasons}
+                        for o in out_of_scope
+                    ],
+                }
+            )
+            job.finish(error=capabilities.refusal(out_of_scope, len(spec.tasks)))
+            return
+
+        # A LIBRARY THAT ISN'T INSTALLED is one step, not the lab: said now,
+        # before any money is spent, and the solver leaves that step out
+        # honestly ("Not done: ...") instead of imitating the library.
+        notice = capabilities.library_notice(
+            capabilities.missing_libraries(spec, reading.requirements)
+        )
+        if notice:
+            job.publish({"type": "narration", "text": notice})
+
         # -- 3. brief: decide what to ask, and how the cover should look ----
         #
         # This is the pause that matters. It sits BEFORE the solve, so an
@@ -763,17 +930,28 @@ def run_job(
         usage.phase("briefing").merge(brief_usage)
 
         asked_for_data = data_question(intent, dataset_paths or [])
+        # WORK FROM OUTSIDE THIS LAB that nothing here supplies -- asked about
+        # here, by code, before any code is written. See prerequisites.py.
+        needed, prereq_fields = prerequisite_questions(intent.prerequisites, spec)
         job.publish({"type": "plan", "question_count": len(plan.questions)})
         n = len(spec.tasks)
+        follow = ""
         if asked_for_data:
-            follow = (
+            follow += (
                 " The manual asks for " + " and ".join(intent.data_unlinked[:2])
                 + " but doesn't include a link. Paste it below and I'll download it."
             )
-        elif plan.questions:
+        for item in needed:
+            one = len(item.task_ids) == 1
+            # "which you didn't send" reads right for "results" and "file" alike.
+            follow += (
+                f" {_task_phrase(item.task_ids)} rel{'ies' if one else 'y'} on "
+                f"{item.what[0].lower() + item.what[1:]}, which you didn't send."
+            )
+        if needed:
+            follow += " Tell me how to handle that before I start."
+        elif plan.questions and not asked_for_data:
             follow = " One quick question first — skip it if you like."
-        else:
-            follow = ""
         job.publish(
             {"type": "narration", "text": f"Found {n} task{'s' if n != 1 else ''}." + follow}
         )
@@ -786,6 +964,7 @@ def run_job(
         # from the request and can be changed afterwards for free, and data is
         # fetched as named and asked about only if none of it arrives.
         questions, known = build_questions(profile_seed, facts, plan.questions)
+        questions = [*prereq_fields, *questions]
         if asked_for_data:
             questions = [asked_for_data, *questions]
 
@@ -808,6 +987,16 @@ def run_job(
                 )
             )
             return
+
+        # NO DECISION, NO RUN. For each missing input the student said give it,
+        # leave it out, or recreate it -- or the run stops here, having written
+        # nothing. Improvising a stand-in is what this whole check replaces.
+        if needed:
+            decisions = resolve_prerequisites(needed, prereq_fields, answers)
+            if decisions is None:
+                job.finish(error=prerequisite_stop(needed))
+                return
+            spec = attach(spec, needed, decisions)
 
         # The agent's own answers fold into the intent, and the intent reaches
         # the solver. The pause was moved before the solve so replies could
@@ -934,13 +1123,19 @@ def run_job(
         recorder_events = recorder.events
         ev.write_events_log(store, recorder_events)
 
+        # Settle the charge: every phase of the run (ingest, briefing, solve,
+        # explain), rounded up once, recorded with the rate it was charged at.
+        manifest.credits = credits.charge(usage.total.cost_usd)
+        manifest.usd_per_credit = credits.USD_PER_CREDIT
+        store.save(manifest)
+
         passed = sum(1 for o in manifest.outcomes if o.status == "passed")
         job.finish(
             summary={
                 "passed": passed,
                 "failed": len(manifest.outcomes) - passed,
                 "total": len(manifest.outcomes),
-                "cost_usd": usage.total.cost_usd,
+                "credits": manifest.credits,
                 "run_id": store.run_id,
                 "lab_number": spec.lab_number,
                 "blocked": sum(1 for o in manifest.outcomes if o.blocker),
@@ -993,6 +1188,7 @@ def revise_instruction(prior: str, change: str, code: str) -> str:
 
 def _record_followup(manifest, feedback: str, followup, usage: RunUsage, prior_cost: float):
     """Add this follow-up to the run's record instead of overwriting it."""
+    charged = credits.charge(usage.total.cost_usd)
     manifest.followups.append(
         {
             "feedback": feedback[:500],
@@ -1003,9 +1199,14 @@ def _record_followup(manifest, feedback: str, followup, usage: RunUsage, prior_c
             "style": followup.style,
             "usage": usage.total.as_dict(),
             "cost_usd": usage.total.cost_usd,
+            "credits": charged,
         }
     )
     manifest.cost_usd = prior_cost + usage.total.cost_usd
+    # Added per follow-up, not recomputed from the dollar total: each charge
+    # rounds up once, when it settles.
+    manifest.credits += charged
+    manifest.usd_per_credit = credits.USD_PER_CREDIT
 
 
 def _rewrite(context: RunContext, outcomes, followup, usage: RunUsage) -> None:
@@ -1079,7 +1280,7 @@ def revise_job(job: Job, feedback: str) -> None:
             job.publish({"type": "narration", "text": reply})
             _record_followup(manifest, feedback, followup, usage, prior_cost)
             store.save(manifest)
-            job.finish(summary={"answered": True, "cost_usd": manifest.cost_usd})
+            job.finish(summary={"answered": True, "credits": manifest.credits})
             return
 
         # -- a change: say what, in plain words ------------------------------
@@ -1186,7 +1387,7 @@ def revise_job(job: Job, feedback: str) -> None:
                 "passed": passed,
                 "failed": len(manifest.outcomes) - passed,
                 "total": len(manifest.outcomes),
-                "cost_usd": manifest.cost_usd,
+                "credits": manifest.credits,
                 "run_id": store.run_id,
                 "lab_number": manifest.spec.lab_number,
                 "revised": followup.resolve_ids + followup.rewrite_ids,
@@ -1215,7 +1416,7 @@ def repackage_job(job: Job, identity: dict[str, str]) -> None:
         context.profile = profile_from({**asdict(context.profile), **identity})
         manifest = context.store.load()
         _emit(job, context, manifest.outcomes, RunUsage(model=context.settings.model_name))
-        job.finish(summary={"identity_saved": True, "cost_usd": manifest.cost_usd})
+        job.finish(summary={"identity_saved": True, "credits": manifest.credits})
     except Exception as exc:  # noqa: BLE001
         import traceback
 

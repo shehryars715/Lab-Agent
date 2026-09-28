@@ -159,12 +159,15 @@ export function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-export function formatUsd(n) {
+/** Credits, the only unit the student sees. The server sends EXACT credits
+ *  while a run is live and a whole, settled charge once it finishes; both are
+ *  shown rounded UP, because that is how a charge settles (labsagent/credits.py)
+ *  and a live figure should never read lower than the bill it becomes. */
+export function formatCredits(n) {
   if (typeof n !== 'number') return '—'
-  if (n === 0) return '$0'
-  // Sub-cent costs are the norm here, and toFixed(2) would print $0.00 for
-  // every run. Four decimals is the smallest precision that is still honest.
-  return `$${n.toFixed(4)}`
+  // Guard float noise: 19.000000001 is 19, not 20.
+  const whole = Math.max(0, Math.ceil(n - 1e-6))
+  return `${whole.toLocaleString('en-US')} credit${whole === 1 ? '' : 's'}`
 }
 
 export function formatElapsed(ms) {

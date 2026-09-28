@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from labsagent import capabilities
 from labsagent import events as ev
 from labsagent.capture.base import ScreenshotBackend
 from labsagent.config import Settings
@@ -175,6 +176,50 @@ class SampleResult:
         )
 
 
+def expects_gate(case: EvalCase) -> bool:
+    return any(e.out_of_scope or e.prerequisite for e in case.expected.values())
+
+
+def score_gate(case: EvalCase, spec, out_of_scope, needed) -> list[TaskScore]:
+    """Score a case that stopped BEFORE solving: refused, or paused to ask.
+
+    Mirrors the web pipeline, which solves nothing when either gate fires. For
+    these scores `ran` means "the gate decided as declared" -- refused exactly
+    the tasks it should, flagged exactly the prerequisites it should. Every
+    ordinary case therefore guards against a false refusal: a gate that fires
+    on it scores the case unclean.
+    """
+    refused = {o.task_id: o for o in out_of_scope}
+    flagged = {task_id for item in needed for task_id in item.task_ids}
+    scores = []
+    for position, task in enumerate(spec.tasks, start=1):
+        expectation = case.expected.get(position, Expectation())
+        got_out, got_pre = task.id in refused, task.id in flagged
+        # An impossible task refused up front has failed honestly, and early.
+        want_out = expectation.out_of_scope or (expectation.should_fail and got_out)
+        problems = []
+        if got_out and not want_out:
+            problems.append("wrongly refused: " + "; ".join(refused[task.id].reasons))
+        elif want_out and not got_out:
+            problems.append("not refused, but it is out of scope")
+        if got_pre != expectation.prerequisite:
+            problems.append(
+                "flagged a prerequisite that is not needed" if got_pre else "missed the prerequisite"
+            )
+        verdict = "refused before solving" if got_out else "stopped to ask" if got_pre else ""
+        scores.append(
+            TaskScore(
+                position=position,
+                task_id=task.id,
+                ran=not problems,
+                matched=None,
+                attempts=0,
+                detail="; ".join(problems) or verdict,
+            )
+        )
+    return scores
+
+
 def score_sample(case: EvalCase, outcomes: list[TaskOutcome]) -> list[TaskScore]:
     """Pair outcomes with expectations BY POSITION, not by id.
 
@@ -240,6 +285,19 @@ def run_sample(
             raise SpecError(f"not read as a lab: {reading.what_this_is or 'unrecognised'}")
         spec = reading.spec
         result.tasks_found = len(spec.tasks)
+
+        # THE PRE-SOLVE GATES, as the web pipeline applies them. This harness
+        # goes straight from ingest to `run_lab`, so without this check the
+        # eval could not see either gate -- neither a correct refusal nor a
+        # wrong one.
+        out_of_scope = capabilities.check(spec, reading.requirements)
+        needed = list(reading.intent.prerequisites)
+        if out_of_scope or needed or expects_gate(case):
+            result.scores = score_gate(case, spec, out_of_scope, needed)
+            result.duration_s = time.monotonic() - started
+            result.cost_usd = usage.total.cost_usd
+            result.usage = usage.as_dict()
+            return result
 
         store = RunStore.create(spec.lab_number, root=runs_root)
         manifest = run_lab(

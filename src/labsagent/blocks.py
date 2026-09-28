@@ -73,6 +73,56 @@ def gap_note(outcome) -> str:
     return f"Not done: {gap}" if gap else ""
 
 
+def outside_notes(outcome) -> list[Block]:
+    """Deterministic lines about work from outside the lab (see
+    `prerequisites.report_notes`): "Recreated for this report: ..." or "Left
+    out: ...". Written by code, never by a model, so a recreated stand-in can
+    never reach a submission unlabelled. Empty for a self-contained lab."""
+    from labsagent.prerequisites import report_notes
+
+    return [Block("prose", text=note, role="outside") for note in report_notes(outcome)]
+
+
+#: Role of prose a CALLER placed before a task's work -- today, the "Data
+#: used" line. `leading_prose` takes only this role, never ordinary prose.
+LEAD = "lead"
+
+
+def has_screenshot_twin(blocks: list[Block], index: int) -> bool:
+    """Is the output block at `index` also shown as a terminal picture?
+
+    THE RULE FOR DOCUMENTS: terminal output is shown as the terminal, not as
+    text. An output block is immediately followed by its picture wherever one
+    was drawn -- the whole run's in `blocks_for`, each section's in
+    `present.arrange` -- so a document emitter skips the text exactly when the
+    picture is there to replace it, per output rather than per task.
+
+    The file must exist: a moved run with a dangling image path would
+    otherwise lose its output entirely -- text skipped, picture skipped.
+    """
+    for block in blocks[index + 1:]:
+        if block.kind == "image" and block.role == SCREENSHOT:
+            if block.path is not None and Path(block.path).exists():
+                return True
+            continue
+        return False
+    return False
+
+
+def all_shots(outcome) -> list[Path]:
+    """Every picture a task produced, whole-run and per-section, for the zip."""
+    seen: list[Path] = []
+    paths = list(getattr(outcome, "screenshot_paths", None) or [])
+    for part in getattr(outcome, "sections", None) or []:
+        paths += list(part.get("screenshots") or [])
+    paths += list(getattr(outcome, "figure_paths", None) or [])
+    for path in paths:
+        path = Path(path)
+        if path not in seen:
+            seen.append(path)
+    return seen
+
+
 def blocks_for(outcome) -> list[Block]:
     """The blocks of one outcome: its own if it has them, else synthesised.
 
@@ -90,7 +140,7 @@ def blocks_for(outcome) -> list[Block]:
         # block, because no solution was ever asked for.
         if outcome.status == "failed":
             return [Block("error", text=_failure_note(outcome))]
-        return _prose_of(outcome)
+        return outside_notes(outcome) + _prose_of(outcome)
 
     out: list[Block] = [Block("code", text=outcome.code_text or NO_SOLUTION)]
 
@@ -108,6 +158,9 @@ def blocks_for(outcome) -> list[Block]:
     for figure in outcome.figure_paths:
         out.append(Block("image", path=Path(figure), role=FIGURE))
 
+    # AFTER the output, never first: a note at the head of the list would be
+    # mistaken for caller-placed lead prose and printed twice.
+    out += outside_notes(outcome)
     if gap_note(outcome):
         out.append(Block("prose", text=gap_note(outcome), role="gap"))
     return out + _prose_of(outcome)
@@ -143,11 +196,16 @@ def leading_prose(outcome) -> list[Block]:
     explanation a second time at the top of its own task. Reading `blocks`
     directly and stopping at the first non-prose block means a synthesised
     list contributes nothing, and only an explicit caller is honoured.
+
+    AND ONLY PROSE MARKED `LEAD`. A theory task's synthesised list is ALL
+    prose, so "stop at the first non-prose block" swallowed its explanation
+    and answers as well, and the anchored report printed them twice whenever
+    that task came first and carried the data note.
     """
     blocks = getattr(outcome, "blocks", None) or []
     out: list[Block] = []
     for block in blocks:
-        if block.kind != "prose":
+        if block.kind != "prose" or block.role != LEAD:
             break
         out.append(block)
     return out

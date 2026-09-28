@@ -38,7 +38,7 @@ or a script.
   notebook (`.ipynb`), a script (`.py`), a write-up (`.md`), or a `.zip` of them.
   Screenshots are real terminal output, captured as the program ran.
 
-A typical lab costs well under a cent. Open the app, attach the manual (and any data),
+Usage is counted in credits (1 credit = $0.0001 of model time); a typical lab uses 10–40. Open the app, attach the manual (and any data),
 say what you want — *"just the notebook for tasks 2 and 4"* — and ask for changes
 afterwards in the same chat.
 

@@ -1,6 +1,15 @@
 import { useMemo, useState } from 'react'
 import { FORMATS, formatLabel, parseFormatList } from '../lib/formats'
 import { Check } from './Icons'
+import {
+  PROVIDE,
+  answerText,
+  answersFor,
+  isPrerequisite,
+  missingFields,
+  mustAnswer,
+  valueKey,
+} from '../lib/questions'
 
 /** The briefing: the one pause, inline in the lab, before any code is written.
  *
@@ -24,13 +33,13 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
   // Focus the first field that genuinely needs typing; landing on a prefilled
   // one and tabbing past it is a small friction that compounds every run.
   const focusKey = useMemo(
-    () => questions.find((q) => !q.value && q.key !== 'artifacts')?.key,
+    () => questions.find((q) => !q.value && q.key !== 'artifacts' && !isPrerequisite(q))?.key,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- computed once, on mount
     [],
   )
 
   if (entry.answers) {
-    const answered = questions.filter((q) => (entry.answers[q.key] ?? '').trim())
+    const answered = questions.filter((q) => answerText(q, entry.answers))
     return (
       <section className="entry brief is-done" aria-label="Your answers">
         <h2 className="brief-title">
@@ -47,12 +56,29 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
                 <dd>
                   {q.key === 'artifacts'
                     ? parseFormatList(entry.answers[q.key]).map(formatLabel).join(', ')
-                    : entry.answers[q.key]}
+                    : answerText(q, entry.answers)}
                 </dd>
               </div>
             ))}
           </dl>
         )}
+      </section>
+    )
+  }
+
+  const stops = mustAnswer(questions)
+  const outside = questions.some(isPrerequisite)
+
+  // "Stop here" and a timeout both arrive as the same frame, and for a card
+  // that cannot be skipped they mean the same thing: nothing was written.
+  if (entry.timedOut && stops) {
+    return (
+      <section className="entry brief is-done">
+        <h2 className="brief-title">Stopped before writing any code</h2>
+        <p className="brief-intro">
+          Nothing was solved. Send the lab again when you have what it needs, or choose how to
+          handle the missing part when I ask.
+        </p>
       </section>
     )
   }
@@ -69,16 +95,16 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
     )
   }
 
-  const missing = questions.filter((q) => q.required && !(values[q.key] ?? '').trim())
+  const missing = missingFields(questions, values)
 
   function submit(e) {
     e.preventDefault()
     if (missing.length) {
-      setTouched(Object.fromEntries(missing.map((q) => [q.key, true])))
-      document.getElementById(`f-${entry.id}-${missing[0].key}`)?.focus()
+      setTouched(Object.fromEntries(missing.map((key) => [key, true])))
+      document.getElementById(`f-${entry.id}-${missing[0]}`)?.focus()
       return
     }
-    onSubmit(values)
+    onSubmit(answersFor(questions, values))
   }
 
   const set = (key, value) => setValues((v) => ({ ...v, [key]: value }))
@@ -86,11 +112,12 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
   return (
     <form className="entry brief" onSubmit={submit} noValidate aria-labelledby={`bt-${entry.id}`}>
       <h2 className="brief-title" id={`bt-${entry.id}`}>
-        Quick check before I write any code
+        {outside ? 'Before I write any code' : 'Quick check before I write any code'}
       </h2>
       <p className="brief-intro">
-        Your manual leaves this open, and it changes the program I’d write. Answer if
-        you like — otherwise I’ll use the default shown.
+        {outside
+          ? 'This lab builds on work that isn’t here. Tell me how to handle it — I won’t start until you do.'
+          : 'Your manual leaves this open, and it changes the program I’d write. Answer if you like — otherwise I’ll use the default shown.'}
       </p>
 
       {entry.known?.length > 0 && (
@@ -106,7 +133,17 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
 
       <div className="fields">
         {questions.map((q) =>
-          q.key === 'artifacts' ? (
+          isPrerequisite(q) ? (
+            <PrerequisiteField
+              key={q.key}
+              id={`f-${entry.id}-${q.key}`}
+              question={q}
+              values={values}
+              invalid={touched[q.key] && missing.includes(q.key)}
+              onChoose={(v) => set(q.key, v)}
+              onText={(v) => set(valueKey(q.key), v)}
+            />
+          ) : q.key === 'artifacts' ? (
             <FormatField
               key={q.key}
               id={`f-${entry.id}-${q.key}`}
@@ -122,7 +159,7 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
               question={q}
               value={values[q.key] ?? ''}
               autoFocus={q.key === focusKey}
-              invalid={touched[q.key] && q.required && !(values[q.key] ?? '').trim()}
+              invalid={touched[q.key] && missing.includes(q.key)}
               onChange={(v) => set(q.key, v)}
               onBlur={() => setTouched((t) => ({ ...t, [q.key]: true }))}
             />
@@ -140,13 +177,29 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
         <button className="btn btn-primary btn-lg" type="submit" disabled={submitting}>
           {submitting ? 'Sending…' : 'Go'}
         </button>
-        {/* Every question is optional: skipping means "use your default". */}
-        <button type="button" className="btn btn-quiet" disabled={submitting} onClick={() => onSubmit({})}>
-          Skip — use your judgment
-        </button>
-        <span className="brief-timeout">
-          I’ll go with my defaults in {Math.round((entry.timeoutS ?? 180) / 60)} minutes if you don’t answer.
-        </span>
+        {stops ? (
+          // A required field cannot be defaulted: the only other way out is to
+          // stop, and the server treats an empty answer exactly that way.
+          <>
+            <button type="button" className="btn btn-quiet" disabled={submitting} onClick={() => onSubmit({})}>
+              Stop here
+            </button>
+            <span className="brief-timeout">
+              If you don’t answer in {Math.round((entry.timeoutS ?? 180) / 60)} minutes, I’ll stop
+              without writing any code.
+            </span>
+          </>
+        ) : (
+          <>
+            {/* Every question is optional: skipping means "use your default". */}
+            <button type="button" className="btn btn-quiet" disabled={submitting} onClick={() => onSubmit({})}>
+              Skip — use your judgment
+            </button>
+            <span className="brief-timeout">
+              I’ll go with my defaults in {Math.round((entry.timeoutS ?? 180) / 60)} minutes if you don’t answer.
+            </span>
+          </>
+        )}
       </div>
     </form>
   )
@@ -181,6 +234,60 @@ function TextField({ id, errorId, question: q, value, invalid, autoFocus, onChan
         </p>
       )}
     </div>
+  )
+}
+
+/** Something the lab relies on from outside itself. Three honest choices (two
+ *  when it cannot be rebuilt from what's here), drawn as the composer's chips
+ *  but with radio semantics: exactly one is picked. */
+function PrerequisiteField({ id, question: q, values, invalid, onChoose, onText }) {
+  const choice = values[q.key] ?? ''
+  const picked = (q.options ?? []).find((o) => o.value === choice)
+  const errorId = `${id}-err`
+  return (
+    <fieldset
+      className="field field-choice"
+      id={id}
+      tabIndex={-1}
+      aria-describedby={invalid ? errorId : undefined}
+    >
+      <legend className="field-label">{q.label}</legend>
+      {q.reason && <p className="field-reason">{q.reason}</p>}
+      {q.hint && <p className="field-hint">{q.hint}</p>}
+      <div className="choices" role="radiogroup" aria-label={q.label}>
+        {(q.options ?? []).map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className="chip"
+            role="radio"
+            aria-checked={choice === o.value}
+            onClick={() => onChoose(o.value)}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      {picked?.hint && <p className="field-hint">{picked.hint}</p>}
+      {choice === PROVIDE && (
+        <textarea
+          id={`${id}-value`}
+          className={invalid ? 'is-invalid' : ''}
+          rows={3}
+          autoFocus
+          spellCheck={false}
+          aria-label={`${q.label}: what you have`}
+          placeholder="Paste the values, or describe what you had"
+          value={values[valueKey(q.key)] ?? ''}
+          onChange={(e) => onText(e.target.value)}
+        />
+      )}
+      {invalid && (
+        <p className="field-err" id={errorId}>
+          {choice === PROVIDE ? 'Paste it here, or pick another option.' : 'Pick one before I carry on.'}
+        </p>
+      )}
+    </fieldset>
   )
 }
 

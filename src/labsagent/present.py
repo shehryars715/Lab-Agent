@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from labsagent.blocks import FIGURE, Block, blocks_for, leading_prose
+from labsagent.blocks import FIGURE, SCREENSHOT, Block, blocks_for, leading_prose
 
 STYLES = ("classic", "walkthrough", "findings", "compact")
 
@@ -77,6 +77,12 @@ def arrange(outcome, style: str = "classic") -> list[Block]:
             work.append(Block("code", text=part.get("code", ""), title=part.get("title", "")))
             if str(part.get("output") or "").strip():
                 work.append(Block("output", text=part["output"], role="section"))
+                # The section's terminal picture, right after its text: a
+                # document shows the picture (`has_screenshot_twin`), a notebook
+                # shows the text. Sections from before 2026-09-26 have no
+                # pictures and fall back to text.
+                for shot in part.get("screenshots") or []:
+                    work.append(Block("image", path=Path(shot), role=SCREENSHOT))
             for figure in part.get("figures") or []:
                 work.append(Block("image", path=Path(figure), role=FIGURE))
 

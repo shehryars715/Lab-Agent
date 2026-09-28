@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { formatElapsed, formatUsd } from '../api'
+import { formatCredits, formatElapsed } from '../api'
 import { formatLabel } from '../lib/formats'
 import { stagesFor } from '../lib/stages'
 import ArtifactList from './ArtifactList'
@@ -38,6 +38,10 @@ export function explainError(error) {
   }
   if (/API_KEY|\.env/.test(text)) return { human: true, title: 'I’m not plugged in yet' }
   if (/data this lab needs/i.test(text)) return { human: true, title: 'I couldn’t get the data' }
+  if (/can.t do this lab/i.test(text)) return { human: true, title: 'That’s outside what I can do' }
+  if (/relies on work from outside/i.test(text)) {
+    return { human: true, title: 'I need the earlier work first' }
+  }
   return { human: true, title: 'I had to stop there' }
 }
 
@@ -101,7 +105,7 @@ export default function RunPanel({
   const stages = stagesFor(run, question, { waiting: parked, revision })
   const finished = Boolean(run.summary || run.error)
   const elapsed = useElapsed(timing?.start, finished ? timing?.end ?? run.finishedAt : null)
-  const cost = run.summary ? run.summary.cost_usd : run.cost
+  const credits = run.summary ? run.summary.credits : run.credits
 
   if (entry.superseded) return <Superseded run={run} />
 
@@ -193,8 +197,8 @@ export default function RunPanel({
             <dd className="num">{timing?.start ? formatElapsed(elapsed) : '—'}</dd>
           </div>
           <div>
-            <dt className="sr-only">Cost</dt>
-            <dd className="num dim">{formatUsd(cost)}</dd>
+            <dt className="sr-only">Credits used</dt>
+            <dd className="num dim">{formatCredits(credits)}</dd>
           </div>
         </dl>
       </header>

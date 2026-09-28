@@ -35,8 +35,14 @@ class Expectation:
     stdout: str | None = None
     expects_figure: bool = False
     # A case that is SUPPOSED to fail. Passing it is the failure, and the
-    # scoring inverts accordingly -- see harness.score_task.
+    # scoring inverts accordingly -- see harness.score_task. A refusal at the
+    # capability gate also counts: it is failing honestly, and earlier.
     should_fail: bool = False
+    # The capability gate must refuse this task before any code is written.
+    out_of_scope: bool = False
+    # Ingest must name an input from outside the lab that this task relies on,
+    # so the run stops to ask instead of inventing it.
+    prerequisite: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +103,18 @@ GOLDENS: dict[str, dict[int, Expectation]] = {
         ),
     },
     "impossible": {
+        1: Expectation(should_fail=True),
+    },
+    "web_page": {
+        1: Expectation(out_of_scope=True),
+    },
+    # Stopped to ask, so nothing is solved: task 1 is scored on NOT being
+    # flagged, which is the false-positive half of the check.
+    "builds_on_lab": {
+        1: Expectation(),
+        2: Expectation(prerequisite=True),
+    },
+    "missing_file": {
         1: Expectation(should_fail=True),
     },
 }

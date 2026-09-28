@@ -89,7 +89,7 @@ export function createLab(fields) {
     status: 'working',
     passed: null,
     total: null,
-    cost: null,
+    credits: null,
     error: null,
     elapsedMs: null,
     revisions: [],

@@ -14,6 +14,7 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
+from labsagent.blocks import all_shots
 from labsagent.models import TaskOutcome
 
 
@@ -34,7 +35,7 @@ def build_submission(
             elif outcome.code_text:
                 zf.writestr(f"code/{outcome.task.id}.py", outcome.code_text)
 
-            for shot in list(outcome.screenshot_paths) + list(outcome.figure_paths):
+            for shot in all_shots(outcome):
                 shot = Path(shot)
                 if shot.exists():
                     zf.write(shot, arcname=f"screenshots/{shot.name}")

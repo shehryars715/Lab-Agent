@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from labsagent.blocks import Block
+from labsagent.prerequisites import Prerequisite
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,12 @@ class Task:
     #: without the model's thinking step and with a tighter turn cap; if it
     #: fails, the retry runs as standard. Persisted so a resume runs the same way.
     effort: str = "standard"
+    #: Inputs from OUTSIDE this lab (a previous lab's results) and what the
+    #: student decided about each: provided / omitted / recreated. Set by the
+    #: pipeline before the solve, read by the solver prompt, the report writer
+    #: and the report itself -- see `prerequisites.py`. Persisted with the task
+    #: so a resume or a revision honours the same decision.
+    prerequisites: list[Prerequisite] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,12 @@ class Transcript:
     command: str
     lines: list[str]
     prompt: str = r"PS C:\lab>"
+    #: Show the command line / the trailing prompt. Both True for a whole run.
+    #: A per-section screenshot is a SLICE of one terminal session: only the
+    #: first slice shows the command and only the last shows the prompt, so
+    #: the pictures read as one run cut into parts. Never persisted.
+    head: bool = True
+    tail: bool = True
 
     @classmethod
     def from_exec(cls, command: str, result: ExecResult, prompt: str = r"PS C:\lab>") -> "Transcript":
@@ -96,7 +109,9 @@ class Transcript:
 
     def display_lines(self) -> list[str]:
         """Full rendering including the command line and trailing cursor."""
-        return [f"{self.prompt} {self.command}", *self.lines, f"{self.prompt} "]
+        head = [f"{self.prompt} {self.command}"] if self.head else []
+        tail = [f"{self.prompt} "] if self.tail else []
+        return [*head, *self.lines, *tail]
 
 
 @dataclass
@@ -178,3 +193,10 @@ class RunManifest:
     #: cost. `usage`/`cost_usd` above are the RUNNING TOTAL -- a revision used
     #: to overwrite them, so the first pass's cost was lost.
     followups: list[dict] = field(default_factory=list)
+    #: What the student was CHARGED, in whole credits: the first run plus every
+    #: follow-up, each rounded up once when it settled (`credits.charge`). Not
+    #: `charge(cost_usd)` -- that would round the sum, not each charge.
+    credits: int = 0
+    #: The rate those credits were charged at, so re-pegging `USD_PER_CREDIT`
+    #: never rewrites what an old run cost.
+    usd_per_credit: float = 0.0

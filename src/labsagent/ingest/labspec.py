@@ -31,17 +31,26 @@ it also produce something it is strong at, and verify one against the other.
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from pydantic import BaseModel, Field
 
+from labsagent.capabilities import (
+    NEEDS,
+    SOLVER_LANGUAGE,
+    Requirement,
+    is_python,
+    normalise_library,
+)
 from labsagent.errors import SpecError
 from labsagent.ingest.docx_reader import RawManual
 from labsagent.ingest.readers import produces_anchors
 from labsagent.intent import Intent, detect_formats
 from labsagent.models import LabSpec, Task
+from labsagent.prerequisites import Needed
 from labsagent.usage import Usage
 
 EXTRACTION_PROMPT = """You are reading a document a student uploaded, and deciding what it is.
@@ -106,6 +115,40 @@ For each task report:
   task's heading.
 - anchor_quote: the first 40 characters of the paragraph at anchor_idx, copied
   exactly. This is used to verify anchor_idx, so it must be an exact copy.
+- language: the programming language the student must WRITE this task's
+  solution in, lowercase: "python", "html/css", "javascript", "java", "c++",
+  "c", "sql", "r", "matlab", and so on. "none" for a question answered only in
+  words. The language is what the student writes, not what the program
+  outputs: a Python program that writes an HTML file, a CSV or a chart is
+  "python". When the task names no language, use the lab's (a lab whose tools
+  are Python, Colab or Jupyter is "python").
+- language_evidence: only when language is not "python" or "none": the words in
+  the document that show it, copied exactly, under 80 characters, e.g. "create
+  a personal portfolio website from scratch using HTML and CSS". Otherwise "".
+- needs: what the PROGRAM itself needs, to run or to show its result, that a
+  Python process with no screen and no internet does not have. Only these:
+    "display"   a window, GUI, browser or game screen: tkinter, turtle, pygame,
+                a web page to view. NOT a chart saved to a file, NOT plt.show(),
+                NOT printing to the terminal.
+    "server"    a program that keeps running and waits for connections: a web
+                server, a socket chat server and client.
+    "internet"  the program calls a web API or scrapes a site while it runs.
+                NOT downloading the lab's dataset -- that happens before any
+                code runs.
+    "hardware"  physical devices: Arduino, sensors, a camera, a microphone, a GPU.
+    "software"  a program other than Python must be used: MATLAB, a database
+                server, Packet Tracer, Wireshark. NOT Jupyter, Colab, an IDE,
+                or an Excel/CSV file.
+  Each entry: {{"need": one of the above, "why": a short phrase, "evidence":
+  the document's words, copied exactly, under 80 characters}}. Only what the
+  task text requires, never what its topic suggests. How the student submits
+  (take a screenshot, zip the files, upload to LMS) is not a need. A task done
+  in another tool rather than in code ("clean the data in Tableau Prep") has
+  the "software" need even though it has no program. Empty for almost every
+  task.
+- libraries: third-party libraries the task text REQUIRES by name, e.g.
+  ["tensorflow"]. Not one it merely mentions or allows ("you may use ...").
+  Empty when it names none.
 
 Also report the lab number, the lab title, and the course code if present.
 
@@ -156,6 +199,27 @@ may be empty, is quoted below.
   link, slug or file name for anywhere -- e.g. "the Superstore dataset from
   Kaggle" when no link appears. One short description each. Empty when every
   dataset it names has a link or a file name, or when any dataset will do.
+- prerequisites: things the tasks rely on from OUTSIDE this document that
+  nothing here supplies: results, code, decisions or files from a PREVIOUS lab
+  or assignment, or something the student made earlier. "Restate your Lab 02
+  query customer" relies on Lab 02's results. One entry per thing:
+    what           short name, under 50 characters: "Your Lab 02 results"
+    detail         what exactly, under 120 characters: "query customer,
+                   filtering decisions, nearest customers from Task 4/5"
+    tasks          the task_numbers that rely on it
+    quote          the document's words that refer to it, copied exactly,
+                   under 80 characters
+    recreatable    true when it can be rebuilt from what this lab provides --
+                   the earlier work used the same dataset this lab uses -- or
+                   when the document itself allows rebuilding it ("if you did
+                   not retain these, briefly reconstruct ..."). false only for
+                   what just the student has: their photo, their survey
+                   answers, their own earlier code.
+    recreate_from  when recreatable, from what, under 60 characters: "the
+                   Online Retail dataset, as the manual allows"
+  NOT a prerequisite: a dataset (that belongs in datasets), an earlier task IN
+  THIS document, a library, general knowledge, or anything the student's
+  request already supplies. Empty for a self-contained lab, which is most labs.
 
 Return ONLY a JSON object matching this schema exactly:
 
@@ -171,6 +235,12 @@ Document:
 """
 
 
+class ExtractedNeed(BaseModel):
+    need: str | None = ""
+    why: str | None = ""
+    evidence: str | None = ""
+
+
 class ExtractedTask(BaseModel):
     task_number: int = Field(description="1-based position in document order")
     title: str
@@ -184,6 +254,22 @@ class ExtractedTask(BaseModel):
     effort: str = "standard"
     anchor_idx: int = Field(description="index of the task's LAST paragraph")
     anchor_quote: str = Field(description="first 40 chars at anchor_idx, verbatim")
+    # LOOSE ON PURPOSE, like `effort`: these feed a gate that can refuse a
+    # whole lab, and a malformed value must degrade to "no requirement", never
+    # fail validation and burn an ingest retry. Grounding happens afterwards.
+    language: str | None = "python"
+    language_evidence: str | None = ""
+    needs: list[ExtractedNeed | str] = Field(default_factory=list)
+    libraries: list[str] = Field(default_factory=list)
+
+
+class ExtractedPrerequisite(BaseModel):
+    what: str | None = ""
+    detail: str | None = ""
+    tasks: list[int | str] = Field(default_factory=list)
+    quote: str | None = ""
+    recreatable: bool | str | None = False
+    recreate_from: str | None = ""
 
 
 class ExtractedIntent(BaseModel):
@@ -203,6 +289,9 @@ class ExtractedIntent(BaseModel):
     )
     data_unlinked: list[str] = Field(
         default_factory=list, description="datasets it requires with no link or file"
+    )
+    prerequisites: list[ExtractedPrerequisite | str] = Field(
+        default_factory=list, description="inputs from outside this document"
     )
 
 
@@ -358,7 +447,11 @@ SCHEMA_HINT = """{
       "needs_code": true,
       "effort": "basic",
       "anchor_idx": 8,
-      "anchor_quote": "first 40 chars of the paragraph at anchor_idx"
+      "anchor_quote": "first 40 chars of the paragraph at anchor_idx",
+      "language": "python",
+      "language_evidence": "",
+      "needs": [],
+      "libraries": []
     }
   ],
   "intent": {
@@ -366,7 +459,8 @@ SCHEMA_HINT = """{
     "artifacts": [],
     "notes": "",
     "datasets": [],
-    "data_unlinked": []
+    "data_unlinked": [],
+    "prerequisites": []
   }
 }"""
 
@@ -392,6 +486,10 @@ class Reading:
     spec: LabSpec | None = None
     anchors: dict[str, int] = dataclass_field(default_factory=dict)
     repairs: list[AnchorRepair] = dataclass_field(default_factory=list)
+    #: task id -> what it needs beyond Python, after grounding. A side table
+    #: like `anchors`: only the capability gate reads it, so `Task` does not
+    #: carry it and the manifest does not persist it.
+    requirements: dict[str, Requirement] = dataclass_field(default_factory=dict)
 
     @property
     def is_lab(self) -> bool:
@@ -428,7 +526,205 @@ def _intent_from(
         data_unlinked=[
             d.strip() for d in extracted.intent.data_unlinked if str(d).strip()
         ][:3],
+        prerequisites=_prerequisites(extracted, manual, known_ids),
     )
+
+
+# --- grounding -------------------------------------------------------------
+#
+# THE GATE CAN REFUSE A WHOLE LAB, SO WHAT FEEDS IT MUST BE READ, NOT GUESSED.
+# The model is asked to QUOTE the manual for every language other than Python,
+# every need and every prerequisite -- the anchor_quote technique again: have
+# it produce something it is good at (copying visible text) next to the
+# judgement it may get wrong, and verify one against the other. A claim whose
+# quote is not in the document is dropped, which fails OPEN: back to the
+# behaviour before the gate existed, never a refusal built on a hallucination.
+#
+# Comparison is on lowercase letters and digits only, because a PDF extracts
+# "Task" as "T ask" and a model normalises quotes and dashes.
+
+_SQUASH = re.compile(r"[^a-z0-9]+")
+MIN_QUOTE = 6
+QUOTE_HEAD = 40
+
+# Evidence that shows the model mistook something ordinary for a need. Each is
+# a phrase the prompt already rules out; a guard is the guarantee behind it.
+_NOT_A_NEED = {
+    # Fetching the lab's dataset happens in the pipeline, before any code runs.
+    # Not "download" alone: "downloads the JSON at <url> at run time" IS live.
+    "internet": re.compile(r"dataset|data set|kaggle|\.csv|\.xlsx|\.zip", re.I),
+    # A chart is saved to a file; plt.show() is replaced by savefig.
+    "display": re.compile(r"plot|chart|graph|plt\.|figure|visuali[sz]|histogram|heatmap", re.I),
+    # Notebooks, IDEs and spreadsheet files are not "other software".
+    "software": re.compile(
+        r"jupyter|colab|notebook|\bexcel\b|xlsx|spyder|vs ?code|pycharm|anaconda|\bide\b",
+        re.I,
+    ),
+}
+
+
+def _squash(text: str) -> str:
+    return _SQUASH.sub("", str(text or "").lower())
+
+
+def _haystack(manual, request: str = "") -> list[str]:
+    """Every paragraph as stored and as the model saw it (links appended)."""
+    if manual is None:
+        return [_squash(request)] if request else []
+    texts: list[str] = []
+    for p in manual.paragraphs:
+        texts.append(_squash(p.text))
+        shown = p.shown() if hasattr(p, "shown") else ""
+        if shown and shown != p.text:
+            texts.append(_squash(shown))
+    if request:
+        texts.append(_squash(request))
+    return texts
+
+
+def _grounded(quote: str, haystack: list[str]) -> bool:
+    head = _squash(quote)[:QUOTE_HEAD]
+    return len(head) >= MIN_QUOTE and any(head in text for text in haystack)
+
+
+def _mentions(name: str, haystack: list[str]) -> bool:
+    """Does the document name this library, under any of its spellings?"""
+    from labsagent.capabilities import LIBRARY_ALIASES, normalise_library
+
+    wanted = normalise_library(name)
+    spellings = {wanted, str(name or "").lower()} | {
+        alias for alias, target in LIBRARY_ALIASES.items() if target == wanted
+    }
+    squashed = {_squash(s) for s in spellings if len(_squash(s)) >= 3}
+    return any(s in text for s in squashed for text in haystack)
+
+
+def _requirements(
+    extracted: ExtractedLab, manual, request: str, data_refs=()
+) -> dict[str, Requirement]:
+    """Each task's needs beyond Python, keeping only what the document backs up.
+
+    `data_refs` are the dataset references this reading resolved. An
+    "internet" need whose evidence is one of them is the pipeline's job --
+    it fetches data before any code runs -- not the program's.
+    """
+    haystack = _haystack(manual, request)
+    refs = [_squash(r)[:QUOTE_HEAD] for r in data_refs if len(_squash(r)) >= MIN_QUOTE]
+    out: dict[str, Requirement] = {}
+    for item in extracted.tasks:
+        language = str(item.language or "python").strip().lower()
+        evidence = str(item.language_evidence or "")
+        # A claimed non-Python language needs a quote from the document, and a
+        # quote that itself says "Python" ("a Python program that generates an
+        # HTML report") is the model contradicting its own label.
+        if not is_python(language) and (
+            not _grounded(evidence, haystack) or "python" in evidence.lower()
+        ):
+            language = SOLVER_LANGUAGE
+
+        needs: list[tuple[str, str]] = []
+        for raw in item.needs:
+            if isinstance(raw, str):
+                continue  # a bare word carries no evidence to check
+            need = str(raw.need or "").strip().lower()
+            proof = str(raw.evidence or "")
+            if need not in NEEDS or not _grounded(proof, haystack):
+                continue
+            veto = _NOT_A_NEED.get(need)
+            if veto is not None and veto.search(proof):
+                continue
+            if need == "internet" and any(ref in _squash(proof) for ref in refs):
+                continue
+            if need not in {n for n, _ in needs}:
+                needs.append((need, str(raw.why or "").strip()[:80]))
+
+        libraries = tuple(
+            dict.fromkeys(
+                normalise_library(lib)
+                for lib in item.libraries
+                if str(lib or "").strip() and _mentions(lib, haystack)
+            )
+        )
+        if not is_python(language) or needs or libraries:
+            out[f"task{item.task_number}"] = Requirement(
+                language=language, needs=tuple(needs), libraries=libraries
+            )
+    return out
+
+
+_DOC_NAME = re.compile(
+    r"\b(lab|assignment|homework|project|practical|experiment)\s*(?:no\.?\s*)?0*(\d+)\b", re.I
+)
+
+
+def _documents_named(text: str, own: str = "") -> set[tuple[str, int]]:
+    """{("lab", 2)} for "Lab 02" -- another document this text names, never
+    the lab's own number."""
+    own_number = int(re.sub(r"\D", "", own) or -1)
+    return {
+        (kind.lower(), int(number))
+        for kind, number in _DOC_NAME.findall(text or "")
+        if not (kind.lower() == "lab" and int(number) == own_number)
+    }
+
+
+def _truthy(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1", "y")
+    return bool(value)
+
+
+def _prerequisites(extracted: ExtractedLab, manual, known_ids: list[str]) -> list[Needed]:
+    """What the tasks need from outside this document, grounded, at most three.
+
+    Grounded against the DOCUMENT only, not the request: a prerequisite is
+    something the manual relies on, and one the request supplies is not
+    missing.
+    """
+    if manual is None:
+        return []
+    haystack = _haystack(manual)
+    known = set(known_ids)
+    found: list[Needed] = []
+    for raw in extracted.intent.prerequisites:
+        if isinstance(raw, str):
+            continue
+        what = str(raw.what or "").strip()
+        if not what or not _grounded(str(raw.quote or ""), haystack):
+            continue
+        task_ids: list[str] = []
+        for number in raw.tasks:
+            digits = re.sub(r"\D", "", str(number))
+            task_id = f"task{int(digits)}" if digits else ""
+            if task_id in known and task_id not in task_ids:
+                task_ids.append(task_id)
+        if not task_ids:
+            continue
+        # BACKSTOP, NEVER AN OVERRIDE. Which tasks the model lists varies run
+        # to run (Lab 03: tasks 1,2,5,6 on one reading, 1,2 on the next), and a
+        # task left off is a task told nothing -- free to invent Lab 02 again.
+        # A task whose own statement names the same outside document ("Lab
+        # 02") relies on it by definition, so it is added here.
+        named = _documents_named(" ".join([what, str(raw.detail or ""), str(raw.quote or "")]),
+                                 extracted.lab_number or "")
+        if named:
+            for item in sorted(extracted.tasks, key=lambda t: t.task_number):
+                task_id = f"task{item.task_number}"
+                if (task_id in known and task_id not in task_ids
+                        and named & _documents_named(item.statement, extracted.lab_number or "")):
+                    task_ids.append(task_id)
+            task_ids.sort(key=lambda t: int(t.removeprefix("task")))
+        recreatable = _truthy(raw.recreatable)
+        found.append(
+            Needed(
+                what=what[:60],
+                detail=str(raw.detail or "").strip()[:160],
+                task_ids=tuple(task_ids),
+                recreatable=recreatable,
+                recreate_from=str(raw.recreate_from or "").strip()[:80] if recreatable else "",
+            )
+        )
+    return found[:3]
 
 
 def _datasets(extracted: ExtractedLab, manual, request: str) -> list[str]:
@@ -490,15 +786,21 @@ def extract_labspec(manual: RawManual, model, request: str = "") -> Reading:
 
         if extracted.tasks:
             spec, anchors, repairs = to_labspec(extracted, manual)
+            intent = _intent_from(extracted, [t.id for t in spec.tasks], request, manual)
             return Reading(
                 kind=extracted.document_kind,
                 confidence=extracted.confidence,
                 what_this_is=extracted.what_this_is,
-                intent=_intent_from(extracted, [t.id for t in spec.tasks], request, manual),
+                intent=intent,
                 usage=_usage_from_handler(handler),
                 spec=spec,
                 anchors=anchors,
                 repairs=repairs,
+                # Built here, not in `to_labspec`, whose three-value return a
+                # dozen tests unpack.
+                requirements=_requirements(
+                    extracted, manual, request, [*intent.datasets, *intent.data_unlinked]
+                ),
             )
 
         # NO TASKS. Which of the two reasons matters, and they used to be

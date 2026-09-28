@@ -48,7 +48,7 @@ const emptyRun = () => ({
   tasks: {},
   order: [],
   progress: { done: 0, total: 0 },
-  cost: 0,
+  credits: 0,
   artifacts: [],
   proposed: null, // formats the agent resolved from the request, before any exist
   emitFailures: [], // formats that could not be produced; the others still ship
@@ -111,7 +111,7 @@ function upsertTask(run, id, patch) {
     status: 'pending',
     attempts: 0,
     maxAttempts: 0,
-    cost: 0,
+    credits: 0,
     error: null,
     activity: null,
   }
@@ -154,12 +154,12 @@ function applyCoreEvent(state, e) {
     case 'TaskFinished':
       return patchRun(state, (run) => ({
         ...run,
-        cost: run.cost + (e.cost_usd || 0),
+        credits: run.credits + (e.credits || 0),
         progress: { ...run.progress, done: run.progress.done + 1 },
         tasks: upsertTask(run, e.task_id, {
           status: e.status,
           attempts: e.attempts,
-          cost: e.cost_usd,
+          credits: e.credits,
           activity: null,
           error: e.status === 'passed' ? null : e.blocker || run.tasks[e.task_id]?.error,
           blocker: e.blocker || null,
@@ -168,7 +168,7 @@ function applyCoreEvent(state, e) {
       }))
 
     case 'RunFinished':
-      return patchRun(state, { cost: e.cost_usd })
+      return patchRun(state, { credits: e.credits })
 
     default:
       // Unknown kinds -- including RunStarted, which now has nothing to say --
@@ -274,7 +274,7 @@ export function reduce(state, frame) {
           status: 'pending',
           attempts: 0,
           maxAttempts: 0,
-          cost: 0,
+          credits: 0,
           error: null,
           activity: null,
         }

@@ -248,6 +248,99 @@ _register(
     )
 )
 
+# THE PRE-SOLVE GATES (2026-09-26). The three cases below exist because the
+# gates they exercise can each refuse or pause a whole lab, so a false positive
+# is expensive -- and every OTHER case above doubles as the guard against one:
+# a gate that fires on "Sum of Two Numbers" makes that case unclean.
+
+_register(
+    ManualSpec(
+        key="web_page",
+        lab_number="10",
+        course="CS-313 Web Engineering",
+        title="A Two-Page Website",
+        objectives=("Build linked web pages with HTML and internal CSS.",),
+        note=(
+            "OUT OF SCOPE. HTML and CSS, checked in a browser. The harness writes and runs "
+            "Python only, so the right answer is a refusal before any code is written -- not "
+            "a Python program that prints HTML, which is what it used to produce."
+        ),
+        tasks=(
+            TaskSpec(
+                title="Personal Website",
+                body=(
+                    "Create a two-page personal website using HTML and CSS: an index.html home "
+                    "page with your name and a link to about.html, and an about.html page with "
+                    "a short paragraph about you. Style both pages with internal CSS only. "
+                    "Open both pages in a web browser and check that the link works."
+                ),
+            ),
+        ),
+    )
+)
+
+_register(
+    ManualSpec(
+        key="builds_on_lab",
+        lab_number="11",
+        course="CS-102 Programming Fundamentals",
+        title="Averages, Continued",
+        objectives=("Extend earlier work with a new statistic.",),
+        note=(
+            "A PREREQUISITE. Task 2 relies on a result from Lab 10 that this document does "
+            "not contain. The run must stop and ask, never invent a median. Task 2 also names "
+            "'Lab 10 Task 3', which the old reference scan misread as THIS lab's task 3."
+        ),
+        tasks=(
+            TaskSpec(
+                title="Average of Three Marks",
+                body=(
+                    "Write a program that reads 3 integers, each prompted with 'Enter mark: ', "
+                    "and prints their average in the form 'Average = <value>' with one decimal "
+                    "place."
+                ),
+                extra=(_inputs_line(["60", "70", "80"]),),
+            ),
+            TaskSpec(
+                title="Compare with Lab 10",
+                body=(
+                    "In Lab 10 Task 3 you computed the median of your own class marks sheet. "
+                    "Print that median next to the average from Task 1, in the form "
+                    "'Lab 10 median: <m>, average: <a>'."
+                ),
+            ),
+        ),
+    )
+)
+
+_register(
+    ManualSpec(
+        key="missing_file",
+        lab_number="12",
+        course="CS-201 Data Analysis",
+        title="Marks File",
+        objectives=("Summarise a data file.",),
+        note=(
+            "THE SOLVER'S FAILURE DRILL. The named file is never supplied, and nothing about "
+            "the task is out of scope, so no gate can catch it: only the solver's own "
+            "'blocked' can. A program that invents a marks file and reports a mean is a "
+            "false success."
+        ),
+        tasks=(
+            TaskSpec(
+                title="Mean Mark",
+                body=(
+                    "Read the file 'marks_2025.csv' that your instructor shared on the LMS. It "
+                    "has the columns name and mark. Print the mean mark in the form "
+                    "'Mean mark: <value>' with two decimal places. Do not create, simulate or "
+                    "fabricate the file or its data."
+                ),
+                extra=("This task takes no input.",),
+            ),
+        ),
+    )
+)
+
 
 def build_manual(spec: ManualSpec, out_path: Path) -> Path:
     """Render one ManualSpec to a .docx that looks like real course material."""

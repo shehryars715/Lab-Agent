@@ -171,7 +171,7 @@ test('the reducer keeps proposed formats and server event times', () => {
     play([
       { type: 'questions_ready', known: [], proposed_artifacts: ['docx', 'zip'], seq: 1 },
       { type: 'event', event: { kind: 'RunStarted', at: '2026-09-23T10:00:00+00:00' }, seq: 2 },
-      { type: 'event', event: { kind: 'RunFinished', cost_usd: 0.01, at: '2026-09-23T10:00:30+00:00' }, seq: 3 },
+      { type: 'event', event: { kind: 'RunFinished', credits: 100, at: '2026-09-23T10:00:30+00:00' }, seq: 3 },
       { type: 'emit_failed', format: 'ipynb', reason: 'nbformat missing', seq: 4 },
     ]),
   ).state
@@ -184,7 +184,7 @@ test('a finished rail counts PASSED tasks and marks a partial solve', () => {
   const r = lastRun(
     play([
       { type: 'spec', lab_number: '1', title: 't', task_count: 3, tasks: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], seq: 1 },
-      { type: 'done', passed: 2, failed: 1, total: 3, cost_usd: 0, seq: 2 },
+      { type: 'done', passed: 2, failed: 1, total: 3, credits: 0, seq: 2 },
     ]),
   ).state
   const solve = stagesFor(r, null).find((s) => s.key === 'solve')

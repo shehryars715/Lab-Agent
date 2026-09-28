@@ -76,7 +76,7 @@ export function useBackgroundStatus(store, openId, onSettled) {
               status: s.failed ? 'partial' : 'done',
               passed: s.passed ?? null,
               total: s.total ?? null,
-              cost: s.cost_usd ?? null,
+              credits: s.credits ?? null,
               runId: s.run_id ?? null,
             })
             settledRef.current?.()

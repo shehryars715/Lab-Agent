@@ -166,6 +166,10 @@ def answer_for(sc: Scenario, questions: list[dict]) -> dict:
             out[key] = IDENTITY[key]
         elif key == "artifacts":
             out[key] = sc.pause_artifacts or q.get("value", "")
+        elif q.get("kind") == "prerequisite":
+            # A choice, not prose: anything else stops the run. The matrix's
+            # fixtures are self-contained, so reaching here is itself a finding.
+            out[key] = "omit"
         else:
             out[key] = "Use a sensible default and keep it short."
     return out
@@ -183,7 +187,7 @@ def drive(base: str, fixtures: Path, manual: Path, out_dir: Path, sc: Scenario) 
 
     job_id = created.json()["job_id"]
     res = {"status": 202, "job": job_id, "artifacts": {}, "tasks": None, "pulled": [],
-           "cost": None, "error": None, "emit_failed": [], "proposed": None, "asked": []}
+           "credits": None, "error": None, "emit_failed": [], "proposed": None, "asked": []}
 
     with requests.get(f"{base}/api/runs/{job_id}/events", stream=True,
                       timeout=DEADLINE) as stream:
@@ -218,7 +222,7 @@ def drive(base: str, fixtures: Path, manual: Path, out_dir: Path, sc: Scenario) 
             elif kind == "done":
                 # `finish` splats the summary into the frame rather than
                 # nesting it, so these are top-level keys.
-                res["cost"] = p.get("cost_usd")
+                res["credits"] = p.get("credits")
                 res["passed"] = p.get("passed")
                 break
             elif kind == "failed":
@@ -335,7 +339,7 @@ def main() -> int:
         arts = sorted(k for k in sc.result.get("artifacts", {}) if not k.startswith("code:"))
         print(f"    -> tasks={sc.result.get('tasks')} artifacts={arts} "
               f"pulled={sc.result.get('pulled')} "
-              f"cost=${sc.result.get('cost') or 0:.5f} {sc.result.get('seconds')}s")
+              f"credits={sc.result.get('credits') or 0} {sc.result.get('seconds')}s")
         if sc.result.get("error"):
             print(f"    -> message: {sc.result['error'][:140]}")
         print("    " + ("PASS" if not bad else "FAIL: " + "; ".join(bad)))
@@ -350,8 +354,8 @@ def main() -> int:
                    indent=2, default=str), encoding="utf-8")
 
     npass = sum(1 for _, b in results if not b)
-    cost = sum(s.result.get("cost") or 0 for s, _ in results)
-    print(f"{npass}/{len(results)} scenarios passed   total cost ${cost:.4f}")
+    credits_used = sum(s.result.get("credits") or 0 for s, _ in results)
+    print(f"{npass}/{len(results)} scenarios passed   total {credits_used} credits")
     for s, b in results:
         if b:
             print(f"  [{s.sid}] {s.title}: {'; '.join(b)}")

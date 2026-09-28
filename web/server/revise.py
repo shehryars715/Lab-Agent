@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from pydantic import BaseModel, Field
 
+from labsagent.prerequisites import writer_lines
 from labsagent.usage import Usage
 
 REVISE_ATTEMPTS = 3
@@ -266,6 +267,11 @@ def answer_question(feedback: str, outcomes, model) -> tuple[str, Usage]:
             parts.append("Output:\n" + "\n".join(outcome.transcript.lines[:MAX_OUTPUT_LINES]))
         if outcome.explanation:
             parts.append(f"Write-up: {outcome.explanation}")
+        # Same facts the report writer gets about work from outside the lab,
+        # or a chat answer invents the student's Lab 02 all over again.
+        outside = writer_lines(task)
+        if outside:
+            parts.append(outside.strip())
     handler = UsageMetadataCallbackHandler()
     try:
         reply = model.invoke(

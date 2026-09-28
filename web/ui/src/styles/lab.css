@@ -790,6 +790,53 @@
   border-color: var(--danger);
 }
 
+/* A prerequisite: one choice from a short stack. The labels can be long
+   ("Recreate it from the Online Retail data, as the manual allows"), so the
+   chips wrap instead of running off a phone screen. */
+.field-choice:focus {
+  outline: none;
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: 2px;
+}
+
+.choices .chip {
+  height: auto;
+  min-height: 30px;
+  padding-block: 5px;
+  white-space: normal;
+  text-align: left;
+}
+
+.field textarea {
+  min-height: 84px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--line-control);
+  resize: vertical;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.field textarea:hover {
+  border-color: var(--ink-ghost);
+}
+
+.field textarea:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.field textarea.is-invalid {
+  border-color: var(--danger);
+}
+
 .field-formats .formats {
   margin-top: 2px;
 }

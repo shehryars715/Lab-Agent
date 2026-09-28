@@ -34,7 +34,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from labsagent import credits
 from labsagent.models import LabSpec, RunManifest, Task, TaskOutcome, Transcript
+from labsagent.prerequisites import Prerequisite
 
 MANIFEST_NAME = "manifest.json"
 DEFAULT_ROOT = Path("runs")
@@ -55,6 +57,7 @@ def _task_to_dict(task: Task) -> dict[str, Any]:
         "needs_code": task.needs_code,
         "instruction": task.instruction,
         "effort": task.effort,
+        "prerequisites": [p.as_dict() for p in task.prerequisites],
     }
 
 
@@ -70,6 +73,13 @@ def _task_from_dict(data: dict[str, Any]) -> Task:
         needs_code=data.get("needs_code", True),
         instruction=data.get("instruction", ""),
         effort=data.get("effort", "standard"),
+        # Absent in every manifest written before 2026-09-26, and tolerant of a
+        # hand-edited or partial entry: a bad row is dropped, not a crash.
+        prerequisites=[
+            Prerequisite.from_dict(item)
+            for item in (data.get("prerequisites") or [])
+            if isinstance(item, dict) and item.get("what")
+        ],
     )
 
 
@@ -173,6 +183,8 @@ def manifest_to_dict(manifest: RunManifest) -> dict[str, Any]:
         "anchors": dict(manifest.anchors),
         "datasets": [dict(d) for d in manifest.datasets],
         "followups": [dict(f) for f in manifest.followups],
+        "credits": manifest.credits,
+        "usd_per_credit": manifest.usd_per_credit,
     }
 
 
@@ -191,6 +203,11 @@ def manifest_from_dict(data: dict[str, Any]) -> RunManifest:
         # still load, or resuming it becomes impossible.
         datasets=[dict(d) for d in (data.get("datasets") or [])],
         followups=[dict(f) for f in (data.get("followups") or [])],
+        # Runs recorded before credits existed were never charged in them; the
+        # current rate stands in so history can still show a number. A run
+        # that WAS charged keeps its own figure and its own rate.
+        credits=int(data["credits"]) if "credits" in data else credits.charge(data.get("cost_usd", 0.0)),
+        usd_per_credit=data.get("usd_per_credit") or credits.USD_PER_CREDIT,
     )
 
 

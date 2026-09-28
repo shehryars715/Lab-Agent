@@ -162,7 +162,7 @@ export default function App() {
         error: null,
         passed: null,
         total: null,
-        cost: null,
+        credits: null,
         finishedAt: null,
         revisions: [],
         createdAt: Date.now(),

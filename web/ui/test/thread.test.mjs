@@ -70,17 +70,17 @@ const RUN = [
   },
   {
     type: 'event',
-    event: { kind: 'TaskFinished', task_id: 'task1', status: 'passed', attempts: 2, cost_usd: 0.0004 },
+    event: { kind: 'TaskFinished', task_id: 'task1', status: 'passed', attempts: 2, credits: 4 },
     seq: 13,
   },
   {
     type: 'event',
-    event: { kind: 'TaskFinished', task_id: 'task2', status: 'passed', attempts: 1, cost_usd: 0.0003 },
+    event: { kind: 'TaskFinished', task_id: 'task2', status: 'passed', attempts: 1, credits: 3 },
     seq: 14,
   },
   { type: 'artifact', key: 'report', label: 'Report', kind: 'report', filename: 'Lab03_Report.docx', bytes: 90000, seq: 15 },
   { type: 'artifact', key: 'code:task1', label: 'Sum of Two Numbers', kind: 'code', filename: 'task1.py', bytes: 80, seq: 16 },
-  { type: 'done', passed: 2, failed: 0, total: 2, cost_usd: 0.0007, run_id: 'r1', seq: 17 },
+  { type: 'done', passed: 2, failed: 0, total: 2, credits: 7, run_id: 'r1', seq: 17 },
 ]
 
 test('a run folds into one entry that morphs into the result', () => {

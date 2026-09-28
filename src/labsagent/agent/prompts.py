@@ -16,9 +16,9 @@ the promise cannot drift from what is actually installed.
 """
 
 #: Every third-party library the prompt promises. A test imports each one.
-AVAILABLE_LIBRARIES = (
-    "numpy", "pandas", "matplotlib", "seaborn", "scipy", "scikit-learn", "openpyxl",
-)
+#: Defined in `capabilities.py` -- the one statement of the environment that the
+#: pre-solve gate and the refusal message read too -- and re-exported here.
+from labsagent.capabilities import AVAILABLE_LIBRARIES
 
 _LIBRARIES = ", ".join(AVAILABLE_LIBRARIES[:-1]) + " and " + AVAILABLE_LIBRARIES[-1]
 
@@ -47,8 +47,9 @@ The environment -- this is everything there is:
   the task. There is no other data.
 
 When a task needs something that is not here -- another library, a file format
-these libraries cannot read, data you were not given, internet access, a
-display, another programming language -- do NOT build a substitute: no
+these libraries cannot read, data you were not given, results or code from
+earlier work (such as a previous lab) that you were not given, internet access,
+a display, another programming language -- do NOT build a substitute: no
 hand-written parser or file reader, no imitation of a missing library, no
 invented or sample data, no fallback code. Stop and call record_task_result
 with status "blocked", with one plain sentence for the student in `missing`.

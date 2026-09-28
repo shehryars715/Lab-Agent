@@ -24,6 +24,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from labsagent.models import LabSpec, Task
+from labsagent.prerequisites import Needed
 
 DocumentKind = Literal["lab", "notebook_lab", "other"]
 
@@ -34,6 +35,23 @@ ASK_BELOW = 0.5
 
 TASK_REF = re.compile(r"\btask\s*(\d+)\b", re.IGNORECASE)
 
+# ANOTHER DOCUMENT'S TASKS ARE NOT THIS DOCUMENT'S. "Compare with the nearest
+# customers from Lab 02 Task 4/5" was read as a reference to THIS lab's task 4:
+# `scope()` pulled task4 in for "only task 2", and the solver was told task 2
+# builds on a task it had not reached. A task mention glued to another
+# document's name -- before it or after it -- is masked out before counting.
+_OTHER_DOC = (
+    r"(?:\b(?:lab|assignment|homework|hw|project|practical|experiment)\s*(?:no\.?\s*)?0*\d+"
+    r"|\b(?:the\s+)?(?:previous|last|earlier|prior|first)\s+"
+    r"(?:lab|assignment|week|practical|experiment))"
+)
+_TASK_LIST = r"\btasks?\s*\d+(?:\s*(?:/|,|&|\band\b|\bor\b|\bto\b|-)\s*(?:tasks?\s*)?\d+)*"
+_FOREIGN = re.compile(
+    rf"{_OTHER_DOC}(?:'s)?\s*[,:\-]?\s*{_TASK_LIST}"  # "Lab 02 Task 4/5", "Lab 2's Task 3"
+    rf"|{_TASK_LIST}\s+(?:of|from|in)\s+{_OTHER_DOC}",  # "Task 4 of Lab 02"
+    re.IGNORECASE,
+)
+
 
 def referenced_task_ids(task: Task) -> set[str]:
     """Task ids this statement points at, excluding itself.
@@ -41,9 +59,15 @@ def referenced_task_ids(task: Task) -> set[str]:
     Lives here rather than in the orchestrator because it now has two jobs: it
     tells the solver which earlier solution to show the agent, and it tells
     `scope()` which tasks a subset secretly depends on.
+
+    Known limit: "Lab 03 Task 2" written inside Lab 03 itself is also masked --
+    this function sees one statement, not the lab number. Losing that rare
+    self-reference is the cheaper error: a false reference drags an unrelated
+    task into scope and into the prompt.
     """
     own = task.id.removeprefix("task")
-    return {f"task{n}" for n in TASK_REF.findall(task.statement) if n != own}
+    text = _FOREIGN.sub(lambda m: " " * len(m.group(0)), task.statement)
+    return {f"task{n}" for n in TASK_REF.findall(text) if n != own}
 
 
 #: Unambiguous ways of naming a deliverable. Deliberately narrow: `script`
@@ -116,6 +140,11 @@ class Intent:
     #: Superstore dataset from Kaggle" with nothing to download. The one case
     #: that justifies stopping to ask: see `web/server/pipeline.py`.
     data_unlinked: list[str] = field(default_factory=list)
+    #: Inputs from OUTSIDE this document the tasks rely on -- a previous lab's
+    #: results, an earlier choice -- that nothing here supplies. Grounded in the
+    #: manual's own words at ingest. The pipeline asks the student about each
+    #: one before any code is written; see `prerequisites.py`.
+    prerequisites: list[Needed] = field(default_factory=list)
 
     @property
     def is_lab(self) -> bool:

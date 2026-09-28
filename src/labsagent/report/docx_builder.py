@@ -23,7 +23,13 @@ import docx
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 
-from labsagent.blocks import _failure_note, gap_note, leading_prose
+from labsagent.blocks import (
+    _failure_note,
+    gap_note,
+    has_screenshot_twin,
+    leading_prose,
+    outside_notes,
+)
 from labsagent.models import TaskOutcome
 from labsagent.report.cover import CoverInfo, build_cover
 from labsagent.report.docx_utils import (
@@ -97,6 +103,8 @@ def _annotate_one(anchor: Paragraph, outcome: TaskOutcome) -> None:
             cursor = _label(cursor, "Status:")
             cursor = _explanation(cursor, f"Not answered: {outcome.error or 'unknown'}")
             return
+        for note in outside_notes(outcome):
+            cursor = _explanation(cursor, note.text)
         if outcome.explanation:
             cursor = _explanation(cursor, outcome.explanation)
         _answers(cursor, outcome)
@@ -119,6 +127,10 @@ def _annotate_one(anchor: Paragraph, outcome: TaskOutcome) -> None:
     for figure_path in outcome.figure_paths:
         cursor = _image(cursor, figure_path)
 
+    # "Recreated for this report" / "Left out" -- written by code, and empty
+    # for a self-contained lab, so every earlier report is byte-identical.
+    for note in outside_notes(outcome):
+        cursor = _explanation(cursor, note.text)
     # Empty for every outcome without a gap, so older reports are unchanged.
     if gap_note(outcome):
         cursor = _explanation(cursor, gap_note(outcome))
@@ -152,11 +164,9 @@ def _annotate_arranged(anchor: Paragraph, outcome: TaskOutcome, style: str) -> N
     words = vocabulary(style)
     cursor = anchor
     blocks = arrange(outcome, style)
-    # Only a SCREENSHOT duplicates the text output; a figure is something else.
-    has_shot = any(b.kind == "image" and b.role == "screenshot" for b in blocks)
     labelled_output = False
     answers_headed = False
-    for block in blocks:
+    for index, block in enumerate(blocks):
         if block.kind == "code":
             cursor = _label(cursor, block.title or words.code)
             cursor = _code_block(cursor, block.text)
@@ -169,8 +179,17 @@ def _annotate_arranged(anchor: Paragraph, outcome: TaskOutcome, style: str) -> N
                 cursor = _label(cursor, words.output)
                 labelled_output = True
             cursor = _image(cursor, Path(block.path))
-        elif block.kind == "output" and not has_shot and block.text.strip():
+        elif (
+            block.kind == "output"
+            and block.text.strip()
+            # TERMINAL OUTPUT IS SHOWN AS THE TERMINAL. This used to be one
+            # flag for the whole task, and section layouts dropped the only
+            # picture -- so every non-classic report printed shaded text. The
+            # text now appears only for an output that has no picture.
+            and not has_screenshot_twin(blocks, index)
+        ):
             cursor = _label(cursor, words.output)
+            labelled_output = True
             cursor = _code_block(cursor, block.text)
         elif block.kind == "prose":
             if block.role == "answer" and words.answers and not answers_headed:

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   downloadUrl,
-  formatUsd,
+  formatCredits,
   historyDownloadUrl,
   loadHistoryRun,
   loadIdentity,
@@ -157,7 +157,7 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
     if (run.summary) {
       patch.passed = run.summary.passed ?? null
       patch.total = run.summary.total ?? null
-      patch.cost = run.summary.cost_usd ?? null
+      patch.credits = run.summary.credits ?? null
       patch.runId = run.summary.run_id ?? lab.runId
     }
     if (run.error) patch.error = run.error
@@ -530,8 +530,8 @@ function DiskLab({ runId, storeKey, store, lab, note, onRemove, onEdit }) {
                 </div>
                 <dl className="run-stats">
                   <div>
-                    <dt className="sr-only">Cost</dt>
-                    <dd className="num dim">{formatUsd(run.cost_usd)}</dd>
+                    <dt className="sr-only">Credits used</dt>
+                    <dd className="num dim">{formatCredits(run.credits)}</dd>
                   </div>
                 </dl>
               </header>

@@ -63,6 +63,7 @@ from labsagent.data import (
 from labsagent.config import Settings
 from labsagent.errors import SandboxError
 from labsagent.models import LabSpec, RunManifest, Task, TaskOutcome, Transcript
+from labsagent.prerequisites import solver_lines
 from labsagent.runner import run_sections
 from labsagent.runner import run_solution as _run_file
 from labsagent.runstore import RunStore, pending_tasks
@@ -209,6 +210,14 @@ def build_task_prompt(
     """The user message for one task, plus any task it explicitly references."""
     parts = [task.statement]
 
+    # WHAT THE STUDENT DECIDED ABOUT WORK FROM OUTSIDE THIS LAB -- given it,
+    # leave it out, or recreate it. BEFORE the instruction on purpose: later
+    # wins, so a revision that supplies the missing piece outranks "leave it
+    # out". Empty for a self-contained lab, which keeps the prompt unchanged.
+    outside = solver_lines(task)
+    if outside:
+        parts.append(outside)
+
     # Solver-only steering. It rides on the Task so a resume re-asks the same
     # question, but it is deliberately NOT part of `statement`, which is what
     # the exporters print into the file you hand in.
@@ -320,7 +329,47 @@ def _produced_by(
     return made
 
 
-def _sections(sandbox, task: Task, chosen: RunRecord, settings: Settings, store: RunStore):
+def _section_shots(sections: list[dict], task: Task, command: str, screenshots, store) -> None:
+    """A terminal picture of each section's output, stored on the section.
+
+    WHY. Sections carried their output as TEXT only, and every layout except
+    "classic" is built from sections -- so whenever the briefing model picked
+    one of those layouts, the Word report printed shaded text where a terminal
+    screenshot belonged. The layout choice silently decided whether a report
+    had screenshots at all.
+
+    Each picture is a SLICE of the one real run: drawn from the same captured
+    lines the section text holds, with the command line on the first section
+    that printed anything and the prompt on the last, so the pictures read as
+    one terminal session cut into parts.
+
+    Never able to fail the task: a picture that cannot be drawn leaves that
+    section with its text, which every emitter still knows how to show.
+    """
+    printed = [i for i, part in enumerate(sections) if str(part.get("output") or "").strip()]
+    if not printed:
+        return
+    first, last = printed[0], printed[-1]
+    for i in printed:
+        part = sections[i]
+        transcript = Transcript(
+            command=command,
+            lines=str(part["output"]).split("\n"),
+            head=(i == first),
+            tail=(i == last),
+        )
+        try:
+            shots = screenshots.render(
+                transcript, store.shots_dir / f"{task.id}_s{i + 1:02d}_output.png"
+            )
+        except Exception:  # noqa: BLE001 -- a decoration; the text still stands
+            continue
+        part["screenshots"] = [Path(s).as_posix() for s in shots]
+
+
+def _sections(
+    sandbox, task: Task, chosen: RunRecord, settings: Settings, store: RunStore, screenshots=None
+):
     """Real per-section output for a passed task, and the transcript to ship.
 
     One extra local run, no model tokens, and never able to fail the task: any
@@ -362,6 +411,11 @@ def _sections(sandbox, task: Task, chosen: RunRecord, settings: Settings, store:
             command=f"python {normalize_entry(chosen.entry_file)}",
             lines=combined,
         )
+    if screenshots is not None:
+        try:
+            _section_shots(sections, task, transcript.command, screenshots, store)
+        except Exception:  # noqa: BLE001 -- see _section_shots: never fails a task
+            pass
     return sections, transcript
 
 
@@ -699,7 +753,9 @@ def solve_task(
                         )
                     )
 
-                sections, transcript = _sections(sandbox, task, chosen, settings, store)
+                sections, transcript = _sections(
+                    sandbox, task, chosen, settings, store, screenshots
+                )
                 shots = screenshots.render(
                     transcript, store.shots_dir / f"{task.id}_output.png"
                 )
