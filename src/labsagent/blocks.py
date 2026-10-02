@@ -126,10 +126,9 @@ def all_shots(outcome) -> list[Path]:
 def blocks_for(outcome) -> list[Block]:
     """The blocks of one outcome: its own if it has them, else synthesised.
 
-    The synthesised order mirrors `report/docx_builder.py:_annotate_one`
-    exactly -- code, then either the failure note or the output, then the
-    explanation. Keeping the two in step is what lets a new emitter and the old
-    annotator describe the same task the same way.
+    The synthesised order is the classic report's: code, then either the
+    failure note or the output, then the explanation. Every emitter, the
+    annotated Word report included, renders this one list.
     """
     if outcome.blocks:
         return list(outcome.blocks)
@@ -167,10 +166,17 @@ def blocks_for(outcome) -> list[Block]:
 
 
 def _prose_of(outcome) -> list[Block]:
-    """The overview, then one titled block per written answer."""
+    """The overview, then one titled block per written answer.
+
+    A theory task's overview IS its answer -- there is no program to explain --
+    so it is marked as one. That is what keeps it in the report when
+    explanations are left out (`present.select` drops only unmarked prose).
+    """
     out: list[Block] = []
     if outcome.explanation:
-        out.append(Block("prose", text=outcome.explanation))
+        task = getattr(outcome, "task", None)
+        theory = task is not None and not getattr(task, "needs_code", True)
+        out.append(Block("prose", text=outcome.explanation, role="answer" if theory else ""))
     for item in getattr(outcome, "answers", None) or []:
         answer = str(item.get("answer") or "").strip()
         if answer:

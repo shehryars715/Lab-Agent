@@ -14,6 +14,7 @@ from docx.oxml.ns import qn
 
 from labsagent.capture.rendered import RenderedBackend
 from labsagent.models import Task, TaskOutcome, Transcript
+from labsagent.present import AnswerPlan, Include
 from labsagent.report.docx_builder import annotate_manual
 from labsagent.report.docx_utils import flatten_paragraphs
 
@@ -61,7 +62,13 @@ def test_every_original_paragraph_survives(manual_path, tmp_path):
 
 def test_inserted_sequence_is_in_order(manual_path, tmp_path):
     """Catches the reverse-order XML bug directly."""
-    out = annotate_manual(manual_path, tmp_path / "r.docx", [_outcome(tmp_path)], anchors={"task1": 8})
+    # The full classic set, opted into: screenshots and the explanation are
+    # left out by default (2026-10-02).
+    everything = {"task1": AnswerPlan(include=Include(screenshots=True, explanation=True))}
+    out = annotate_manual(
+        manual_path, tmp_path / "r.docx", [_outcome(tmp_path)], anchors={"task1": 8},
+        plans=everything,
+    )
     flat = flatten_paragraphs(docx.Document(str(out)))
 
     texts = [p.text for p in flat]

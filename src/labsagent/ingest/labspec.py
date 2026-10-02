@@ -48,9 +48,10 @@ from labsagent.capabilities import (
 from labsagent.errors import SpecError
 from labsagent.ingest.docx_reader import RawManual
 from labsagent.ingest.readers import produces_anchors
-from labsagent.intent import Intent, detect_formats
+from labsagent.intent import Intent, detect_formats, detect_parts
 from labsagent.models import LabSpec, Task
 from labsagent.prerequisites import Needed
+from labsagent.present import PARTS, SLOT_PARTS, AnswerPlan, Include, Slot
 from labsagent.usage import Usage
 
 EXTRACTION_PROMPT = """You are reading a document a student uploaded, and deciding what it is.
@@ -63,7 +64,8 @@ none.
 
 Each line below is one paragraph of the document, prefixed with its index in
 square brackets, e.g. "[7]". Style names appear in brackets after the index when
-the paragraph is not body text.
+the paragraph is not body text. A paragraph inside a table also carries [cell],
+and an empty cell reads (empty).
 
 First classify the document:
 
@@ -95,6 +97,12 @@ For each task report:
   no values, choose simple sensible ones that satisfy the task.
 - wants_explanation: true only if the task explicitly asks the student to
   explain, discuss, describe or comment on their approach.
+- wants_screenshot: true only if the document asks for screenshots, snapshots or
+  pictures of the program's output -- for this task, or for every task ("attach
+  a screenshot of the output of each program"). A chart or plot the program
+  draws is not a screenshot.
+- screenshot_evidence: when wants_screenshot is true, the document's words that
+  ask for it, copied exactly, under 80 characters. Otherwise "".
 - written_questions: the parts of the task the student must answer IN WORDS rather
   than by what the program prints -- explain, analyse, compare, discuss, interpret,
   justify, observe, "why". One short question per entry, e.g. "Why does the
@@ -115,6 +123,16 @@ For each task report:
   task's heading.
 - anchor_quote: the first 40 characters of the paragraph at anchor_idx, copied
   exactly. This is used to verify anchor_idx, so it must be an exact copy.
+- answer_slots: ONLY where the document itself gives this task's answer a place
+  of its own: an (empty) cell under or beside the task, or a line such as "Write
+  your code here", "Paste the output here" or "Answer:" left blank for the
+  student. One entry per place: {{"part": what the place is for, from its own
+  label -- "code", "output" (output or screenshot), "answer" (words) or "any";
+  "idx": the index of the (empty) cell or the placeholder line itself, never of
+  the label beside it; "quote": its first 40 characters copied exactly, or ""
+  for an (empty) cell}}. Never the task statement, never another task's
+  text, never a cell holding instructions or sample data. Empty for most
+  manuals: when there is no such place, the answer goes after the task.
 - language: the programming language the student must WRITE this task's
   solution in, lowercase: "python", "html/css", "javascript", "java", "c++",
   "c", "sql", "r", "matlab", and so on. "none" for a question answered only in
@@ -184,6 +202,12 @@ may be empty, is quoted below.
   by `artifacts` and `tasks_wanted`, and repeating them makes the solver try to
   produce the files itself in Python instead of just solving the task.
   Empty if there is nothing.
+- show / hide: parts of every answer the student's message asks to ADD or to
+  LEAVE OUT, from exactly: "code", "output", "screenshots", "figures",
+  "explanation". "Include screenshots of the output" -> show ["screenshots"];
+  "no explanations, just the code" -> hide ["explanation"]. Empty when the
+  message says nothing about what the answers contain. These are about the
+  report, never the code, so they never go in notes.
 - datasets: data the DOCUMENT tells the student to obtain, which is not in the
   document itself. Copy each reference exactly as written, one per entry:
     a link            "https://example.edu/data/sales.csv"
@@ -241,12 +265,23 @@ class ExtractedNeed(BaseModel):
     evidence: str | None = ""
 
 
+class ExtractedSlot(BaseModel):
+    # Loose, like every field a check reads afterwards: a malformed box must
+    # cost that box, never an ingest retry.
+    part: str | None = "any"
+    idx: int | str | None = None
+    quote: str | None = ""
+
+
 class ExtractedTask(BaseModel):
     task_number: int = Field(description="1-based position in document order")
     title: str
     statement: str = Field(description="complete, self-contained requirement text")
     sample_inputs: list[str] = Field(default_factory=list)
     wants_explanation: bool = False
+    wants_screenshot: bool | str | None = False
+    screenshot_evidence: str | None = ""
+    answer_slots: list[ExtractedSlot | str] = Field(default_factory=list)
     written_questions: list[str] = Field(default_factory=list)
     needs_code: bool = True
     # A string, not a Literal: an unexpected value must degrade to "standard",
@@ -293,6 +328,8 @@ class ExtractedIntent(BaseModel):
     prerequisites: list[ExtractedPrerequisite | str] = Field(
         default_factory=list, description="inputs from outside this document"
     )
+    show: list[str] = Field(default_factory=list, description="answer parts to add")
+    hide: list[str] = Field(default_factory=list, description="answer parts to leave out")
 
 
 class ExtractedLab(BaseModel):
@@ -443,11 +480,14 @@ SCHEMA_HINT = """{
       "statement": "string",
       "sample_inputs": ["5", "3"],
       "wants_explanation": false,
+      "wants_screenshot": false,
+      "screenshot_evidence": "",
       "written_questions": [],
       "needs_code": true,
       "effort": "basic",
       "anchor_idx": 8,
       "anchor_quote": "first 40 chars of the paragraph at anchor_idx",
+      "answer_slots": [],
       "language": "python",
       "language_evidence": "",
       "needs": [],
@@ -460,7 +500,9 @@ SCHEMA_HINT = """{
     "notes": "",
     "datasets": [],
     "data_unlinked": [],
-    "prerequisites": []
+    "prerequisites": [],
+    "show": [],
+    "hide": []
   }
 }"""
 
@@ -490,6 +532,9 @@ class Reading:
     #: like `anchors`: only the capability gate reads it, so `Task` does not
     #: carry it and the manifest does not persist it.
     requirements: dict[str, Requirement] = dataclass_field(default_factory=dict)
+    #: task id -> what its answer contains and the manual's boxes for it. A
+    #: side table too: only the emitters read it, never the solver.
+    plans: dict[str, AnswerPlan] = dataclass_field(default_factory=dict)
 
     @property
     def is_lab(self) -> bool:
@@ -514,7 +559,13 @@ def _intent_from(
     # express is never overridden.
     if not artifacts:
         artifacts = detect_formats(request)
+    show, hide = _parts(extracted.intent.show), _parts(extracted.intent.hide)
+    # The same backstop, for the same reason: only when the model said nothing.
+    if not show and not hide:
+        show, hide = detect_parts(request)
     return Intent(
+        show=show,
+        hide=hide,
         kind=extracted.document_kind if extracted.document_kind in
         ("lab", "notebook_lab", "other") else "lab",
         confidence=max(0.0, min(1.0, float(extracted.confidence))),
@@ -740,6 +791,113 @@ def _datasets(extracted: ExtractedLab, manual, request: str) -> list[str]:
     return reconcile_datasets(model_refs, texts, request)
 
 
+#: Spellings a model or a student uses for each part.
+_PART_NAMES = {
+    "screenshot": "screenshots", "screenshots": "screenshots", "snapshots": "screenshots",
+    "explanation": "explanation", "explanations": "explanation",
+    "figure": "figures", "figures": "figures", "plot": "figures", "plots": "figures",
+    "chart": "figures", "charts": "figures",
+    "code": "code", "output": "output", "outputs": "output",
+}
+
+
+def _parts(values) -> list[str]:
+    out: list[str] = []
+    for value in values or []:
+        part = _PART_NAMES.get(str(value or "").strip().lower())
+        if part in PARTS and part not in out:
+            out.append(part)
+    return out
+
+
+def _slots_for(item, position, task_ids, anchors, manual, claimed: set[int]) -> tuple[Slot, ...]:
+    """The manual's own answer boxes for one task, each one checked.
+
+    The model is good at seeing "this empty cell is where Task 2's code goes"
+    and bad at counting, so every box must survive three checks or it is
+    dropped, which falls back to the old behaviour (after the task), never to
+    a wrong place:
+    - it lies between the previous task's anchor and the next task's;
+    - a box with text starts with the quote the model copied (`_starts`), and
+      a box without text is an empty CELL -- a blank line is not a box;
+    - no other task already claimed it.
+    """
+    paragraphs = manual.paragraphs
+    low = anchors.get(task_ids[position - 1], -1) if position > 0 else -1
+    high = (
+        anchors.get(task_ids[position + 1], len(paragraphs))
+        if position + 1 < len(task_ids)
+        else len(paragraphs)
+    )
+    found: list[Slot] = []
+    for raw in item.answer_slots or []:
+        if isinstance(raw, str):
+            continue
+        try:
+            idx = int(str(raw.idx).strip())
+        except (TypeError, ValueError):
+            continue
+        if not (low < idx < min(high, len(paragraphs))) or idx in claimed:
+            continue
+        paragraph = paragraphs[idx]
+        quote = str(raw.quote or "").strip()
+        if paragraph.text.strip():
+            if not quote or not _starts(paragraph, quote):
+                continue
+        elif not paragraph.in_table:
+            continue
+        # A LABEL'S BOX IS THE EMPTY CELL AFTER IT. Observed live: asked for
+        # the box, the model pointed at the "Code" label cell on one run and at
+        # the empty cell beside it on the next -- and writing under the label
+        # puts the code in the label column. The prompt asks for the empty
+        # cell; this makes it so.
+        following = idx + 1
+        if (
+            paragraph.in_table
+            and 0 < len(paragraph.text.strip()) <= 30
+            and following < min(high, len(paragraphs))
+            and paragraphs[following].in_table
+            and not paragraphs[following].text.strip()
+            and following not in claimed
+        ):
+            idx = following
+        part = str(raw.part or "any").strip().lower()
+        part = "output" if part.startswith("screenshot") else part
+        claimed.add(idx)
+        found.append(Slot(idx=idx, part=part if part in SLOT_PARTS else "any"))
+        if len(found) == 4:
+            break
+    return tuple(sorted(found, key=lambda s: s.idx))
+
+
+def _answer_plans(extracted: ExtractedLab, manual, anchors, intent: Intent) -> dict[str, AnswerPlan]:
+    """What each task's answer contains and where the manual wants it.
+
+    THE DEFAULT IS WHAT THE OWNER DECIDED: code and output as text. A
+    screenshot needs the manual's own words asking for one (quoted and
+    grounded, like every claim a decision rests on), an explanation needs the
+    task to ask for it, and the student's message wins over both. Boxes exist
+    only for a .docx, the one format whose paragraphs we can write into.
+    """
+    haystack = _haystack(manual)
+    order = sorted(extracted.tasks, key=lambda t: t.task_number)
+    task_ids = [f"task{t.task_number}" for t in order]
+    claimed: set[int] = set()
+    plans: dict[str, AnswerPlan] = {}
+    for position, item in enumerate(order):
+        screenshots = _truthy(item.wants_screenshot) and _grounded(
+            str(item.screenshot_evidence or ""), haystack
+        )
+        include = Include(screenshots=screenshots, explanation=bool(item.wants_explanation))
+        slots = (
+            _slots_for(item, position, task_ids, anchors, manual, claimed) if anchors else ()
+        )
+        plans[task_ids[position]] = AnswerPlan(
+            include=include.changed(intent.show, intent.hide), slots=slots
+        )
+    return plans
+
+
 def extract_labspec(manual: RawManual, model, request: str = "") -> Reading:
     """One constrained call that classifies, extracts and resolves the request.
 
@@ -801,6 +959,7 @@ def extract_labspec(manual: RawManual, model, request: str = "") -> Reading:
                 requirements=_requirements(
                     extracted, manual, request, [*intent.datasets, *intent.data_unlinked]
                 ),
+                plans=_answer_plans(extracted, manual, anchors, intent),
             )
 
         # NO TASKS. Which of the two reasons matters, and they used to be

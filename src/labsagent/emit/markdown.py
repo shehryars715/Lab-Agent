@@ -39,7 +39,7 @@ def render(ctx: EmitContext) -> str:
         task = outcome.task
         out += [f"## {task.title or task.id}", "", task.statement.strip(), ""]
 
-        for block in arrange(outcome, ctx.style):
+        for block in arrange(outcome, ctx.style, ctx.plan_for(task.id).include):
             if block.kind == "code":
                 out += [f"```{block.lang}", block.text.rstrip(), "```", ""]
             elif block.kind == "output":

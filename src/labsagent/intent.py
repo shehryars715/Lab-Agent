@@ -118,6 +118,36 @@ def detect_formats(text: str) -> list[str]:
     return found
 
 
+#: Parts of the answers a request names outright. Narrow on purpose, like
+#: FORMAT_HINTS: "explain how loops work" in a request is a question, not a
+#: request for explanations in the report, so only the noun counts.
+PART_HINTS: dict[str, tuple[str, ...]] = {
+    "screenshots": (r"\bscreen\s?shots?\b", r"\bsnap\s?shots?\b"),
+    "explanation": (r"\bexplanations?\b",),
+}
+
+
+def detect_parts(text: str) -> tuple[list[str], list[str]]:
+    """(show, hide): parts a request switches on or off in so many words.
+
+    The same backstop `detect_formats` is, for the same reason: it runs only
+    when the model expressed nothing, so a request it understood is never
+    second-guessed. "with screenshots" shows them; "no screenshots" hides them.
+    """
+    show: list[str] = []
+    hide: list[str] = []
+    low = (text or "").lower()
+    for part, patterns in PART_HINTS.items():
+        for pattern in patterns:
+            match = re.search(pattern, low)
+            if not match:
+                continue
+            negated = _NEGATED.search(low[max(0, match.start() - 24):match.start()])
+            (hide if negated else show).append(part)
+            break
+    return show, hide
+
+
 @dataclass(frozen=True)
 class Intent:
     """The resolved request. `task_ids` of None means "everything"."""
@@ -145,6 +175,10 @@ class Intent:
     #: manual's own words at ingest. The pipeline asks the student about each
     #: one before any code is written; see `prerequisites.py`.
     prerequisites: list[Needed] = field(default_factory=list)
+    #: Answer parts the student's message switches on or off, for every task
+    #: (`present.PARTS`). They win over what the manual asked for.
+    show: list[str] = field(default_factory=list)
+    hide: list[str] = field(default_factory=list)
 
     @property
     def is_lab(self) -> bool:

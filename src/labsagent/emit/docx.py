@@ -77,7 +77,7 @@ def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
 
         wrote_output_label = False
         answers_headed = False
-        blocks = arrange(outcome, ctx.style)
+        blocks = arrange(outcome, ctx.style, ctx.plan_for(task.id).include)
         for index, block in enumerate(blocks):
             if block.kind == "code":
                 if block.title:
@@ -151,6 +151,7 @@ class DocxEmitter:
                     cover=ctx.cover,
                     anchors=ctx.anchors,
                     style=ctx.style,
+                    plans=ctx.plans,
                 )
             ]
         return [build_fresh(ctx, out_path)]

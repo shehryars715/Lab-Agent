@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from labsagent.blocks import blocks_for
+from labsagent.present import select
 from labsagent.emit import EmitContext, register
 
 
@@ -48,7 +49,7 @@ def render(ctx: EmitContext) -> str:
         lines += _comment(task.statement)
         lines.append("")
 
-        blocks = blocks_for(outcome)
+        blocks = select(blocks_for(outcome), ctx.plan_for(task.id).include)
         for block in blocks:
             if block.kind == "code":
                 lines.append(block.text.rstrip())

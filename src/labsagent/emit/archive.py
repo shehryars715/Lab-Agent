@@ -41,9 +41,14 @@ class ArchiveEmitter:
                 elif outcome.code_text:
                     zf.writestr(f"code/{outcome.task.id}.py", outcome.code_text)
 
+                # The zip carries the pictures the report carries: figures
+                # unless left out, terminal screenshots only when asked for.
+                include = ctx.plan_for(outcome.task.id).include
+                figures = {Path(f) for f in outcome.figure_paths}
                 for shot in all_shots(outcome):
                     shot = Path(shot)
-                    if shot.exists():
+                    wanted = include.figures if shot in figures else include.screenshots
+                    if wanted and shot.exists():
                         zf.write(shot, arcname=f"screenshots/{shot.name}")
 
         return [zip_path]

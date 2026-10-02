@@ -113,9 +113,11 @@ def test_wants_explanation_drives_the_budget():
 
 
 def test_brief_states_the_sentence_count():
-    assert f"exactly {SHORT_SENTENCES} sentences" in build_brief(_task(), CODE, None)
+    # A ceiling, not a quota: "exactly two sentences" is how every note came out
+    # the same length, which is half of what made them read as machine-made.
+    assert f"at most {SHORT_SENTENCES} sentences" in build_brief(_task(), CODE, None)
     assert (
-        f"exactly {LONG_SENTENCES} sentences"
+        f"at most {LONG_SENTENCES} sentences"
         in build_brief(_task(wants_explanation=True), CODE, None)
     )
 

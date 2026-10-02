@@ -58,6 +58,14 @@ class RawManual:
             if len(body) > max_chars:
                 body = body[:max_chars] + "..."
             tag = f" [{p.style}]" if p.style != "Normal" else ""
+            # A BOX THE MODEL CANNOT SEE IS A BOX IT CANNOT FILL. An empty
+            # answer cell used to arrive as a bare "[42]", indistinguishable
+            # from a blank line, so a manual's own "write your code here" table
+            # could never be found. Cells say so, and an empty one says that too.
+            if p.in_table:
+                tag += " [cell]"
+                if not body:
+                    body = "(empty)"
             # AFTER the truncation, so a long paragraph never loses its link.
             if p.links:
                 body = f"{body} {_render_links(p.links)}"

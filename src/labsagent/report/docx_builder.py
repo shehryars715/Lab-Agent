@@ -5,32 +5,33 @@ styles are never regenerated, so they survive by construction. That deletes all
 document-design work and replaces it with a narrower problem: resolving anchors
 and inserting XML correctly.
 
-Inserted after each task's anchor:
+WHAT GOES IN AND WHERE IS NOT DECIDED HERE. It used to be: every task got
+"Code:", its terminal screenshots and an explanation, inserted after the task --
+and a task inside a table was deliberately moved out of it, so a manual's own
+answer box stayed empty while the work landed underneath. Each task now comes
+with an `AnswerPlan` read from the manual and the student's message
+(`present.py`): the parts to include, and the manual's boxes, if it has any.
+This module only renders the plan:
 
-    Code:
-        <source, monospace, shaded>
-    Output:
-        <screenshot>
-        <short explanation>
+    a plan with boxes     each part into the box meant for it, with no label the
+                          box already shows; parts with no box follow the last box
+    a plan without boxes  the parts after the task's anchor, as before
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
 import docx
+from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 
-from labsagent.blocks import (
-    _failure_note,
-    gap_note,
-    has_screenshot_twin,
-    leading_prose,
-    outside_notes,
-)
+from labsagent.blocks import LEAD, Block, has_screenshot_twin
 from labsagent.models import TaskOutcome
+from labsagent.present import AnswerPlan, Vocabulary, arrange, vocabulary
 from labsagent.report.cover import CoverInfo, build_cover
 from labsagent.report.docx_utils import (
     enclosing_table,
@@ -70,9 +71,9 @@ def _code_block(cursor: Paragraph, source: str) -> Paragraph:
     return cursor
 
 
-def _image(cursor: Paragraph, image_path: Path) -> Paragraph:
+def _image(cursor: Paragraph, image_path: Path, width_in: float = IMAGE_WIDTH_IN) -> Paragraph:
     cursor = insert_paragraph_after(cursor)
-    cursor.add_run().add_picture(str(image_path), width=Inches(IMAGE_WIDTH_IN))
+    cursor.add_run().add_picture(str(image_path), width=Inches(width_in))
     tighten(cursor, before=2, after=4)
     return cursor
 
@@ -85,110 +86,47 @@ def _explanation(cursor: Paragraph, text: str) -> Paragraph:
     return cursor
 
 
-def _annotate_one(anchor: Paragraph, outcome: TaskOutcome) -> None:
-    """Insert one task's work. The cursor advances to each newly created
-    paragraph -- inserting repeatedly after the same anchor reverses order."""
-    cursor = anchor
+def _render(
+    cursor: Paragraph,
+    blocks: list[Block],
+    words: Vocabulary,
+    *,
+    labels: bool = True,
+    width_in: float = IMAGE_WIDTH_IN,
+) -> Paragraph:
+    """Insert `blocks` after `cursor`, in order; return the last paragraph.
 
-    # Anything the caller put before the code -- today, which dataset this run
-    # used. Guarded by `leading_prose` returning empty for every outcome that
-    # does not set `blocks`, so a report built the way every previous report
-    # was built is byte-identical, which this module's docstring promises.
-    for block in leading_prose(outcome):
-        cursor = _explanation(cursor, block.text)
-
-    # A theory question gets words, not an empty "Code:" block.
-    if not getattr(outcome.task, "needs_code", True):
-        if outcome.status == "failed":
-            cursor = _label(cursor, "Status:")
-            cursor = _explanation(cursor, f"Not answered: {outcome.error or 'unknown'}")
-            return
-        for note in outside_notes(outcome):
-            cursor = _explanation(cursor, note.text)
-        if outcome.explanation:
-            cursor = _explanation(cursor, outcome.explanation)
-        _answers(cursor, outcome)
-        return
-
-    cursor = _label(cursor, CODE_LABEL)
-    if outcome.code_text:
-        cursor = _code_block(cursor, outcome.code_text)
-    else:
-        cursor = _code_block(cursor, "# no solution was produced for this task")
-
-    if outcome.status == "failed":
-        cursor = _label(cursor, "Status:")
-        cursor = _explanation(cursor, _failure_note(outcome))
-        return
-
-    cursor = _label(cursor, OUTPUT_LABEL)
-    for image_path in outcome.screenshot_paths:
-        cursor = _image(cursor, image_path)
-    for figure_path in outcome.figure_paths:
-        cursor = _image(cursor, figure_path)
-
-    # "Recreated for this report" / "Left out" -- written by code, and empty
-    # for a self-contained lab, so every earlier report is byte-identical.
-    for note in outside_notes(outcome):
-        cursor = _explanation(cursor, note.text)
-    # Empty for every outcome without a gap, so older reports are unchanged.
-    if gap_note(outcome):
-        cursor = _explanation(cursor, gap_note(outcome))
-    if outcome.explanation:
-        cursor = _explanation(cursor, outcome.explanation)
-    _answers(cursor, outcome)
-
-
-def _answers(cursor: Paragraph, outcome: TaskOutcome) -> Paragraph:
-    """Each written answer as real text: the question in bold, then the answer.
-
-    This is the fix for the analysis that used to arrive as a terminal
-    screenshot. Nothing is added for an outcome without answers, so every
-    report built before this existed is unchanged.
+    The cursor advances to each new paragraph -- inserting repeatedly after the
+    same one reverses the order. `labels=False` is for a box whose own label
+    already says what it holds: a "Code" cell does not need "Code:" again.
     """
-    for item in outcome.answers or []:
-        answer = str(item.get("answer") or "").strip()
-        if not answer:
-            continue
-        question = str(item.get("question") or "").strip()
-        if question:
-            cursor = _label(cursor, question)
-        cursor = _explanation(cursor, answer)
-    return cursor
-
-
-def _annotate_arranged(anchor: Paragraph, outcome: TaskOutcome, style: str) -> None:
-    """One task's work in a non-classic style, inserted under its anchor."""
-    from labsagent.present import arrange, vocabulary
-
-    words = vocabulary(style)
-    cursor = anchor
-    blocks = arrange(outcome, style)
     labelled_output = False
     answers_headed = False
     for index, block in enumerate(blocks):
         if block.kind == "code":
-            cursor = _label(cursor, block.title or words.code)
+            if labels or block.title:
+                cursor = _label(cursor, block.title or words.code)
             cursor = _code_block(cursor, block.text)
             labelled_output = False
         elif block.kind == "error":
-            cursor = _label(cursor, "Status:")
+            if labels:
+                cursor = _label(cursor, "Status:")
             cursor = _explanation(cursor, block.text)
         elif block.kind == "image" and block.path is not None and Path(block.path).exists():
-            if not labelled_output:
+            if labels and not labelled_output:
                 cursor = _label(cursor, words.output)
-                labelled_output = True
-            cursor = _image(cursor, Path(block.path))
+            labelled_output = True
+            cursor = _image(cursor, Path(block.path), width_in)
         elif (
             block.kind == "output"
             and block.text.strip()
-            # TERMINAL OUTPUT IS SHOWN AS THE TERMINAL. This used to be one
-            # flag for the whole task, and section layouts dropped the only
-            # picture -- so every non-classic report printed shaded text. The
-            # text now appears only for an output that has no picture.
+            # TERMINAL OUTPUT IS SHOWN AS THE TERMINAL -- when screenshots are
+            # included at all. The text appears exactly when no picture of it
+            # follows, decided per output, never by a layout choice.
             and not has_screenshot_twin(blocks, index)
         ):
-            cursor = _label(cursor, words.output)
+            if labels and not labelled_output:
+                cursor = _label(cursor, words.output)
             labelled_output = True
             cursor = _code_block(cursor, block.text)
         elif block.kind == "prose":
@@ -198,6 +136,101 @@ def _annotate_arranged(anchor: Paragraph, outcome: TaskOutcome, style: str) -> N
             if block.title:
                 cursor = _label(cursor, block.title)
             cursor = _explanation(cursor, block.text)
+    return cursor
+
+
+# --- the manual's own boxes --------------------------------------------------
+
+#: Text a manual leaves for the student to replace: "Write your code here".
+_PLACEHOLDER = re.compile(
+    r"\b(here|write|paste|insert|type|attach|your (?:code|answer|output|solution))\b", re.I
+)
+
+
+def _replaceable(paragraph: Paragraph) -> bool:
+    """An empty box, or a placeholder written to be overwritten. A label such
+    as "Code:" is neither: the answer goes under it and the label stays."""
+    text = paragraph.text.strip()
+    return not text or (len(text) <= 120 and bool(_PLACEHOLDER.search(text)))
+
+
+def _part_of(block: Block) -> str:
+    """Which box a block belongs in."""
+    if block.kind == "code" or (block.kind == "prose" and block.role == LEAD):
+        return "code"
+    if block.kind == "prose" and block.role in ("answer", ""):
+        return "answer"
+    # Output, pictures, an error, and the notes about what was not done.
+    return "output"
+
+
+def _box_width(paragraph: Paragraph) -> float:
+    """How wide a picture may be inside this paragraph's cell, in inches.
+
+    A 6-inch screenshot in a 3-inch cell stretches the table off the page.
+    """
+    node = paragraph._p.getparent()
+    while node is not None and node.tag != qn("w:tc"):
+        node = node.getparent()
+    if node is None:
+        return IMAGE_WIDTH_IN
+    width = node.find(f"{qn('w:tcPr')}/{qn('w:tcW')}")
+    try:
+        twips = int(width.get(qn("w:w")))
+        unit = width.get(qn("w:type"))
+    except (AttributeError, TypeError, ValueError):
+        return 5.0
+    if unit in (None, "dxa") and twips > 0:
+        return max(1.5, min(IMAGE_WIDTH_IN, twips / 1440 - 0.2))
+    return 5.0
+
+
+def _after_box(paragraph: Paragraph, doc) -> Paragraph:
+    """Where parts with no box of their own go: right after the last box."""
+    table = enclosing_table(paragraph)
+    return insert_paragraph_after_table(table, doc) if table is not None else paragraph
+
+
+def _fill_boxes(doc, boxes: list[tuple], blocks: list[Block], words: Vocabulary) -> None:
+    """Each part into the box meant for it; what has no box follows the last.
+
+    A box for a part ("code", "output", "answer") takes that part only, with no
+    label of ours. An "any" box takes everything no specific box claimed, in
+    order, with labels -- a single "Solution" box needs to say which is which.
+    """
+    groups: dict[str, list[Block]] = {"code": [], "output": [], "answer": []}
+    for block in blocks:
+        groups[_part_of(block)].append(block)
+
+    plan: dict[int, tuple[list[Block], bool]] = {}
+    claimed: set[str] = set()
+    for slot, _ in boxes:
+        if slot.part in groups and slot.part not in claimed:
+            plan[slot.idx] = (groups[slot.part], False)
+            claimed.add(slot.part)
+    rest = [b for b in blocks if _part_of(b) not in claimed]
+    for slot, _ in boxes:
+        if slot.part == "any" and rest:
+            plan[slot.idx] = (rest, True)
+            rest = []
+
+    last = boxes[-1][1]
+    for slot, paragraph in boxes:
+        group, labels = plan.get(slot.idx, ([], False))
+        if not group:
+            continue
+        end = _render(paragraph, group, words, labels=labels, width_in=_box_width(paragraph))
+        if end is not paragraph and _replaceable(paragraph):
+            # The box's own first line was empty or "write your code here":
+            # the answer replaces it rather than sitting under a blank line.
+            paragraph._p.getparent().remove(paragraph._p)
+            if paragraph is last:
+                last = end
+        elif paragraph is last:
+            last = end
+
+    if rest:
+        _render(_after_box(last, doc), rest, words)
 
 
 def annotate_manual(
@@ -207,13 +240,14 @@ def annotate_manual(
     cover: CoverInfo | None = None,
     anchors: dict[str, int] | None = None,
     style: str = "classic",
+    plans: dict[str, AnswerPlan] | None = None,
 ) -> Path:
-    """Copy the manual and insert each task's work beneath its anchor.
+    """Copy the manual and put each task's answer where its plan says.
 
-    A `cover` is prepended AFTER anchors have been resolved to Paragraph
-    objects. Order matters: prepending shifts every integer index in the
-    document, but object references survive it -- the same reason anchors are
-    resolved before any mutation at all.
+    A `cover` is prepended AFTER anchors and boxes have been resolved to
+    Paragraph objects. Order matters: prepending shifts every integer index in
+    the document, but object references survive it -- the same reason anchors
+    are resolved before any mutation at all.
     """
     manual_path, out_path = Path(manual_path), Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -221,12 +255,21 @@ def annotate_manual(
 
     doc = docx.Document(str(out_path))
     paragraphs = flatten_paragraphs(doc)
+    words = vocabulary(style)
 
-    # Resolve every anchor to a Paragraph OBJECT before mutating anything.
-    # Integer indices shift the moment the first insert lands; object references
-    # stay valid across sibling inserts.
-    resolved: list[tuple[Paragraph, TaskOutcome]] = []
+    # Resolve every anchor and box to a Paragraph OBJECT before mutating
+    # anything. Integer indices shift the moment the first insert lands; object
+    # references stay valid across sibling inserts.
+    resolved: list[tuple[Paragraph | None, list[tuple], TaskOutcome, AnswerPlan]] = []
     for outcome in outcomes:
+        plan = (plans or {}).get(outcome.task.id) or AnswerPlan()
+        boxes = [
+            (slot, paragraphs[slot.idx]) for slot in plan.slots if 0 <= slot.idx < len(paragraphs)
+        ]
+        if boxes:
+            resolved.append((None, boxes, outcome, plan))
+            continue
+
         idx = (anchors or {}).get(outcome.task.id, -1)
         if not (0 <= idx < len(paragraphs)):
             raise IndexError(
@@ -235,26 +278,24 @@ def annotate_manual(
             )
         anchor = paragraphs[idx]
 
-        # A task wrapped in a table would otherwise have its code and a 6in
-        # screenshot inserted INSIDE the bordered cell -- cramped, and visually
-        # inconsistent with tasks that sit on the open page. Escape to body
-        # level so every task is presented identically.
+        # NO BOX: a task wrapped in a table would otherwise have its work
+        # inserted INSIDE the cell that holds the task text -- the statement's
+        # cell, not an answer box. Escape to body level.
         tbl = enclosing_table(anchor)
         if tbl is not None:
             anchor = insert_paragraph_after_table(tbl, doc)
 
-        resolved.append((anchor, outcome))
+        resolved.append((anchor, [], outcome, plan))
 
     if cover is not None:
         build_cover(doc, cover)
 
-    for anchor, outcome in resolved:
-        # `classic` keeps the original writer, byte for byte. Any other style
-        # is laid out by `present.arrange` and inserted block by block.
-        if style == "classic":
-            _annotate_one(anchor, outcome)
+    for anchor, boxes, outcome, plan in resolved:
+        blocks = arrange(outcome, style, plan.include)
+        if boxes:
+            _fill_boxes(doc, boxes, blocks, words)
         else:
-            _annotate_arranged(anchor, outcome, style)
+            _render(anchor, blocks, words)
 
     doc.save(str(out_path))
     return out_path

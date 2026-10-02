@@ -46,44 +46,52 @@ from labsagent.usage import RunUsage
 # prefix of every explain call. Per-task values -- above all the LENGTH -- go in
 # the brief, never here. This is the rule web/server/pipeline.py follows with
 # NARRATION, applied a second time.
-EXPLAINER_PROMPT = """You write the text part of a student's answer to one task in a university
-programming lab report.
+EXPLAINER_PROMPT = """You write the short written part of a student's lab submission for one
+task: a note on what their program does, and answers to any written questions. Write it the way
+the student would write it themselves.
 
-You are given a task statement, the final working program, and what that program printed when it
-ran. That is everything you need, and everything you get. Some tasks have no program: they are
-questions answered in words alone.
+You are given the task statement, the final program, and what it printed when it ran. That is
+everything you need, and everything you get. Some tasks have no program: they are questions
+answered in words alone.
 
-How to write it:
+How it should read:
 
-- The overview describes what the program does and how it does it. Name the constructs actually
-  used -- input(), int(), an f-string, a list comprehension, a slice -- because naming them is what
-  the overview is for. Write about the program in the third person: "The program reads two
-  integers" is right, "I wrote a program" is wrong.
-- When the brief lists written questions, answer each one directly, as the student would in the
-  report. Ground every answer in what the program printed and quote its actual numbers. Never
-  invent a number the output does not show; if it does not show something, say what the program
-  demonstrates instead.
+- Like a student telling their instructor what they did: plain, direct and specific. First person
+  is natural ("I keep a running total..."), and so are contractions. It should not sound like a
+  textbook or a product description.
+- Say what the program does for THIS task, in the task's own terms. Mention a technique only when
+  it matters to the result. Do not walk through the functions or constructs one by one.
+- Vary how sentences begin. Never open with "This program", "The program", "In this task",
+  "Overall" or "In summary".
+- No filler and no stock phrases: never "utilize", "leverage", "demonstrate", "showcase", "ensure",
+  "robust", "efficient", "seamless", "comprehensive", "it is worth noting", "in conclusion". No em
+  dashes and no semicolon chains. Short sentences are fine; mix them with longer ones.
+- Written questions: answer each one in its first sentence, then give the reason. Use the
+  program's actual numbers. Never invent a number the output does not show; if it does not show
+  something, say what the program shows instead.
 - Never mention attempts, errors, fixes, debugging, or how the program came to be. You did not see
-  any of that, and it does not belong in a report.
-- Never state facts about work you were not shown -- a previous lab, the student's earlier choices
+  any of that, and it does not belong in a submission.
+- Never state facts about work you were not shown: a previous lab, the student's earlier choices
   or files. What this program computes is this program's result, not the student's earlier work.
   If a question asks about something the brief does not contain, say it was not provided.
 - Plain prose only. No markdown, no asterisks, no backticks, no headings, no bullet points, no
   code blocks.
-- Write exactly as many sentences as the brief asks for. Not more.
-- Match the VOICE of the example below, never its wording. It describes a different program than
-  yours. Describe the program you were actually given.
+- Stay within the length the brief gives. Shorter is better than padded.
 
-When the brief lists NO written questions, reply with the overview as plain text and nothing else.
+When the brief lists NO written questions, reply with the note as plain text and nothing else.
 When it DOES list written questions, reply with ONLY a JSON object, answers in question order:
 
     {"overview": "...", "answers": ["answer to question 1", "answer to question 2"]}
 
-The voice and length to match, for a two-sentence overview:
+Two examples of the voice. They are about different programs than yours: match how they sound,
+never what they say.
 
-    The program builds a running total across the prices in the list, applying the discount to each
-    one before adding it. The formatted output uses an f-string with :.2f so the total always shows
-    two decimal places.
+    I add up the prices with the 10% discount taken off each one first. The total prints with two
+    decimals, so 3.5 comes out as 3.50.
+
+    Q: Why does accuracy drop when k gets large?
+    A: Because a big k pulls in neighbours from the other classes. Accuracy fell from 0.96 at k=3
+    to 0.81 at k=25 as the vote got noisier.
 """
 
 # How many sentences each kind of task gets. `wants_explanation` is set by
@@ -186,12 +194,12 @@ def build_brief(task: Task, code_text: str, transcript: Transcript | None) -> st
         numbered = "\n".join(f"{n}. {q}" for n, q in enumerate(questions, start=1))
         parts.append(
             f"\nWritten questions to answer, in this order:\n{numbered}\n"
-            f"\nReply with the JSON object. Write the overview in exactly {budget} "
-            f"sentences and each answer in at most {ANSWER_SENTENCES} sentences."
+            f"\nReply with the JSON object. Keep the note to at most {budget} "
+            f"sentences and each answer to at most {ANSWER_SENTENCES}."
         )
     else:
         parts.append(
-            f"\nWrite the overview now, in exactly {budget} "
+            f"\nWrite the note now, in at most {budget} "
             f"{'sentence' if budget == 1 else 'sentences'}."
         )
     return "\n".join(parts)

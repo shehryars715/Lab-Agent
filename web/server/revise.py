@@ -73,6 +73,9 @@ EMPTY field means "change nothing". Never fill a field the message does not ask 
 - style: one of classic, walkthrough, findings, compact -- only if the message asks
   for a different layout.
 - identity: name, cms_id, section, program -- only values the student typed.
+- show / hide: parts of every answer to ADD or LEAVE OUT, from exactly "code",
+  "output", "screenshots", "figures", "explanation". "Add screenshots" ->
+  show ["screenshots"]; "remove the explanations" -> hide ["explanation"].
 
 Anything about how the Word file or the notebook LOOKS (headings, where text goes,
 text instead of printed output) is never a code change: the files are rebuilt for
@@ -91,11 +94,14 @@ SCHEMA_HINT = """{
   "rewrite": {"task_ids": [], "instruction": ""},
   "artifacts": [],
   "style": "",
-  "identity": {}
+  "identity": {},
+  "show": [],
+  "hide": []
 }"""
 
 FORMATS = ("docx", "ipynb", "py", "md", "zip")
 STYLES = ("classic", "walkthrough", "findings", "compact")
+PARTS = ("code", "output", "screenshots", "figures", "explanation")
 IDENTITY_FIELDS = ("name", "cms_id", "section", "program")
 
 VAGUE_REPLY = (
@@ -118,6 +124,8 @@ class FollowUpPlan(BaseModel):
     artifacts: list[str] = Field(default_factory=list)
     style: str = ""
     identity: dict[str, str] = Field(default_factory=dict)
+    show: list[str] = Field(default_factory=list)
+    hide: list[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -134,6 +142,8 @@ class FollowUp:
     artifacts: list[str] = field(default_factory=list)
     style: str = ""
     identity: dict[str, str] = field(default_factory=dict)
+    show: list[str] = field(default_factory=list)
+    hide: list[str] = field(default_factory=list)
 
     @property
     def is_answer(self) -> bool:
@@ -187,12 +197,14 @@ def to_followup(plan: FollowUpPlan, valid_ids, feedback: str = "") -> FollowUp:
         artifacts=artifacts,
         style=style if style in STYLES else "",
         identity=identity,
+        show=[p for p in (plan.show or []) if p in PARTS],
+        hide=[p for p in (plan.hide or []) if p in PARTS],
     )
     # A "change" that names nothing to change is not a change. Say so rather
     # than silently re-solving -- the expensive default this module replaced.
     if followup.kind == "change" and not (
         followup.resolve_ids or followup.rewrite_ids or followup.artifacts
-        or followup.style or followup.identity
+        or followup.style or followup.identity or followup.show or followup.hide
     ):
         followup.kind = "answer"
         followup.reply = followup.reply or VAGUE_REPLY

@@ -33,6 +33,7 @@ from labsagent.ingest.labspec import extract_labspec
 from labsagent.intent import Intent, scope
 from labsagent.models import LabSpec, TaskOutcome
 from labsagent.orchestrator import run_lab
+from labsagent.present import AnswerPlan
 from labsagent.prerequisites import (
     KEY_PREFIX,
     OMITTED,
@@ -688,6 +689,40 @@ class RunContext:
     #: Already-resolved data files. Held so a revision re-solves against the
     #: same CSV instead of downloading it again -- and gets the same answer.
     datasets: list = dataclass_field(default_factory=list)
+    #: task id -> what its answer includes and the manual's boxes for it.
+    #: A follow-up that says "add screenshots" changes only this.
+    plans: dict = dataclass_field(default_factory=dict)
+
+
+def _only_when_wanted(explainer, plans: dict):
+    """The writer, called only for the words the report will actually show.
+
+    An explanation nobody asked for is no longer printed, so it is no longer
+    paid for either: one model call per passed task, saved. Written answers
+    are always written (the manual asked them), and so is a theory task,
+    whose overview IS its answer.
+    """
+
+    def explain(task, code_text, transcript):
+        wanted = (plans.get(task.id) or AnswerPlan()).include.explanation
+        if wanted or task.written_questions or not getattr(task, "needs_code", True):
+            return explainer(task, code_text, transcript)
+        return None
+
+    return explain
+
+
+def _explain_missing(context, outcomes, usage: RunUsage) -> None:
+    """Write the explanations a follow-up just asked for, and only those."""
+    explainer = build_explainer(context.settings, usage)
+    for outcome in outcomes:
+        if outcome.status != "passed" or outcome.explanation:
+            continue
+        written = explainer(outcome.task, outcome.code_text, outcome.transcript)
+        if isinstance(written, str):
+            outcome.explanation = written
+        elif written is not None:
+            outcome.explanation = written.overview
 
 
 def _emit(
@@ -742,6 +777,7 @@ def _emit(
         anchors=context.anchors,
         style=getattr(context.plan, "style", "classic") or "classic",
         tagline=getattr(context.plan, "tagline", "") or "",
+        plans=context.plans,
     )
 
     failed: list[tuple[str, str]] = []
@@ -1093,7 +1129,7 @@ def run_job(
                 emitter=emitter,
                 usage=usage,
                 model=build_model(settings),
-                explainer=build_explainer(settings, usage),
+                explainer=_only_when_wanted(build_explainer(settings, usage), reading.plans),
                 datasets=datasets,
                 data_failures=data_failures,
             )
@@ -1113,6 +1149,7 @@ def run_job(
             anchors=reading.anchors,
             intent=intent,
             datasets=datasets,
+            plans=dict(reading.plans),
         )
 
         _emit(job, job.context, manifest.outcomes, usage)
@@ -1298,6 +1335,18 @@ def revise_job(job: Job, feedback: str) -> None:
             context.profile = profile_from(
                 {**asdict(context.profile), **followup.identity}
             )
+        # WHAT THE ANSWERS CONTAIN is presentation: a rebuild, and a writer
+        # call only for explanations that were never written.
+        if followup.show or followup.hide:
+            context.plans = {
+                t.id: (context.plans.get(t.id) or AnswerPlan()).changed(
+                    followup.show, followup.hide
+                )
+                for t in manifest.spec.tasks
+            }
+            if "explanation" in followup.show:
+                job.phase("solving", "Writing the explanations")
+                _explain_missing(context, outcomes, usage)
 
         # Only the tasks whose CODE must change reach the solver.
         if followup.resolve_ids:
@@ -1356,7 +1405,9 @@ def revise_job(job: Job, feedback: str) -> None:
                     usage=usage,
                     model=build_model(settings),
                     resume=True,
-                    explainer=build_explainer(settings, usage),
+                    explainer=_only_when_wanted(
+                        build_explainer(settings, usage), context.plans
+                    ),
                     # The same files, not a fresh download: a live URL is not
                     # guaranteed to serve the same bytes twice.
                     datasets=context.datasets,

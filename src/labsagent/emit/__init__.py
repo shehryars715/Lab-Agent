@@ -58,6 +58,14 @@ class EmitContext:
     style: str = "classic"
     #: One line about this lab, for headers that have room for it.
     tagline: str = ""
+    #: task id -> what its answer includes and the manual's boxes for it
+    #: (`present.AnswerPlan`). A task with no entry gets the defaults.
+    plans: dict = field(default_factory=dict)
+
+    def plan_for(self, task_id: str):
+        from labsagent.present import AnswerPlan
+
+        return self.plans.get(task_id) or AnswerPlan()
 
     def stem(self) -> str:
         """`Lab03_22F-1234` -- the shared basename for everything but the report."""

@@ -26,7 +26,7 @@ import nbformat as nbf
 
 from labsagent.blocks import SCREENSHOT
 from labsagent.models import LabSpec, TaskOutcome
-from labsagent.present import arrange, vocabulary
+from labsagent.present import AnswerPlan, Include, arrange, vocabulary
 
 
 def _image_output(path: Path) -> nbf.NotebookNode:
@@ -52,7 +52,9 @@ def _stdout_of(outcome: TaskOutcome, block) -> str:
     return block.text.strip()
 
 
-def _task_cells(outcome: TaskOutcome, style: str) -> list[nbf.NotebookNode]:
+def _task_cells(
+    outcome: TaskOutcome, style: str, include: Include | None = None
+) -> list[nbf.NotebookNode]:
     task = outcome.task
     words = vocabulary(style)
     if style == "classic":
@@ -64,7 +66,7 @@ def _task_cells(outcome: TaskOutcome, style: str) -> list[nbf.NotebookNode]:
 
     code_cell = None
     answers_headed = False
-    for block in arrange(outcome, style):
+    for block in arrange(outcome, style, include or Include()):
         if block.kind == "code":
             if block.title:
                 cells.append(nbf.v4.new_markdown_cell(f"### {block.title}"))
@@ -99,6 +101,7 @@ def build_notebook(
     student: dict[str, str] | None = None,
     style: str = "classic",
     tagline: str = "",
+    plans: dict | None = None,
 ) -> nbf.NotebookNode:
     nb = nbf.v4.new_notebook()
 
@@ -115,7 +118,8 @@ def build_notebook(
     cells: list[nbf.NotebookNode] = [nbf.v4.new_markdown_cell("\n\n".join(header))]
 
     for outcome in outcomes:
-        cells.extend(_task_cells(outcome, style))
+        plan = (plans or {}).get(outcome.task.id) or AnswerPlan()
+        cells.extend(_task_cells(outcome, style, plan.include))
 
     nb.cells = cells
     nb.metadata = {
@@ -133,8 +137,9 @@ def write_notebook(
     student: dict[str, str] | None = None,
     style: str = "classic",
     tagline: str = "",
+    plans: dict | None = None,
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    nbf.write(build_notebook(spec, outcomes, student, style, tagline), str(path))
+    nbf.write(build_notebook(spec, outcomes, student, style, tagline, plans), str(path))
     return path
