@@ -18,6 +18,42 @@ from labsagent.errors import SandboxError
 from labsagent.models import ExecResult
 from labsagent.sandbox.base import DEFAULT_TIMEOUT_S
 
+# WHAT A PROGRAM INHERITS: AN ALLOWLIST, NEVER THE SERVER'S ENVIRONMENT.
+#
+# This used to be `{**os.environ}`. On the deployed server compose loads the
+# whole .env into the environment, so every program the model wrote could read
+# DEEPSEEK_API_KEY and LABSAGENT_PASSWORD -- and an ordinary OS-lab task ("print
+# the environment variables") would have put both into a report a student
+# hands in. Verified with a probe on 2026-10-02.
+#
+# An allowlist rather than a denylist, because a denylist has to know every
+# secret's name in advance, and the next one added to .env would leak by
+# default. What stays is what Python and the plotting/data libraries need to
+# start, find a temp directory and a home for their caches, and print text.
+_INHERITED = frozenset(
+    {
+        "PATH", "HOME", "LANG", "TZ", "TMPDIR", "TEMP", "TMP",
+        # Windows: without these, Python's own startup and numpy's DLL
+        # loading fail in ways that look nothing like a missing variable.
+        "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
+        "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+        "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+    }
+)
+
+
+def program_env() -> dict[str, str]:
+    """The environment a model-written program runs with."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() in _INHERITED or key.upper().startswith("LC_")
+    }
+    # Headless plotting. Without Agg, matplotlib tries to open a window and
+    # either hangs or dies in a non-interactive subprocess.
+    env["MPLBACKEND"] = "Agg"
+    return env
+
 
 class LocalSandbox:
     """Runs commands in a scratch directory using the current interpreter."""
@@ -84,9 +120,7 @@ class LocalSandbox:
             raise SandboxError("sandbox is closed")
 
         resolved = [sys.executable if c == "python" else c for c in cmd]
-        # Headless plotting. Without Agg, matplotlib tries to open a window and
-        # either hangs or dies in a non-interactive subprocess.
-        env = {**os.environ, "MPLBACKEND": "Agg"}
+        env = program_env()
         started = time.monotonic()
         try:
             proc = subprocess.run(

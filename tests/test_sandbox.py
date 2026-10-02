@@ -80,3 +80,43 @@ def test_relative_workdir_is_resolved(tmp_path, monkeypatch):
         assert sb.workdir.is_absolute()
         sb.write_file("a.py", "print(1)")
         assert sb.list_files() == ["a.py"]
+
+
+def test_a_program_cannot_read_the_servers_secrets(monkeypatch):
+    """Compose loads .env into the server's environment, and programs used to
+    inherit all of it. An OS-lab "print the environment" task would have put
+    the API key and the sign-in password into the student's report."""
+    from labsagent.sandbox.local import LocalSandbox
+
+    for name in ("DEEPSEEK_API_KEY", "LABSAGENT_PASSWORD", "KAGGLE_KEY", "E2B_API_KEY"):
+        monkeypatch.setenv(name, "secret-value-from-the-server")
+
+    with LocalSandbox() as sb:
+        sb.write_file(
+            "/env.py",
+            "import os\nfor k, v in sorted(os.environ.items()):\n    print(k, v)\n",
+        )
+        result = sb.run(["python", "env.py"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "secret-value-from-the-server" not in result.stdout
+    assert "MPLBACKEND Agg" in result.stdout, "headless plotting is still set"
+
+
+def test_the_data_libraries_still_start_in_the_clean_environment():
+    """The allowlist must keep what numpy, pandas and matplotlib need -- on
+    Windows a missing SYSTEMROOT breaks DLL loading in ways that look nothing
+    like an environment problem."""
+    from labsagent.sandbox.local import LocalSandbox
+
+    with LocalSandbox() as sb:
+        sb.write_file(
+            "/plot.py",
+            "import numpy, pandas, matplotlib.pyplot as plt\n"
+            "plt.plot([1, 2, 3]); plt.savefig('p.png')\n"
+            "print('ok', pandas.DataFrame({'a': [1]}).shape)\n",
+        )
+        result = sb.run(["python", "plot.py"], timeout=120)
+
+    assert result.ok, result.stderr
+    assert "ok (1, 1)" in result.stdout
