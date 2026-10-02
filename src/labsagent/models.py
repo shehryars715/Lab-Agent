@@ -99,6 +99,11 @@ class Transcript:
     #: the pictures read as one run cut into parts. Never persisted.
     head: bool = True
     tail: bool = True
+    #: For the notebook look: the code this output came from, and its cell
+    #: number -- a Jupyter screenshot shows the cell, not a command line.
+    #: Never persisted, like head and tail.
+    code: str = ""
+    cell: int = 1
 
     @classmethod
     def from_exec(cls, command: str, result: ExecResult, prompt: str = r"PS C:\lab>") -> "Transcript":

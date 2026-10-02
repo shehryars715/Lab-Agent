@@ -13,6 +13,7 @@ before it existed.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, replace
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -692,6 +693,29 @@ class RunContext:
     #: task id -> what its answer includes and the manual's boxes for it.
     #: A follow-up that says "add screenshots" changes only this.
     plans: dict = dataclass_field(default_factory=dict)
+    #: The screenshot look chosen for this lab, so a revision draws the same.
+    screenshots: Any = None
+
+
+_NOTEBOOK_TOOL = re.compile(r"\b(colab|jupyter)\b", re.I)
+
+
+def screenshot_backend(spec, manual, kind: str, manual_path) -> RenderedBackend:
+    """The window the student would have run this lab in (decided 2026-10-03).
+
+    A lab done in Jupyter or Colab -- an .ipynb handed out as the lab, a lab
+    the reading classed as a notebook lab, or a manual that names either tool
+    -- gets a notebook cell. Everything else gets Windows Terminal, in the
+    lab's own folder under a generic user.
+    """
+    text = " ".join(p.text for p in getattr(manual, "paragraphs", []) or [])
+    notebook = (
+        (manual_path is not None and Path(manual_path).suffix.lower() == ".ipynb")
+        or kind == "notebook_lab"
+        or _NOTEBOOK_TOOL.search(text) is not None
+    )
+    folder = f"Lab {spec.lab_number}".strip() if spec.lab_number else "Lab"
+    return RenderedBackend(look="notebook" if notebook else "terminal", folder=folder)
 
 
 def _only_when_wanted(explainer, plans: dict):
@@ -1119,13 +1143,14 @@ def run_job(
             if isinstance(event, ev.TaskStarted):
                 tracer.task_id = event.task_id
 
+        screenshots = screenshot_backend(spec, manual, reading.kind, manual_path)
         with tracing_tools(job.publish) as tracer:
             emitter.subscribe(note_current_task)
             manifest = run_lab(
                 spec,
                 store,
                 settings,
-                RenderedBackend(theme="light"),
+                screenshots,
                 emitter=emitter,
                 usage=usage,
                 model=build_model(settings),
@@ -1150,6 +1175,7 @@ def run_job(
             intent=intent,
             datasets=datasets,
             plans=dict(reading.plans),
+            screenshots=screenshots,
         )
 
         _emit(job, job.context, manifest.outcomes, usage)
@@ -1400,7 +1426,7 @@ def revise_job(job: Job, feedback: str) -> None:
                     manifest.spec,
                     store,
                     settings,
-                    RenderedBackend(theme="light"),
+                    context.screenshots or RenderedBackend(),
                     emitter=emitter,
                     usage=usage,
                     model=build_model(settings),

@@ -357,6 +357,9 @@ def _section_shots(sections: list[dict], task: Task, command: str, screenshots, 
             lines=str(part["output"]).split("\n"),
             head=(i == first),
             tail=(i == last),
+            # A section is a notebook cell in the notebook look.
+            code=str(part.get("code") or ""),
+            cell=i + 1,
         )
         try:
             shots = screenshots.render(
@@ -756,8 +759,10 @@ def solve_task(
                 sections, transcript = _sections(
                     sandbox, task, chosen, settings, store, screenshots
                 )
+                # The notebook look draws the cell, so it needs the code too.
                 shots = screenshots.render(
-                    transcript, store.shots_dir / f"{task.id}_output.png"
+                    replace(transcript, code=code_text, cell=1),
+                    store.shots_dir / f"{task.id}_output.png",
                 )
                 for shot in shots:
                     emitter.emit(
