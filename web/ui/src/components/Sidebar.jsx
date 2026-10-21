@@ -52,6 +52,7 @@ export default function Sidebar({
   searchRef,
   route,
   onSignOut = null,
+  credits = null,
 }) {
   const [query, setQuery] = useState('')
   const filtered = useMemo(() => searchLabs(items, query), [items, query])
@@ -295,6 +296,12 @@ export default function Sidebar({
               </p>
             )}
           </nav>
+
+          {credits && (
+            <p className="credit-line num" title={`${credits.allowance} credits a month`}>
+              {credits.balance} credits left · refills {credits.refills_on}
+            </p>
+          )}
 
           <div className="panel-foot">
             <a

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createRun, loadIdentity } from './api'
+import { CREDITS_CHANGED, createRun, getMe, loadIdentity } from './api'
 import { Menu, NewLab } from './components/Icons'
 import Sidebar from './components/Sidebar'
 import { useBackgroundStatus, useHistory, useLabStore } from './hooks/useLabs'
@@ -43,6 +43,24 @@ export default function App({ onSignOut = null }) {
   const [prefill, setPrefill] = useState(null)
   const searchRef = useRef(null)
   const composerRef = useRef(null)
+
+  // The account's credit balance, for the sidebar. Null on a single-user
+  // server (no accounts, no credits). Re-read whenever a lab starts (its
+  // credits are held) or finishes (the unused part comes back).
+  const [credits, setCredits] = useState(null)
+  useEffect(() => {
+    let live = true
+    const refresh = () =>
+      getMe()
+        .then((me) => live && setCredits(me.credits ?? null))
+        .catch(() => {})
+    refresh()
+    window.addEventListener(CREDITS_CHANGED, refresh)
+    return () => {
+      live = false
+      window.removeEventListener(CREDITS_CHANGED, refresh)
+    }
+  }, [])
   const menuRef = useRef(null)
 
   const store = useLabStore()
@@ -147,6 +165,7 @@ export default function App({ onSignOut = null }) {
     } catch (e) {
       return friendly(e)
     }
+    window.dispatchEvent(new Event(CREDITS_CHANGED))
     const fields = {
       message: text,
       formats,
@@ -282,6 +301,7 @@ export default function App({ onSignOut = null }) {
         searchRef={searchRef}
         route={route}
         onSignOut={onSignOut}
+        credits={credits}
       />
 
       <div className="main" {...(narrow && drawerOpen ? { inert: true } : null)}>

@@ -187,3 +187,14 @@ def test_me_reports_the_balance(ledger):
     client.cookies.set(auth.COOKIE, auth.mint(USER))
     credits = client.get("/api/me").json()["credits"]
     assert credits["balance"] == 281 and credits["allowance"] == 300 and credits["refills_on"]
+
+
+def test_a_run_stopped_by_its_limit_says_so_in_plain_words():
+    from types import SimpleNamespace
+
+    from web.server.pipeline import budget_stop
+
+    stopped = [SimpleNamespace(error="run budget exhausted: $0.0150 of $0.0150")]
+    assert "spending limit" in budget_stop(stopped)
+    assert "$" not in budget_stop(stopped)
+    assert budget_stop([SimpleNamespace(error=None), SimpleNamespace(error="task budget exhausted")]) == ""

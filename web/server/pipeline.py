@@ -337,6 +337,21 @@ def prerequisite_stop(kept: list[Needed]) -> str:
     )
 
 
+def budget_stop(outcomes) -> str:
+    """One plain sentence when the run's spending limit stopped it. "" if not.
+
+    With accounts, that limit is what the run's credit hold could pay for, so
+    a raw "run budget exhausted: $0.0150 of $0.0150" would mean nothing to the
+    student who sees it.
+    """
+    if not any("run budget exhausted" in (o.error or "") for o in outcomes):
+        return ""
+    return (
+        "This lab reached its spending limit, so I stopped before finishing every task. "
+        "The ones marked as not done can be asked for again in a follow-up."
+    )
+
+
 def closing_needs(outcomes) -> str:
     """What is left to finish, in the words each task stopped with. "" if nothing.
 
@@ -1199,6 +1214,9 @@ def run_job(
         needs = closing_needs(manifest.outcomes)
         if needs:
             job.publish({"type": "narration", "text": needs})
+        stopped = budget_stop(manifest.outcomes)
+        if stopped:
+            job.publish({"type": "narration", "text": stopped})
 
         recorder_events = recorder.events
         ev.write_events_log(store, recorder_events)
@@ -1484,6 +1502,9 @@ def revise_job(
         needs = closing_needs(manifest.outcomes)
         if needs:
             job.publish({"type": "narration", "text": needs})
+        stopped = budget_stop(manifest.outcomes)
+        if stopped:
+            job.publish({"type": "narration", "text": stopped})
 
         manifest.usage = prior_usage  # the first pass's breakdown stays
         _record_followup(manifest, feedback, followup, usage, prior_cost)

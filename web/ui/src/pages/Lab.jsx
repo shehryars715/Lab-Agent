@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  CREDITS_CHANGED,
   downloadUrl,
   formatCredits,
   historyDownloadUrl,
@@ -182,6 +183,10 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
     if (status === 'done') announce('Your draft is ready to check.')
     if (status === 'partial') announce(`${run?.summary?.passed} of ${run?.summary?.total} tasks solved.`)
     if (status === 'failed') announce('The run stopped. Details are on screen.')
+    // Settled: the unused part of this lab's credits is back.
+    if (status === 'done' || status === 'partial' || status === 'failed') {
+      window.dispatchEvent(new Event(CREDITS_CHANGED))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status])
 

@@ -65,7 +65,11 @@ export async function exchangeToken(accessToken) {
   throw new Error(detail)
 }
 
-/** { user_id, mode } for whoever is signed in. */
+/** Fired when a lab starts or finishes, so the credit balance is re-read. */
+export const CREDITS_CHANGED = 'labsagent:credits-changed'
+
+/** { user_id, mode, credits } for whoever is signed in. credits is null on a
+ *  single-user server, else { balance, allowance, refills_on }. */
 export async function getMe() {
   const res = await fetch('/api/me')
   if (!res.ok) throw new Error(await readError(res))
