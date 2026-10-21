@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import App from './App'
 import { SIGNED_OUT, exchangeToken, forgetIdentity, getMe, getSession, logout, primeIdentity } from './api'
-import { signOutGoogle, takeToken } from './lib/google'
+import { signOutSupabase, takeRedirect } from './lib/supabaseAuth'
 import { forgetLabs, selectLabsFor } from './lib/labs'
 import Login from './pages/Login'
 
@@ -10,8 +10,10 @@ import Login from './pages/Login'
  *
  *    open      localhost: App renders straight away, nothing changes.
  *    password  the private beta: the username/password form.
- *    supabase  Google sign-in. Coming back from Google, supabase-js holds a
- *              session; its token is traded once for our own cookie.
+ *    supabase  accounts. Email + password through Supabase Auth (Google
+ *              later). Whatever the route in -- the form, or an email link
+ *              that lands back here -- Supabase's token is traded once for
+ *              our own cookie.
  *
  *  It also listens for SIGNED_OUT, which api.js fires on any 401. That covers
  *  a cookie that expired mid-use and a server restart (a new signing key),
@@ -20,7 +22,9 @@ export default function AuthGate() {
   // null while asking -- one short request, so a blank frame, not a spinner.
   const [session, setSession] = useState(null)
   const [ready, setReady] = useState(false)
-  const [loginError, setLoginError] = useState('')
+  const [notice, setNotice] = useState('')
+  // Arrived from a "reset my password" email: ask for a new one first.
+  const [recovering, setRecovering] = useState(false)
 
   // Once signed in: whose sidebar list and whose details to load.
   const enter = useCallback(async (s) => {
@@ -42,15 +46,16 @@ export default function AuthGate() {
     ;(async () => {
       let s = await getSession()
       if (s.mode === 'supabase' && !s.signed_in && s.supabase) {
-        // Back from Google? Then supabase-js has a token for us to trade.
         try {
-          const token = await takeToken(s.supabase)
-          if (token) {
-            await exchangeToken(token)
+          const landed = await takeRedirect(s.supabase)
+          if (landed?.recovery) {
+            if (live) setRecovering(true)
+          } else if (landed?.token) {
+            await exchangeToken(landed.token) // a confirmation link: straight in
             s = { ...s, signed_in: true }
           }
         } catch (e) {
-          if (live) setLoginError(e?.message ?? String(e))
+          if (live) setNotice(e?.message ?? String(e))
         }
       }
       if (!live) return
@@ -73,7 +78,7 @@ export default function AuthGate() {
 
   const signOut = useCallback(async () => {
     await logout()
-    await signOutGoogle(session?.supabase)
+    await signOutSupabase(session?.supabase)
     forgetLabs()
     forgetIdentity()
     setReady(false)
@@ -86,8 +91,10 @@ export default function AuthGate() {
       <Login
         mode={session.mode}
         supabase={session.supabase}
-        initialError={loginError}
+        notice={notice}
+        recovering={recovering}
         onSignedIn={async () => {
+          setRecovering(false)
           const next = { ...session, signed_in: true }
           setSession(next)
           await enter(next)

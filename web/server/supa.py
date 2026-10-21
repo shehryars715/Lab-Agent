@@ -97,6 +97,12 @@ def verify(token: str, *, config: SupaSettings | None = None, jwks=None) -> dict
             audience="authenticated",
             issuer=f"{config.base}/auth/v1",
             options={"require": ["exp", "sub", "aud", "iss"]},
+            # CLOCKS DISAGREE. A token is stamped with Supabase's time; if
+            # this server's clock is even one second behind, a brand-new
+            # token is "not yet valid". Found against the real project with
+            # this machine 0.9 s behind. A minute either way is the usual
+            # allowance, and it barely extends an hour-long token.
+            leeway=60,
         )
     except jwt.PyJWTError as exc:
         raise BadToken(str(exc)) from exc

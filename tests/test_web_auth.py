@@ -222,7 +222,7 @@ def test_a_valid_token_becomes_a_session_for_that_user(google, signer):
     [
         {"aud": "anon"},                       # not a signed-in user
         {"iss": "https://other.supabase.co/auth/v1"},  # another project
-        {"exp": int(time.time()) - 10},        # expired
+        {"exp": int(time.time()) - 300},       # expired (past the 60 s clock allowance)
     ],
 )
 def test_tokens_for_the_wrong_audience_project_or_time_are_refused(google, signer, overrides):
@@ -251,3 +251,10 @@ def test_a_shared_secret_token_is_refused(google):
 
 def test_password_login_is_closed_in_supabase_mode(google):
     assert google.post("/api/login", json={"username": "a", "password": "b"}).status_code == 404
+
+
+def test_a_token_from_a_clock_a_little_ahead_is_still_accepted(google, signer):
+    """Supabase's clock ahead of ours by a few seconds: iat in our future."""
+    ahead = int(time.time()) + 5
+    res = google.post("/api/session", json={"access_token": signer(iat=ahead, exp=ahead + 3600)})
+    assert res.status_code == 200

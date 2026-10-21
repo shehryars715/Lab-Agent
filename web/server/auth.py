@@ -8,10 +8,11 @@ THE MODES, chosen by what is configured (nothing to switch by hand):
              account, user "owner". Kept as the bridge until Supabase is set
              up: removing it first would leave a deployed server with no
              sign-in at all.
-  supabase   SUPABASE_URL + keys (public sign-up). Google sign-in through
-             Supabase Auth; the browser hands us Supabase's access token once
-             (POST /api/session), we verify it (supa.verify) and set our own
-             cookie carrying the user's id.
+  supabase   SUPABASE_URL + keys (public sign-up). Accounts through Supabase
+             Auth -- email + password with a confirmation email now, Google
+             later. However the student signs in, the browser hands us
+             Supabase's access token once (POST /api/session); we verify it
+             (supa.verify) and set our own cookie carrying the user's id.
 
 WHY EXCHANGE THE TOKEN FOR OUR OWN COOKIE instead of sending the token on
 every call: EventSource, which carries the live run stream, cannot set

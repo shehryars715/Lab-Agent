@@ -587,7 +587,35 @@
   width: 100%;
 }
 
-/* The privacy promise under the Google button: quiet, but readable. */
+/* "New here? Create an account · Forgot password?" -- the ways between views. */
+.login-switch {
+  margin-top: calc(-1 * var(--space-4));
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration-thickness: 2px;
+}
+
+.link-btn:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* The privacy promise under the sign-in button: quiet, but readable. */
 .login-privacy {
   color: var(--ink-3);
   font-size: var(--text-sm);
