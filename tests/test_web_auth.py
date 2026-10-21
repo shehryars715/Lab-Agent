@@ -1,4 +1,4 @@
-"""Sign-in: the cookie, the three modes, and the Google token exchange.
+"""Sign-in: the cookie, the modes (open, closed, supabase), and the token exchange.
 
 Offline, through Starlette's TestClient. Supabase is never contacted: its
 tokens are signed here with a locally generated ES256 key, and its database
@@ -52,19 +52,6 @@ def test_a_user_id_with_separators_cannot_be_minted():
         auth.mint("a.b")
 
 
-def test_credentials_must_match_in_both_halves():
-    config = auth.AuthSettings(LABSAGENT_USER="reviewer", LABSAGENT_PASSWORD="s3cret")
-    assert auth.credentials_match("reviewer", "s3cret", config)
-    assert not auth.credentials_match("reviewer", "wrong", config)
-    assert not auth.credentials_match("wrong", "s3cret", config)
-    # compare_digest refuses non-ASCII str; bytes it accepts.
-    assert not auth.credentials_match("rëviewer", "sécret", config)
-
-
-def test_a_half_set_config_leaves_the_gate_off():
-    """Setting only one of the two must not lock you out of your own server."""
-    assert not auth.AuthSettings(LABSAGENT_USER="reviewer", LABSAGENT_PASSWORD="").enabled
-    assert not auth.AuthSettings(LABSAGENT_USER="", LABSAGENT_PASSWORD="x").enabled
 
 
 # --- fixtures: the three modes -------------------------------------------------
@@ -75,16 +62,14 @@ def _no_supabase(monkeypatch):
 
 
 @pytest.fixture
-def gated(monkeypatch):
+def closed(monkeypatch):
+    """A public server whose Supabase settings went missing."""
     from fastapi.testclient import TestClient
 
     from web.server import app as app_module
 
     _no_supabase(monkeypatch)
-    monkeypatch.setattr(
-        auth, "settings", auth.AuthSettings(LABSAGENT_USER="reviewer", LABSAGENT_PASSWORD="s3cret")
-    )
-    monkeypatch.setattr(auth, "FAILURE_DELAY_S", 0)
+    monkeypatch.setattr(auth, "settings", auth.AuthSettings(LABSAGENT_REQUIRE_SIGNIN=True))
     return TestClient(app_module.app)
 
 
@@ -95,7 +80,7 @@ def open_app(monkeypatch):
     from web.server import app as app_module
 
     _no_supabase(monkeypatch)
-    monkeypatch.setattr(auth, "settings", auth.AuthSettings(LABSAGENT_USER="", LABSAGENT_PASSWORD=""))
+    monkeypatch.setattr(auth, "settings", auth.AuthSettings(LABSAGENT_REQUIRE_SIGNIN=False))
     return TestClient(app_module.app)
 
 
@@ -148,7 +133,7 @@ def google(monkeypatch, signer):
     return client
 
 
-# --- open and password modes ------------------------------------------------------
+# --- open and closed modes ------------------------------------------------------
 
 
 def test_with_nothing_configured_nothing_changes(open_app):
@@ -157,45 +142,26 @@ def test_with_nothing_configured_nothing_changes(open_app):
     assert body == {"mode": "open", "required": False, "signed_in": True}
 
 
-def test_signed_out_api_calls_get_401(gated):
-    assert gated.get("/api/history").status_code == 401
-    assert gated.get("/api/runs/whatever").status_code == 401
-    assert gated.get("/api/docs").status_code == 401
-    assert gated.get("/api/profile").status_code == 401
+def test_a_public_server_without_accounts_is_closed_not_open(closed):
+    """The failure this guards: Supabase keys missing from .env must not mean
+    'no sign-in at all' on a server anyone can reach."""
+    assert closed.get("/api/history").status_code == 503
+    assert closed.get("/api/runs/whatever").status_code == 503
+    assert closed.get("/api/session").status_code == 503
+    assert closed.post("/api/runs", data={"instructions": "Task 1: hi"}).status_code == 503
 
 
-def test_the_sign_in_routes_and_health_stay_reachable(gated):
-    assert gated.get("/api/health").status_code == 200
-    assert gated.get("/api/session").json() == {"mode": "password", "required": True, "signed_in": False}
+def test_health_still_answers_on_a_closed_server(closed):
+    assert closed.get("/api/health").status_code == 200
 
 
-def test_a_wrong_password_sets_no_cookie(gated):
-    res = gated.post("/api/login", json={"username": "reviewer", "password": "nope"})
-    assert res.status_code == 401
-    assert auth.COOKIE not in res.cookies
-    assert gated.get("/api/history").status_code == 401
+def test_the_password_login_is_gone(open_app):
+    assert open_app.post("/api/login", json={"username": "a", "password": "b"}).status_code in (404, 405)
 
 
-def test_signing_in_opens_the_api_and_signing_out_closes_it(gated):
-    res = gated.post("/api/login", json={"username": "reviewer", "password": "s3cret"})
-    assert res.status_code == 200
-    header = res.headers["set-cookie"].lower()
-    assert "httponly" in header and "samesite=lax" in header
-    # TestClient speaks plain http, so the cookie must NOT be Secure -- or it
-    # would never come back and localhost sign-in would silently loop.
-    assert "secure" not in header
-
-    assert gated.get("/api/history").status_code == 200
-    assert gated.get("/api/session").json()["signed_in"] is True
-    assert gated.get("/api/me").json()["user_id"] == auth.OWNER_USER
-
-    gated.post("/api/logout")
-    assert gated.get("/api/history").status_code == 401
-
-
-def test_a_forged_cookie_does_not_get_in(gated):
-    gated.cookies.set(auth.COOKIE, f"{10**12}.owner.{'0' * 64}")
-    assert gated.get("/api/history").status_code == 401
+def test_a_forged_cookie_does_not_get_in(google):
+    google.cookies.set(auth.COOKIE, f"{10**12}.{UID}.{'0' * 64}")
+    assert google.get("/api/history").status_code == 401
 
 
 # --- supabase mode: the Google token exchange ---------------------------------------
@@ -249,8 +215,6 @@ def test_a_shared_secret_token_is_refused(google):
     assert google.post("/api/session", json={"access_token": token}).status_code == 401
 
 
-def test_password_login_is_closed_in_supabase_mode(google):
-    assert google.post("/api/login", json={"username": "a", "password": "b"}).status_code == 404
 
 
 def test_a_token_from_a_clock_a_little_ahead_is_still_accepted(google, signer):

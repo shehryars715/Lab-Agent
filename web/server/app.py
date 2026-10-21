@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
@@ -92,10 +91,6 @@ class Answers(BaseModel):
 class Feedback(BaseModel):
     feedback: str
 
-
-class Login(BaseModel):
-    username: str = ""
-    password: str = ""
 
 
 class Identity(BaseModel):
@@ -178,22 +173,6 @@ def exchange(body: Exchange, request: Request, response: Response) -> dict:
     except supa.SupaError:
         raise HTTPException(503, "Can’t reach your account right now. Try again in a minute.") from None
     _set_session(response, request, claims["sub"])
-    return {"signed_in": True}
-
-
-# `def`, not `async def`: FastAPI runs a sync route on a worker thread, so the
-# failure delay parks that thread and never the event loop every SSE stream
-# shares.
-@app.post("/api/login")
-def login(body: Login, request: Request, response: Response) -> dict:
-    if auth.mode() == "supabase":
-        raise HTTPException(404, "Sign in with Google instead.")
-    if auth.mode() == "open":
-        return {"signed_in": True}
-    if not auth.credentials_match(body.username, body.password):
-        time.sleep(auth.FAILURE_DELAY_S)
-        raise HTTPException(401, "That username and password do not match.")
-    _set_session(response, request, auth.OWNER_USER)
     return {"signed_in": True}
 
 

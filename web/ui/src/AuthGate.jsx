@@ -9,7 +9,7 @@ import Login from './pages/Login'
  *  app or the sign-in screen. Three modes come back from /api/session:
  *
  *    open      localhost: App renders straight away, nothing changes.
- *    password  the private beta: the username/password form.
+ *    closed    a public server whose accounts are not set up: "back soon".
  *    supabase  accounts. Email + password through Supabase Auth (Google
  *              later). Whatever the route in -- the form, or an email link
  *              that lands back here -- Supabase's token is traded once for

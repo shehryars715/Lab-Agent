@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { exchangeToken, login } from '../api'
+import { exchangeToken } from '../api'
 import { Logo } from '../components/Icons'
 import { sendReset, setNewPassword, signIn, signUp } from '../lib/supabaseAuth'
 
 /** The one screen a signed-out visitor sees. Only rendered when the server
  *  says a sign-in is required (see AuthGate), so localhost never shows it.
- *  Which screen depends on the server's mode: accounts (Supabase: email and
- *  password) for public sign-up, the one username and password for the beta. */
+ *  Accounts are email and password through Supabase; a server whose accounts
+ *  are not configured shows a plain "back soon" instead. */
 export default function Login(props) {
-  return props.mode === 'supabase' ? <AccountLogin {...props} /> : <PasswordLogin {...props} />
+  return props.mode === 'supabase' ? <AccountLogin {...props} /> : <Unavailable />
 }
 
 /** Accounts through Supabase Auth: sign in, create an account, reset a
@@ -192,98 +192,21 @@ function AccountLogin({ supabase, notice, recovering, onSignedIn }) {
   )
 }
 
-function PasswordLogin({ onSignedIn }) {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const userRef = useRef(null)
-
-  useEffect(() => {
-    document.title = 'Sign in — Labs-Agent'
-    userRef.current?.focus()
-  }, [])
-
-  const submit = async (e) => {
-    e.preventDefault()
-    if (busy) return
-    if (!username.trim() || !password) {
-      setError('Enter the username and the password.')
-      return
-    }
-    setBusy(true)
-    setError('')
-    try {
-      await login(username.trim(), password)
-      onSignedIn()
-    } catch (err) {
-      const msg = err?.message ?? String(err)
-      setError(/Failed to fetch|NetworkError|Load failed/i.test(msg) ? 'Can’t reach the server. Try again in a moment.' : msg)
-      setBusy(false)
-    }
-  }
-
-  const invalid = Boolean(error)
-
+/** A public server whose accounts are not set up: say so, offer nothing to
+ *  fill in. The server refuses every call in this state (auth.py "closed"). */
+function Unavailable() {
   return (
     <main className="login">
-      <form className="login-card" onSubmit={submit} noValidate>
+      <div className="login-card">
         <div className="login-brand">
           <Logo size={26} />
           <span>Labs-Agent</span>
         </div>
-
         <div>
-          <h1 className="login-title">Sign in</h1>
-          <p className="login-sub">A private preview. Use the details you were sent.</p>
+          <h1 className="login-title">Back soon</h1>
+          <p className="login-sub">Sign-in isn’t available right now. Try again in a few minutes.</p>
         </div>
-
-        <div className="fields">
-          <div className="field">
-            <label className="field-label" htmlFor="login-user">
-              Username
-            </label>
-            <input
-              ref={userRef}
-              id="login-user"
-              name="username"
-              autoComplete="username"
-              autoCapitalize="none"
-              spellCheck={false}
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className={invalid ? 'is-invalid' : undefined}
-              aria-invalid={invalid || undefined}
-              aria-describedby={invalid ? 'login-error' : undefined}
-            />
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="login-pass">
-              Password
-            </label>
-            <input
-              id="login-pass"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className={invalid ? 'is-invalid' : undefined}
-              aria-invalid={invalid || undefined}
-              aria-describedby={invalid ? 'login-error' : undefined}
-            />
-          </div>
-        </div>
-
-        <div className="login-actions">
-          <button type="submit" className="btn btn-primary btn-lg login-submit" disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}
-          </button>
-          <p id="login-error" className="field-err login-error" role="alert">
-            {error}
-          </p>
-        </div>
-      </form>
+      </div>
     </main>
   )
 }

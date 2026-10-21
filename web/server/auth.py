@@ -1,18 +1,20 @@
-"""Who is asking: three modes, one signed cookie.
+"""Who is asking: accounts, or nobody on your own machine. One signed cookie.
 
 THE MODES, chosen by what is configured (nothing to switch by hand):
 
   open       nothing set (localhost). No sign-in; every request is user
              "local". Running on your own machine is unchanged.
-  password   LABSAGENT_USER + LABSAGENT_PASSWORD (the private beta). One
-             account, user "owner". Kept as the bridge until Supabase is set
-             up: removing it first would leave a deployed server with no
-             sign-in at all.
   supabase   SUPABASE_URL + keys (public sign-up). Accounts through Supabase
              Auth -- email + password with a confirmation email now, Google
              later. However the student signs in, the browser hands us
              Supabase's access token once (POST /api/session); we verify it
              (supa.verify) and set our own cookie carrying the user's id.
+  closed     LABSAGENT_REQUIRE_SIGNIN=1 but Supabase is not configured. Every
+             /api call is refused. A public server must never fall back to
+             "open" because a key went missing from .env.
+
+The single-password login of the private beta was removed on 2026-10-22, once
+accounts were live: one way in, not two.
 
 WHY EXCHANGE THE TOKEN FOR OUR OWN COOKIE instead of sending the token on
 every call: EventSource, which carries the live run stream, cannot set
@@ -63,20 +65,14 @@ COOKIE = "labsagent_session"
 SESSION_S = 7 * 24 * 3600
 
 LOCAL_USER = "local"
-OWNER_USER = "owner"
 
 # The routes a signed-out browser must still reach: to ask whether it is
 # signed in, to sign in, and to sign out. /api/health stays open as well -- it
 # says only whether the server is up and configured, and it is what you curl
 # right after a deploy, before you have a cookie.
-OPEN_PATHS = frozenset({"/api/session", "/api/login", "/api/logout", "/api/health"})
+OPEN_PATHS = frozenset({"/api/session", "/api/logout", "/api/health"})
 
-# Slows a guessing loop to one try per second per request. It does not stop a
-# parallel attack -- a long random password does that. This only makes a
-# typo-and-retry by hand indistinguishable from a real delay.
-FAILURE_DELAY_S = 1.0
-
-# A user id is a Supabase uuid, "owner" or "local". Anything else in a cookie
+# A user id is a Supabase uuid or "local". Anything else in a cookie
 # is refused before it is ever used as a key.
 _USER_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 
@@ -89,13 +85,11 @@ class AuthSettings(BaseSettings):
         env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    user: str = Field(default="", alias="LABSAGENT_USER")
-    password: str = Field(default="", alias="LABSAGENT_PASSWORD")
+    # Set on any public server: with it, a missing Supabase config closes the
+    # API instead of opening it to everyone.
+    require_signin: bool = Field(default=False, alias="LABSAGENT_REQUIRE_SIGNIN")
     session_key: str = Field(default="", alias="LABSAGENT_SESSION_KEY")
 
-    @property
-    def enabled(self) -> bool:
-        return bool(self.user and self.password)
 
 
 settings = AuthSettings()
@@ -107,11 +101,11 @@ _KEY = (
 
 
 def mode() -> str:
-    """"supabase", "password" or "open" -- looked up per call, so tests can swap."""
+    """"supabase", "closed" or "open" -- looked up per call, so tests can swap."""
     if supa.configured():
         return "supabase"
-    if settings.enabled:
-        return "password"
+    if settings.require_signin:
+        return "closed"
     return "open"
 
 
@@ -119,7 +113,7 @@ def _sign(payload: str, key: bytes) -> str:
     return hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
 
 
-def mint(user_id: str = OWNER_USER, *, now: float | None = None, key: bytes | None = None) -> str:
+def mint(user_id: str, *, now: float | None = None, key: bytes | None = None) -> str:
     if not _USER_ID.match(user_id):
         raise ValueError("not a user id")
     expiry = int((now if now is not None else time.time()) + SESSION_S)
@@ -150,20 +144,15 @@ def valid(token: str | None, *, now: float | None = None, key: bytes | None = No
     return user_of(token, now=now, key=key) is not None
 
 
-def credentials_match(user: str, password: str, config: AuthSettings | None = None) -> bool:
-    config = settings if config is None else config
-    # Both compared every time, joined with `&` rather than `and`: a wrong
-    # username must cost the same as a wrong password, or the timing tells you
-    # which half you got right. Bytes, because compare_digest refuses non-ASCII str.
-    user_ok = hmac.compare_digest(user.encode(), config.user.encode())
-    password_ok = hmac.compare_digest(password.encode(), config.password.encode())
-    return user_ok & password_ok
 
 
 def current_user(conn: HTTPConnection) -> str | None:
     """Who this request is from, or None when a sign-in is needed first."""
-    if mode() == "open":
+    current = mode()
+    if current == "open":
         return LOCAL_USER
+    if current == "closed":
+        return None
     return user_of(conn.cookies.get(COOKIE))
 
 
@@ -188,6 +177,12 @@ class RequireLogin:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and scope["path"].startswith("/api/"):
+            if mode() == "closed" and scope["path"] != "/api/health":
+                response = JSONResponse(
+                    {"detail": "Sign-in is not set up on this server yet."}, status_code=503
+                )
+                await response(scope, receive, send)
+                return
             user = current_user(HTTPConnection(scope))
             scope.setdefault("state", {})["user_id"] = user
             if user is None and scope["path"] not in OPEN_PATHS:

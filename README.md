@@ -114,16 +114,19 @@ certificate; the app sits behind it with no public port.
 ```bash
 # on an Ubuntu server with Docker (deploy/lightsail-launch.sh prepares one)
 git clone https://github.com/shehryars715/Lab-Agent.git && cd Lab-Agent
-cp .env.example .env    # DEEPSEEK_API_KEY, LABSAGENT_USER, LABSAGENT_PASSWORD,
-                        # SITE_ADDRESS, ACME_EMAIL
+cp .env.example .env    # DEEPSEEK_API_KEY, RUNNER_TOKEN, SUPABASE_*,
+                        # LABSAGENT_REQUIRE_SIGNIN=1, SITE_ADDRESS, ACME_EMAIL
 docker compose up -d --build
 ```
 
-- Setting both `LABSAGENT_USER` and `LABSAGENT_PASSWORD` turns on a sign-in page. One
-  account, a signed cookie, seven days. A restart signs everyone out.
-- It runs as a single worker, because live runs are held in memory.
-- The agent's programs run as an unprivileged user inside the app's container. That is
-  not an isolated sandbox yet.
+- Accounts are email + password through Supabase (`deploy/supabase/README.md`). Each
+  account has its own labs, history and monthly credits. With `LABSAGENT_REQUIRE_SIGNIN=1`
+  a server whose Supabase settings are missing refuses every call instead of opening up.
+- Every program the agent writes runs in its own throwaway container (no network, only its
+  task folder), started by a small runner service that alone can talk to Docker.
+- Labs solve one at a time; others queue. It runs as a single worker, because live runs are
+  held in memory.
+- Runs and uploads are deleted after `RETENTION_DAYS` (30 on the public server).
 
 ## How it works
 

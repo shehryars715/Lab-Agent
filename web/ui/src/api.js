@@ -34,13 +34,16 @@ async function readError(res) {
 export const SIGNED_OUT = 'labsagent:signed-out'
 
 /** { mode, required, signed_in, supabase? }. mode is "open" (localhost),
- *  "password" (the private beta) or "supabase" (Google sign-in). A server that
+ *  "supabase" (accounts) or "closed" (a server whose accounts are not set up). A server that
  *  cannot be reached is treated as "no sign-in needed", so the app loads and
  *  shows its usual offline message instead of a sign-in form that could never
  *  succeed. */
 export async function getSession() {
   try {
     const res = await fetch('/api/session')
+    // 503: a public server whose accounts are not set up. Show "back soon",
+    // never the app (every call would fail) and never an open door.
+    if (res.status === 503) return { mode: 'closed', required: true, signed_in: false }
     if (!res.ok) return { mode: 'open', required: false, signed_in: true }
     return await res.json()
   } catch {
@@ -74,24 +77,6 @@ export async function getMe() {
   const res = await fetch('/api/me')
   if (!res.ok) throw new Error(await readError(res))
   return res.json()
-}
-
-/** Not routed through readError: a wrong password is a 401 too, and it must
- *  not announce "signed out" to an app that was never signed in. */
-export async function login(username, password) {
-  const res = await fetch('/api/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  })
-  if (res.ok) return
-  let detail = `${res.status} ${res.statusText}`
-  try {
-    detail = (await res.json())?.detail ?? detail
-  } catch {
-    /* keep the status line */
-  }
-  throw new Error(detail)
 }
 
 export async function logout() {
