@@ -63,7 +63,10 @@ returns jsonb language plpgsql security definer set search_path = public as $$
 begin
   perform ensure_month_grant(p_user_id, p_monthly);
   return jsonb_build_object(
-    'balance', (select coalesce(sum(credits), 0) from credit_ledger where user_id = p_user_id));
+    'balance', (select coalesce(sum(credits), 0) from credit_ledger where user_id = p_user_id),
+    -- Reserved by a lab still running: shown as "reserved", not as spent.
+    'held', (select coalesce(sum(credits), 0) from holds
+              where user_id = p_user_id and settled_at is null));
 end $$;
 
 

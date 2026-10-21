@@ -5,7 +5,7 @@ charge the real cost at the end: two tabs with 160 credits left both see 160,
 both start, and the balance ends at -140. Balances go negative, and parallel
 runs race past the check.
 
-RESERVE, THEN SETTLE. Before a run starts, the database HOLDS up to 150
+RESERVE, THEN SETTLE. Before a run starts, the database HOLDS up to 100
 credits (never more than the balance) in one locked step -- `reserve()` in
 002_credits.sql locks the account's row, so the second tab waits, then sees
 10. The run's cost ceiling is set to exactly what was held, so it cannot
@@ -145,7 +145,12 @@ def run_metered(target, hold: Hold, *, free_unless_solved: bool, **kwargs) -> No
 
 
 def balance(user_id: str, settings: Settings) -> dict | None:
-    """{balance, allowance, refills_on} for the header, or None when unmetered."""
+    """{balance, held, allowance, refills_on} for the sidebar, or None when unmetered.
+
+    `held` is what a running lab has reserved. Shown as "reserved", not as
+    spent: a balance that drops by 100 the moment a lab starts reads as a
+    charge, though most of it comes back when the lab ends.
+    """
     if not metered():
         return None
     try:
@@ -154,6 +159,7 @@ def balance(user_id: str, settings: Settings) -> dict | None:
         return None
     return {
         "balance": int(result.get("balance", 0)),
+        "held": int(result.get("held", 0)),
         "allowance": settings.monthly_credits,
         "refills_on": refills_on(),
     }

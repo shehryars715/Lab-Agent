@@ -23,14 +23,14 @@ USER = "cccccccc-0000-0000-0000-000000000003"
 class Ledger:
     def __init__(self, reply=None):
         self.calls = []
-        self.reply = reply or {"hold_id": "h1", "credits": 150, "balance": 150}
+        self.reply = reply or {"hold_id": "h1", "credits": 100, "balance": 200}
 
     def __call__(self, name, **args):
         self.calls.append((name, args))
         if name == "reserve":
             return self.reply
         if name == "my_balance":
-            return {"balance": 281}
+            return {"balance": 181, "held": 100}
         return None
 
     def settled(self):
@@ -79,10 +79,10 @@ def _usage(usd: float) -> FakeUsage:
 
 def test_a_hold_sets_the_runs_cost_ceiling(ledger):
     hold = metering.reserve(USER, "j1", "run", Settings())
-    assert hold == metering.Hold(id="h1", credits=150)
+    assert hold == metering.Hold(id="h1", credits=100)
     capped = metering.capped(Settings(), hold)
-    assert capped.max_cost_per_run_usd == pytest.approx(0.015)
-    assert capped.max_cost_per_task_usd == pytest.approx(0.015)
+    assert capped.max_cost_per_run_usd == pytest.approx(0.01)
+    assert capped.max_cost_per_task_usd == pytest.approx(0.01)
     # A small hold makes a smaller ceiling than the per-task default.
     small = metering.capped(Settings(), metering.Hold(id="h", credits=12))
     assert small.max_cost_per_task_usd == pytest.approx(0.0012)
@@ -186,7 +186,7 @@ def test_me_reports_the_balance(ledger):
     client = TestClient(app_module.app)
     client.cookies.set(auth.COOKIE, auth.mint(USER))
     credits = client.get("/api/me").json()["credits"]
-    assert credits["balance"] == 281 and credits["allowance"] == 300 and credits["refills_on"]
+    assert credits["balance"] == 181 and credits["held"] == 100 and credits["allowance"] == 300 and credits["refills_on"]
 
 
 def test_a_run_stopped_by_its_limit_says_so_in_plain_words():

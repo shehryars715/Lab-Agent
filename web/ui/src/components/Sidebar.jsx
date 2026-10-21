@@ -299,7 +299,9 @@ export default function Sidebar({
 
           {credits && (
             <p className="credit-line num" title={`${credits.allowance} credits a month`}>
-              {credits.balance} credits left · refills {credits.refills_on}
+              {credits.held > 0
+                ? `${credits.balance + credits.held} credits · ${credits.held} reserved for your running lab`
+                : `${credits.balance} credits left · refills ${credits.refills_on}`}
             </p>
           )}
 
