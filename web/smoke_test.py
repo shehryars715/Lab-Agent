@@ -347,9 +347,11 @@ def run(manual: Path) -> None:
         check("package contains the report", any(n.endswith(".docx") for n in names))
         check("package contains the notebook", any(n.endswith(".ipynb") for n in names))
         check("package contains code", any(n.startswith("code/") for n in names))
+        # Screenshots only when the manual or the student asks (decided
+        # 2026-10-02); this request asks for neither, so none are shipped.
         check(
-            "package contains screenshots",
-            any(n.startswith("screenshots/") for n in names),
+            "package has no screenshots nobody asked for",
+            not any(n.startswith("screenshots/") for n in names),
             f"{len(names)} entries",
         )
 

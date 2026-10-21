@@ -52,6 +52,7 @@ from labsagent.usage import RunUsage
 from .briefing import read_briefing
 from .jobs import Job
 from .revise import answer_question, read_revision
+from . import ownership
 from .slots import SOLVE_SLOTS
 from .trace import tracing_tools
 
@@ -1085,6 +1086,8 @@ def run_job(
         # manual happened to name, with no chance to correct it. Inside the
         # solve, it runs once per attempt, and `max_retries_per_task` is 3.
         store = RunStore.create(spec.lab_number, root=RUNS_ROOT, suffix=job.id)
+        # History finds a run by its folder; record whose folder this is.
+        ownership.attach_run_dir(job, store.run_id)
         acquired = _acquire(
             job,
             uploads=dataset_paths or [],

@@ -170,7 +170,7 @@ def test_a_data_upload_over_the_cap_is_refused_without_reading_it_all(tmp_path, 
     monkeypatch.setattr(app_module, "MAX_DATA_BYTES", 1_000_000)
     monkeypatch.setattr(app_module, "UPLOADS_ROOT", tmp_path / "uploads")
     started = []
-    monkeypatch.setattr(app_module.threading, "Thread", lambda *a, **k: started.append(k) or _NoThread())
+    monkeypatch.setattr(app_module, "run_job", lambda **kwargs: started.append(kwargs))
     client = TestClient(app_module.app)
     response = client.post(
         "/api/runs",
@@ -181,7 +181,3 @@ def test_a_data_upload_over_the_cap_is_refused_without_reading_it_all(tmp_path, 
     assert not list((tmp_path / "uploads").rglob("big.csv"))
     assert started == []
 
-
-class _NoThread:
-    def start(self) -> None:
-        pass

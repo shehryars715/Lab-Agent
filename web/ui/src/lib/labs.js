@@ -13,7 +13,11 @@
 // The pure functions at the bottom (merge, group, search) have no storage and
 // no DOM, so they are unit-tested the same way lib/thread.js is.
 
-const KEY = 'labsagent.labs.v1'
+const BASE_KEY = 'labsagent.labs.v1'
+// One list PER ACCOUNT. With public sign-in, two students can share a lab
+// computer; the second must not see the first one's labs in the sidebar.
+// Single-user servers keep the original key, so an existing list survives.
+let KEY = BASE_KEY
 const MAX_LABS = 200
 
 const EMPTY = { labs: {}, order: [], renamed: {}, hidden: {} }
@@ -48,6 +52,27 @@ function persist() {
 function set(next) {
   state = next
   persist()
+  for (const fn of listeners) fn()
+}
+
+/** Point the list at this account's storage (null: the single-user list). */
+export function selectLabsFor(userId) {
+  const next = userId ? `${BASE_KEY}.${userId}` : BASE_KEY
+  if (next === KEY) return
+  KEY = next
+  state = load()
+  for (const fn of listeners) fn()
+}
+
+/** Signing out of a shared computer: drop this account's list from it. */
+export function forgetLabs() {
+  try {
+    if (KEY !== BASE_KEY) window.localStorage.removeItem(KEY)
+  } catch {
+    /* nothing stored, nothing to forget */
+  }
+  KEY = BASE_KEY
+  state = EMPTY
   for (const fn of listeners) fn()
 }
 

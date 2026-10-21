@@ -56,6 +56,9 @@ class Job:
 
     def __init__(self, job_id: str) -> None:
         self.id = job_id
+        #: Who started it (auth's user id). Set once, before any work, by
+        #: ownership.record; every route that takes this job's id checks it.
+        self.owner: str | None = None
         self.status = "queued"  # queued | running | awaiting_input | done | failed
         self.created_at = time.time()
         self.error: str | None = None
@@ -219,7 +222,7 @@ class JobRegistry:
     not have.
     """
 
-    def __init__(self, *, keep: int = 25) -> None:
+    def __init__(self, *, keep: int = 200) -> None:
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._lock = threading.Lock()
@@ -246,3 +249,7 @@ class JobRegistry:
     def active(self) -> list[Job]:
         with self._lock:
             return [j for j in self._jobs.values() if not j.is_terminal()]
+
+    def active_for(self, owner: str) -> list[Job]:
+        """This user's runs that are still working (or waiting on them)."""
+        return [j for j in self.active() if j.owner == owner]

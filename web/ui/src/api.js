@@ -33,17 +33,43 @@ async function readError(res) {
 
 export const SIGNED_OUT = 'labsagent:signed-out'
 
-/** { required, signed_in }. A server that cannot be reached is treated as
- *  "no sign-in needed", so the app loads and shows its usual offline message
- *  instead of a sign-in form that could never succeed. */
+/** { mode, required, signed_in, supabase? }. mode is "open" (localhost),
+ *  "password" (the private beta) or "supabase" (Google sign-in). A server that
+ *  cannot be reached is treated as "no sign-in needed", so the app loads and
+ *  shows its usual offline message instead of a sign-in form that could never
+ *  succeed. */
 export async function getSession() {
   try {
     const res = await fetch('/api/session')
-    if (!res.ok) return { required: false, signed_in: true }
+    if (!res.ok) return { mode: 'open', required: false, signed_in: true }
     return await res.json()
   } catch {
-    return { required: false, signed_in: true }
+    return { mode: 'open', required: false, signed_in: true }
   }
+}
+
+/** Trade Supabase's access token for our own session cookie. Once per sign-in. */
+export async function exchangeToken(accessToken) {
+  const res = await fetch('/api/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ access_token: accessToken }),
+  })
+  if (res.ok) return
+  let detail = `${res.status} ${res.statusText}`
+  try {
+    detail = (await res.json())?.detail ?? detail
+  } catch {
+    /* keep the status line */
+  }
+  throw new Error(detail)
+}
+
+/** { user_id, mode } for whoever is signed in. */
+export async function getMe() {
+  const res = await fetch('/api/me')
+  if (!res.ok) throw new Error(await readError(res))
+  return res.json()
 }
 
 /** Not routed through readError: a wrong password is a 401 too, and it must
@@ -68,31 +94,55 @@ export async function logout() {
   await fetch('/api/logout', { method: 'POST' }).catch(() => {})
 }
 
-// Identity lives here, in this browser, and nowhere else.
+// Identity lives on the server, with your account (GET/PUT /api/profile).
 //
-// The server is stateless about who you are: identity is sent with each
-// request and never written to disk there.
-const IDENTITY_KEY = 'labsagent.identity'
+// It used to live only in this browser, which was wrong once there are
+// accounts: details should follow you to another computer, and two students
+// on one computer must not inherit each other's name on a cover page. The
+// pages still call loadIdentity()/saveIdentity() synchronously, so this keeps
+// an in-memory copy that AuthGate fills once (primeIdentity) after sign-in.
+const LEGACY_IDENTITY_KEY = 'labsagent.identity'
+const EMPTY_IDENTITY = { name: '', cms_id: '', section: '', program: '' }
+let identity = { ...EMPTY_IDENTITY }
+
+export async function primeIdentity() {
+  try {
+    const res = await fetch('/api/profile')
+    if (res.ok) identity = { ...EMPTY_IDENTITY, ...(await res.json()) }
+  } catch {
+    /* offline: the files just go without a name until it is added */
+  }
+  // One-time move of details this browser remembered before accounts existed.
+  try {
+    const raw = window.localStorage.getItem(LEGACY_IDENTITY_KEY)
+    if (raw) {
+      window.localStorage.removeItem(LEGACY_IDENTITY_KEY)
+      const old = JSON.parse(raw)
+      if (!identity.name && old?.name) saveIdentity({ ...identity, ...old })
+    }
+  } catch {
+    /* storage blocked: nothing to move */
+  }
+  return identity
+}
+
+export function forgetIdentity() {
+  identity = { ...EMPTY_IDENTITY }
+}
 
 export function loadIdentity() {
-  const empty = { name: '', cms_id: '', section: '', program: '' }
-  try {
-    // localStorage can throw outright (private windows, blocked site data),
-    // so every access is guarded. A form that cannot remember you is a small
-    // annoyance; a page that fails to render is not.
-    const raw = window.localStorage.getItem(IDENTITY_KEY)
-    return raw ? { ...empty, ...JSON.parse(raw) } : empty
-  } catch {
-    return empty
-  }
+  return identity
 }
 
 export function saveIdentity(values) {
-  try {
-    window.localStorage.setItem(IDENTITY_KEY, JSON.stringify(values))
-  } catch {
+  identity = { ...identity, ...values }
+  fetch('/api/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(identity),
+  }).catch(() => {
     /* not being able to remember is not a reason to fail the run */
-  }
+  })
 }
 
 export async function createRun({ file, data, instructions, seed }) {

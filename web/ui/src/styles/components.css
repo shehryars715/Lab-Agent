@@ -587,6 +587,13 @@
   width: 100%;
 }
 
+/* The privacy promise under the Google button: quiet, but readable. */
+.login-privacy {
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
 /* Always in the flow, so an error appearing does not shove the button. */
 .login-error {
   min-height: 1.5em;

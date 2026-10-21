@@ -37,7 +37,9 @@ def run_dir(run_id: str) -> Path | None:
     if not RUNS_ROOT.is_dir():
         return None
     for candidate in RUNS_ROOT.iterdir():
-        if candidate.is_dir() and candidate.name == run_id and candidate.name != "_web_uploads":
+        # A leading underscore marks the server's own folders (_web_uploads,
+        # _profiles): never a run, whatever the caller asks for.
+        if candidate.is_dir() and candidate.name == run_id and not candidate.name.startswith("_"):
             return candidate
     return None
 
@@ -135,7 +137,7 @@ def summarise(directory: Path) -> dict[str, Any]:
     }
 
 
-def list_runs(limit: int = 12) -> list[dict[str, Any]]:
+def list_runs(limit: int = 12, only: list[str] | None = None) -> list[dict[str, Any]]:
     """The most recent runs, newest first.
 
     Sorted by directory name rather than by mtime: `RunStore` names them
@@ -144,11 +146,17 @@ def list_runs(limit: int = 12) -> list[dict[str, Any]]:
     """
     if not RUNS_ROOT.is_dir():
         return []
+    # `only`: the run folders this user owns (ownership.run_ids_for). None
+    # means a single-user server, where every run is yours.
+    allowed = set(only or ())
     directories = sorted(
         (
             d
             for d in RUNS_ROOT.iterdir()
-            if d.is_dir() and d.name != "_web_uploads" and (d / "manifest.json").exists()
+            if d.is_dir()
+            and not d.name.startswith("_")
+            and (only is None or d.name in allowed)
+            and (d / "manifest.json").exists()
         ),
         key=lambda d: d.name,
         reverse=True,

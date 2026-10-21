@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # because a solve plus its program container is most of a 1 GB server.
     max_concurrent_solves: int = 1
 
+    # Days a run and its uploads are kept (web/server/retention.py). 0 = keep
+    # forever. The public server sets 30; leave it 0 anywhere whose history
+    # you mean to keep.
+    retention_days: int = 0
+
     model_name: str = "deepseek-flash"
     temperature: float = 0.0
     timeout_s: int = 30

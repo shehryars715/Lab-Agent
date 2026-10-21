@@ -1,10 +1,68 @@
 import { useEffect, useRef, useState } from 'react'
 import { login } from '../api'
 import { Logo } from '../components/Icons'
+import { startGoogle } from '../lib/google'
 
 /** The one screen a signed-out visitor sees. Only rendered when the server
- *  says a sign-in is required (see AuthGate), so localhost never shows it. */
-export default function Login({ onSignedIn }) {
+ *  says a sign-in is required (see AuthGate), so localhost never shows it.
+ *  Which screen depends on the server's mode: Google for public sign-up, the
+ *  username and password for the private beta. */
+export default function Login(props) {
+  return props.mode === 'supabase' ? <GoogleLogin {...props} /> : <PasswordLogin {...props} />
+}
+
+function GoogleLogin({ supabase, initialError }) {
+  const [error, setError] = useState(initialError || '')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    document.title = 'Sign in — Labs-Agent'
+  }, [])
+
+  const go = async () => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await startGoogle(supabase) // leaves the page; we come back signed in
+    } catch (err) {
+      setError(`Couldn’t start the Google sign-in (${err?.message ?? err}). Try again.`)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="login">
+      <div className="login-card">
+        <div className="login-brand">
+          <Logo size={26} />
+          <span>Labs-Agent</span>
+        </div>
+
+        <div>
+          <h1 className="login-title">Sign in</h1>
+          <p className="login-sub">Use your Google account. Each account gets its own labs and credits.</p>
+        </div>
+
+        <div className="login-actions">
+          <button type="button" className="btn btn-primary btn-lg login-submit" onClick={go} disabled={busy}>
+            {busy ? 'Opening Google…' : 'Continue with Google'}
+          </button>
+          <p id="login-error" className="field-err login-error" role="alert">
+            {error}
+          </p>
+        </div>
+
+        <p className="login-privacy">
+          Your labs and the files made from them are kept for 30 days, then deleted. They are only
+          ever shown to you, and your course files are never shared or used to train anything.
+        </p>
+      </div>
+    </main>
+  )
+}
+
+function PasswordLogin({ onSignedIn }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')

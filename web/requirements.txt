@@ -20,7 +20,12 @@
 #                   declared nowhere, which is how `pandas` and `tiktoken`
 #                   went wrong in this repo. Named here so it stops being
 #                   luck.
+#   PyJWT[crypto]   verifies Supabase sign-in tokens against the project's
+#                   public keys (JWKS); [crypto] brings the ES256/RS256 support.
+#   httpx           the server's calls to Supabase (PostgREST rpc).
 fastapi>=0.115
 uvicorn[standard]>=0.32
 python-multipart>=0.0.12
 requests>=2.32
+PyJWT[crypto]>=2.10
+httpx>=0.28

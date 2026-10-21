@@ -34,7 +34,7 @@ from pydantic import BaseModel
 
 from labsagent.config import PROJECT_ROOT, load_settings
 
-from . import auth, history
+from . import auth, history, ownership, profiles, supa
 from .jobs import HEARTBEAT_S, JobRegistry
 from labsagent.data import DATA_SUFFIXES
 from labsagent.ingest.readers import ACCEPTED_SUFFIXES
@@ -71,6 +71,14 @@ app = FastAPI(title="Labs-Agent", docs_url="/api/docs", openapi_url="/api/openap
 # A no-op unless LABSAGENT_USER and LABSAGENT_PASSWORD are both set. See auth.py.
 app.add_middleware(auth.RequireLogin)
 registry = JobRegistry()
+
+
+@app.on_event("startup")
+def _start_retention() -> None:
+    from . import retention
+
+    settings = load_settings()
+    retention.start(settings.runs_dir.resolve(), settings.retention_days)
 
 UI_DIST = PROJECT_ROOT / "web" / "ui" / "dist"
 
@@ -114,24 +122,14 @@ def health() -> dict:
 # --------------------------------------------------------------------- sign-in
 
 
-@app.get("/api/session")
-def session(request: Request) -> dict:
-    return {"required": auth.settings.enabled, "signed_in": auth.signed_in(request)}
+class Exchange(BaseModel):
+    access_token: str
 
 
-# `def`, not `async def`: FastAPI runs a sync route on a worker thread, so the
-# failure delay parks that thread and never the event loop every SSE stream
-# shares.
-@app.post("/api/login")
-def login(body: Login, request: Request, response: Response) -> dict:
-    if not auth.settings.enabled:
-        return {"signed_in": True}
-    if not auth.credentials_match(body.username, body.password):
-        time.sleep(auth.FAILURE_DELAY_S)
-        raise HTTPException(401, "That username and password do not match.")
+def _set_session(response: Response, request: Request, user_id: str) -> None:
     response.set_cookie(
         auth.COOKIE,
-        auth.mint(),
+        auth.mint(user_id),
         max_age=auth.SESSION_S,
         # Page scripts cannot read it, so an XSS bug cannot lift it.
         httponly=True,
@@ -141,6 +139,59 @@ def login(body: Login, request: Request, response: Response) -> dict:
         secure=request.url.scheme == "https",
         path="/",
     )
+
+
+@app.get("/api/session")
+def session(request: Request) -> dict:
+    mode = auth.mode()
+    answer = {
+        "mode": mode,
+        "required": mode != "open",
+        "signed_in": request.state.user_id is not None,
+    }
+    if mode == "supabase":
+        # Both public by design: the browser needs them to start a Google
+        # sign-in. The service key never appears in any response.
+        answer["supabase"] = {"url": supa.settings.base, "anon_key": supa.settings.anon_key}
+    return answer
+
+
+@app.post("/api/session")
+def exchange(body: Exchange, request: Request, response: Response) -> dict:
+    """Trade a Supabase access token for our own session cookie. Once."""
+    if auth.mode() != "supabase":
+        raise HTTPException(404, "Google sign-in is not set up on this server.")
+    try:
+        claims = supa.verify(body.access_token)
+    except supa.BadToken:
+        raise HTTPException(401, "That sign-in did not check out. Try again.") from None
+    meta = claims.get("user_metadata") or {}
+    try:
+        supa.rpc(
+            "ensure_user",
+            p_user_id=claims["sub"],
+            p_email=str(claims.get("email") or "")[:320],
+            p_name=str(meta.get("full_name") or meta.get("name") or "")[:120],
+        )
+    except supa.SupaError:
+        raise HTTPException(503, "Can’t reach your account right now. Try again in a minute.") from None
+    _set_session(response, request, claims["sub"])
+    return {"signed_in": True}
+
+
+# `def`, not `async def`: FastAPI runs a sync route on a worker thread, so the
+# failure delay parks that thread and never the event loop every SSE stream
+# shares.
+@app.post("/api/login")
+def login(body: Login, request: Request, response: Response) -> dict:
+    if auth.mode() == "supabase":
+        raise HTTPException(404, "Sign in with Google instead.")
+    if auth.mode() == "open":
+        return {"signed_in": True}
+    if not auth.credentials_match(body.username, body.password):
+        time.sleep(auth.FAILURE_DELAY_S)
+        raise HTTPException(401, "That username and password do not match.")
+    _set_session(response, request, auth.OWNER_USER)
     return {"signed_in": True}
 
 
@@ -150,9 +201,23 @@ def logout(response: Response) -> dict:
     return {"signed_in": False}
 
 
-# There is deliberately no GET /api/profile. Identity lives in the browser
-# (see `pipeline.profile_from`), so the server has nothing to remember and
-# nothing to hand back.
+# --------------------------------------------------------------------- you
+
+
+@app.get("/api/me")
+def me(request: Request) -> dict:
+    return {"user_id": request.state.user_id, "mode": auth.mode()}
+
+
+@app.get("/api/profile")
+def get_profile(request: Request) -> dict:
+    """Your name and CMS ID, for the cover page. Kept with your account."""
+    return profiles.get(request.state.user_id)
+
+
+@app.put("/api/profile")
+def put_profile(body: Identity, request: Request) -> dict:
+    return profiles.save(request.state.user_id, body.model_dump())
 
 
 # --------------------------------------------------------------------- runs
@@ -223,6 +288,7 @@ async def _save_datasets(uploads, upload_dir: Path) -> list[Path]:
 
 @app.post("/api/runs", status_code=202)
 async def create_run(
+    request: Request,
     manual: UploadFile | None = File(None),
     datasets: list[UploadFile] | None = File(None),
     instructions: str = Form(""),
@@ -273,7 +339,15 @@ async def create_run(
                 ".doc, open it in Word and save as .docx.",
             )
 
+    user_id = request.state.user_id
+    # ONE LAB AT A TIME PER ACCOUNT, with public sign-up. Otherwise one person
+    # can fill the solve queue for everyone else.
+    if auth.mode() == "supabase" and registry.active_for(user_id):
+        raise HTTPException(
+            409, "You already have a lab running. Start the next one when it finishes."
+        )
     job = registry.create()
+    ownership.record(job, user_id)
 
     # Made unconditionally now: data can arrive with a pasted lab and no file,
     # and it still needs somewhere of its own to land.
@@ -303,11 +377,13 @@ async def create_run(
             "manual_path": manual_path,
             "dataset_paths": dataset_paths,
             "instructions": instructions,
+            # Who you are comes from your account. Anything typed into this
+            # request wins for this run only (older pages still send it).
             "profile_seed": {
-                "name": name.strip(),
-                "cms_id": cms_id.strip(),
-                "section": section.strip(),
-                "program": program.strip(),
+                **profiles.get(user_id),
+                **profiles.clean(
+                    {"name": name, "cms_id": cms_id, "section": section, "program": program}
+                ),
             },
             "settings": load_settings(),
         },
@@ -319,11 +395,9 @@ async def create_run(
 
 
 @app.get("/api/runs/{job_id}")
-def run_status(job_id: str) -> dict:
+def run_status(job_id: str, request: Request) -> dict:
     """Polling fallback, and the thing to curl when the stream looks wrong."""
-    job = registry.get(job_id)
-    if job is None:
-        raise HTTPException(404, "no such job")
+    job = ownership.require_job(registry, job_id, request.state.user_id)
     return {"job_id": job.id, "status": job.status, "error": job.error, "summary": job.summary}
 
 
@@ -357,11 +431,10 @@ def _sse(job, cursor: int):
 @app.get("/api/runs/{job_id}/events")
 def stream_events(
     job_id: str,
+    request: Request,
     last_event_id: str | None = Header(default=None),
 ):
-    job = registry.get(job_id)
-    if job is None:
-        raise HTTPException(404, "no such job")
+    job = ownership.require_job(registry, job_id, request.state.user_id)
 
     # A reconnecting EventSource replays from where it left off, so a dropped
     # connection or a page refresh costs nothing. This is the whole reason the
@@ -390,10 +463,8 @@ def stream_events(
 
 
 @app.post("/api/runs/{job_id}/answers")
-def submit_answers(job_id: str, body: Answers) -> dict:
-    job = registry.get(job_id)
-    if job is None:
-        raise HTTPException(404, "no such job")
+def submit_answers(job_id: str, body: Answers, request: Request) -> dict:
+    job = ownership.require_job(registry, job_id, request.state.user_id)
     if not job.submit(body.answers):
         # Not waiting: either already answered (a double submit) or it timed
         # out and moved on. Both are normal, and neither should look like a
@@ -403,7 +474,7 @@ def submit_answers(job_id: str, body: Answers) -> dict:
 
 
 @app.post("/api/runs/{job_id}/revise", status_code=202)
-def revise_run(job_id: str, body: Feedback) -> dict:
+def revise_run(job_id: str, body: Feedback, request: Request) -> dict:
     """Redo part of a finished run, in place.
 
     Runs on the same `Job` rather than a new one. That is the point: the chat
@@ -411,9 +482,7 @@ def revise_run(job_id: str, body: Feedback) -> dict:
     the revision replaces are replaced where the browser already looks for
     them.
     """
-    job = registry.get(job_id)
-    if job is None:
-        raise HTTPException(404, "no such job")
+    job = ownership.require_job(registry, job_id, request.state.user_id)
     if not job.is_terminal():
         raise HTTPException(409, "this run is still working")
     if not body.feedback.strip():
@@ -434,21 +503,21 @@ def revise_run(job_id: str, body: Feedback) -> dict:
 
 
 @app.post("/api/runs/{job_id}/identity", status_code=202)
-def set_identity(job_id: str, body: Identity) -> dict:
+def set_identity(job_id: str, body: Identity, request: Request) -> dict:
     """Put the student's details on the files -- a rebuild, no model call.
 
     Identity used to be a REQUIRED question before any code was written, though
     it only ever reached the cover and the filenames. It is now offered after
     the files exist, and this route rebuilds them with it.
     """
-    job = registry.get(job_id)
-    if job is None:
-        raise HTTPException(404, "no such job")
+    job = ownership.require_job(registry, job_id, request.state.user_id)
     if not job.is_terminal():
         raise HTTPException(409, "this run is still working")
-    values = {k: v.strip() for k, v in body.model_dump().items() if v and v.strip()}
+    values = profiles.clean(body.model_dump())
     if not values:
         raise HTTPException(422, "nothing to add")
+    # Remembered with your account, so the next lab's cover is right first time.
+    profiles.save(request.state.user_id, values)
     job.reopen()
     threading.Thread(
         target=repackage_job,
@@ -460,10 +529,8 @@ def set_identity(job_id: str, body: Identity) -> dict:
 
 
 @app.get("/api/runs/{job_id}/download/{key}")
-def download(job_id: str, key: str) -> FileResponse:
-    job = registry.get(job_id)
-    if job is None:
-        raise HTTPException(404, "no such job")
+def download(job_id: str, key: str, request: Request) -> FileResponse:
+    job = ownership.require_job(registry, job_id, request.state.user_id)
 
     # A dict lookup, not a path join. `key` can be anything the client likes --
     # "../../.env" simply is not a key in this dict.
@@ -482,15 +549,15 @@ def download(job_id: str, key: str) -> FileResponse:
 
 
 @app.get("/api/history")
-def history_list(limit: int = 12) -> dict:
-    return {"runs": history.list_runs(limit=max(1, min(limit, 100)))}
+def history_list(request: Request, limit: int = 12) -> dict:
+    limit = max(1, min(limit, 100))
+    mine = ownership.run_ids_for(request.state.user_id, limit)
+    return {"runs": history.list_runs(limit=limit, only=mine)}
 
 
 @app.get("/api/history/{run_id}")
-def history_detail(run_id: str) -> dict:
-    directory = history.run_dir(run_id)
-    if directory is None:
-        raise HTTPException(404, "no such run")
+def history_detail(run_id: str, request: Request) -> dict:
+    directory = ownership.require_run(run_id, request.state.user_id)
     # `path` is dropped from the response on purpose: the browser asks by key,
     # and an on-disk path in a JSON body is an invitation to try another one.
     return {
@@ -503,10 +570,8 @@ def history_detail(run_id: str) -> dict:
 
 
 @app.get("/api/history/{run_id}/download/{key}")
-def history_download(run_id: str, key: str) -> FileResponse:
-    directory = history.run_dir(run_id)
-    if directory is None:
-        raise HTTPException(404, "no such run")
+def history_download(run_id: str, key: str, request: Request) -> FileResponse:
+    directory = ownership.require_run(run_id, request.state.user_id)
     # Same dict lookup as the live route. An unknown key simply has no entry.
     for artifact in history.artifacts_for(directory):
         if artifact["key"] == key:

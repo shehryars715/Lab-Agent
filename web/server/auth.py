@@ -1,23 +1,38 @@
-"""One username, one password, one signed cookie.
+"""Who is asking: three modes, one signed cookie.
 
-Off unless BOTH `LABSAGENT_USER` and `LABSAGENT_PASSWORD` are set, so running
-on localhost is unchanged. Set them (in .env, or the container's environment)
-and every /api route except the three below answers 401 until you sign in.
+THE MODES, chosen by what is configured (nothing to switch by hand):
+
+  open       nothing set (localhost). No sign-in; every request is user
+             "local". Running on your own machine is unchanged.
+  password   LABSAGENT_USER + LABSAGENT_PASSWORD (the private beta). One
+             account, user "owner". Kept as the bridge until Supabase is set
+             up: removing it first would leave a deployed server with no
+             sign-in at all.
+  supabase   SUPABASE_URL + keys (public sign-up). Google sign-in through
+             Supabase Auth; the browser hands us Supabase's access token once
+             (POST /api/session), we verify it (supa.verify) and set our own
+             cookie carrying the user's id.
+
+WHY EXCHANGE THE TOKEN FOR OUR OWN COOKIE instead of sending the token on
+every call: EventSource, which carries the live run stream, cannot set
+headers, and a cookie rides along on its own. It also means one check per
+request against a key we hold, not a JWT verification per request.
 
 WHAT THE COOKIE IS. Not a session id pointing at server-side state -- there is
-no session store. It is `<expiry>.<hmac(expiry)>`: the server can check it was
-the one that minted it, and that it has not expired, with nothing remembered in
-between. Forging one needs the key; stretching one's expiry breaks the HMAC.
+no session store. It is `<expiry>.<user id>.<hmac(expiry.user id)>`: the
+server can check it minted it, that it has not expired, and who it was for,
+with nothing remembered in between. Changing the user id or stretching the
+expiry breaks the HMAC.
 
-WHERE THE KEY COMES FROM. `secrets.token_bytes` at import, so it lives only in
-this process. The deliberate cost: a restart (a deploy, a reboot) signs
-everyone out. The deliberate gain: no extra secret to create, store or leak.
+WHERE THE KEY COMES FROM. `LABSAGENT_SESSION_KEY` when set, so a deploy no
+longer signs every user out -- with the public as users, that matters.
+Without it, a random key per process (the old behaviour): a restart signs
+everyone out, and there is no secret to leak.
 
 WHY THE UI IS NOT BEHIND IT. The built JS/CSS carries no secrets -- everything
 worth protecting is data, and data only arrives through /api. So the static
 files stay public, the page asks /api/session on load, and shows the sign-in
-form when told to. The alternative (gate every path, serve a login page from
-the server) needs a second, non-React page for no gain in safety.
+screen when told to.
 
 WHY SameSite=Lax IS ENOUGH AGAINST CSRF HERE. Lax cookies are not sent on a
 cross-site POST, and every route that changes anything is a POST. A hostile
@@ -29,6 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import secrets
 import time
 
@@ -40,8 +56,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from labsagent.config import PROJECT_ROOT
 
+from . import supa
+
 COOKIE = "labsagent_session"
 SESSION_S = 7 * 24 * 3600
+
+LOCAL_USER = "local"
+OWNER_USER = "owner"
 
 # The routes a signed-out browser must still reach: to ask whether it is
 # signed in, to sign in, and to sign out. /api/health stays open as well -- it
@@ -54,6 +75,10 @@ OPEN_PATHS = frozenset({"/api/session", "/api/login", "/api/logout", "/api/healt
 # typo-and-retry by hand indistinguishable from a real delay.
 FAILURE_DELAY_S = 1.0
 
+# A user id is a Supabase uuid, "owner" or "local". Anything else in a cookie
+# is refused before it is ever used as a key.
+_USER_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
 
 class AuthSettings(BaseSettings):
     """Read from the same .env as the core settings, but kept out of them: the
@@ -65,6 +90,7 @@ class AuthSettings(BaseSettings):
 
     user: str = Field(default="", alias="LABSAGENT_USER")
     password: str = Field(default="", alias="LABSAGENT_PASSWORD")
+    session_key: str = Field(default="", alias="LABSAGENT_SESSION_KEY")
 
     @property
     def enabled(self) -> bool:
@@ -72,30 +98,55 @@ class AuthSettings(BaseSettings):
 
 
 settings = AuthSettings()
-_KEY = secrets.token_bytes(32)
+_KEY = (
+    hashlib.sha256(settings.session_key.encode()).digest()
+    if settings.session_key
+    else secrets.token_bytes(32)
+)
+
+
+def mode() -> str:
+    """"supabase", "password" or "open" -- looked up per call, so tests can swap."""
+    if supa.configured():
+        return "supabase"
+    if settings.enabled:
+        return "password"
+    return "open"
 
 
 def _sign(payload: str, key: bytes) -> str:
     return hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
 
 
-def mint(*, now: float | None = None, key: bytes = _KEY) -> str:
+def mint(user_id: str = OWNER_USER, *, now: float | None = None, key: bytes | None = None) -> str:
+    if not _USER_ID.match(user_id):
+        raise ValueError("not a user id")
     expiry = int((now if now is not None else time.time()) + SESSION_S)
-    return f"{expiry}.{_sign(str(expiry), key)}"
+    payload = f"{expiry}.{user_id}"
+    return f"{payload}.{_sign(payload, key or _KEY)}"
 
 
-def valid(token: str | None, *, now: float | None = None, key: bytes = _KEY) -> bool:
-    if not token or "." not in token:
-        return False
-    expiry, _, signature = token.partition(".")
+def user_of(token: str | None, *, now: float | None = None, key: bytes | None = None) -> str | None:
+    """The user a cookie was minted for, or None if it is not one of ours."""
+    if not token or token.count(".") != 2:
+        return None
+    expiry, user_id, signature = token.split(".")
     # compare_digest, not ==. `==` returns at the first differing character, so
     # how long it takes leaks how much of a guess was right.
-    if not hmac.compare_digest(signature, _sign(expiry, key)):
-        return False
+    if not hmac.compare_digest(signature, _sign(f"{expiry}.{user_id}", key or _KEY)):
+        return None
+    if not _USER_ID.match(user_id):
+        return None
     try:
-        return int(expiry) > (now if now is not None else time.time())
+        if int(expiry) <= (now if now is not None else time.time()):
+            return None
     except ValueError:
-        return False
+        return None
+    return user_id
+
+
+def valid(token: str | None, *, now: float | None = None, key: bytes | None = None) -> bool:
+    return user_of(token, now=now, key=key) is not None
 
 
 def credentials_match(user: str, password: str, config: AuthSettings | None = None) -> bool:
@@ -108,9 +159,15 @@ def credentials_match(user: str, password: str, config: AuthSettings | None = No
     return user_ok & password_ok
 
 
-def signed_in(conn: HTTPConnection, config: AuthSettings | None = None) -> bool:
-    config = settings if config is None else config
-    return not config.enabled or valid(conn.cookies.get(COOKIE))
+def current_user(conn: HTTPConnection) -> str | None:
+    """Who this request is from, or None when a sign-in is needed first."""
+    if mode() == "open":
+        return LOCAL_USER
+    return user_of(conn.cookies.get(COOKIE))
+
+
+def signed_in(conn: HTTPConnection) -> bool:
+    return current_user(conn) is not None
 
 
 class RequireLogin:
@@ -120,22 +177,20 @@ class RequireLogin:
     for JSON and a known source of trouble for a long-lived SSE response. This
     looks only at the request, then either answers 401 itself or hands the
     call through untouched -- the response never passes through it.
+
+    It also records who is asking, in `scope["state"]["user_id"]`, so every
+    route reads the user from one place (`request.state.user_id`).
     """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        # `settings` is looked up per request, not captured at startup, so a
-        # test can swap it without rebuilding the app.
-        if (
-            scope["type"] == "http"
-            and settings.enabled
-            and scope["path"].startswith("/api/")
-            and scope["path"] not in OPEN_PATHS
-            and not signed_in(HTTPConnection(scope), settings)
-        ):
-            response = JSONResponse({"detail": "Sign in first."}, status_code=401)
-            await response(scope, receive, send)
-            return
+        if scope["type"] == "http" and scope["path"].startswith("/api/"):
+            user = current_user(HTTPConnection(scope))
+            scope.setdefault("state", {})["user_id"] = user
+            if user is None and scope["path"] not in OPEN_PATHS:
+                response = JSONResponse({"detail": "Sign in first."}, status_code=401)
+                await response(scope, receive, send)
+                return
         await self.app(scope, receive, send)
