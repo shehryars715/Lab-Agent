@@ -29,7 +29,9 @@ def test_a_print_loop_is_stopped_at_the_cap(tmp_path):
 
 
 def test_a_timeout_after_output_returns_text(tmp_path):
-    result = _run(tmp_path, "import time\nprint('started', flush=True)\ntime.sleep(30)\n", timeout=2)
+    # 8 s, not 2: a cold Python start under a busy test run can take more than
+    # 2 s to reach its first print, which made this fail now and then.
+    result = _run(tmp_path, "import time\nprint('started', flush=True)\ntime.sleep(60)\n", timeout=8)
     assert result.timed_out
     assert "started" in result.stdout
     assert isinstance(result.stdout, str)
