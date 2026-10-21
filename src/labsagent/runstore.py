@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -323,11 +324,23 @@ class RunStore:
         lab_number: str,
         root: Path = DEFAULT_ROOT,
         now: datetime | None = None,
+        suffix: str | None = None,
     ) -> "RunStore":
+        """A NEW run directory -- never an existing one.
+
+        It used to be `<seconds>_lab<NN>` with `exist_ok=True`, so two students
+        starting the same lab in the same second shared one directory and got
+        each other's files (audit finding 13). Now the name carries a suffix
+        (the web job id, or a random one) and the directory itself must not
+        exist yet. The timestamp still leads, so sorting by name is still
+        sorting by time.
+        """
         stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%d-%H%M%S")
-        store = cls(dir=Path(root) / f"{stamp}_lab{lab_number}")
+        tail = suffix or secrets.token_hex(4)
+        store = cls(dir=Path(root) / f"{stamp}_lab{lab_number}_{tail}")
+        Path(root).mkdir(parents=True, exist_ok=True)
+        store.dir.mkdir(exist_ok=False)
         for sub in (
-            store.dir,
             store.workspace,
             store.code_dir,
             store.shots_dir,

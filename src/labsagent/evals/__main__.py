@@ -80,7 +80,13 @@ def evaluate(
     )
 
     screenshots = RenderedBackend(theme="light")
-    runs_root = DEFAULT_EVAL_ROOT / "runs"
+    # Through the runner, task folders must live under the runs directory the
+    # runner is allowed to mount; locally, eval runs stay out of runs/.
+    runs_root = (
+        settings.runs_dir
+        if settings.sandbox_backend == "runner"
+        else DEFAULT_EVAL_ROOT / "runs"
+    )
     results = []
 
     for item in cases:

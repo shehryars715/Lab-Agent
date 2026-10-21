@@ -851,6 +851,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "deepagents" },
+    { name = "httpx" },
     { name = "kagglehub" },
     { name = "langchain-deepseek" },
     { name = "matplotlib" },
@@ -876,6 +877,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "deepagents", specifier = ">=0.7.13" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "kagglehub", specifier = ">=1.0.2" },
     { name = "langchain-deepseek", specifier = ">=1.1.0" },
     { name = "matplotlib", specifier = ">=3.11.2" },

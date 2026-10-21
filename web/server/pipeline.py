@@ -26,7 +26,7 @@ from labsagent.blocks import blocks_for
 from labsagent.capture.rendered import RenderedBackend
 from labsagent.data import Acquisition, candidate_tokens, provenance_block, split_refs
 from labsagent.data.sources import acquire, classify
-from labsagent.config import PROJECT_ROOT, Settings
+from labsagent.config import PROJECT_ROOT, Settings, load_settings
 from labsagent.ingest.cover import extract_cover_facts
 from labsagent.ingest.readers import read_document, read_pasted
 from labsagent.emit import DEFAULT_ARTIFACTS, REGISTRY, EmitContext, emit_all
@@ -59,7 +59,9 @@ from .trace import tracing_tools
 # accident should not hold a worker thread until the process exits.
 ASK_TIMEOUT_S = 180.0
 
-RUNS_ROOT = PROJECT_ROOT / "runs"
+# From settings, so the server can put runs at the one path the app and the
+# runner sidecar share (LABSAGENT_RUNS_DIR). Locally it is still ./runs.
+RUNS_ROOT = load_settings().runs_dir.resolve()
 UPLOADS_ROOT = RUNS_ROOT / "_web_uploads"
 
 
@@ -1076,7 +1078,7 @@ def run_job(
         # go. Before the pause, a download commits to whichever dataset the
         # manual happened to name, with no chance to correct it. Inside the
         # solve, it runs once per attempt, and `max_retries_per_task` is 3.
-        store = RunStore.create(spec.lab_number, root=RUNS_ROOT)
+        store = RunStore.create(spec.lab_number, root=RUNS_ROOT, suffix=job.id)
         acquired = _acquire(
             job,
             uploads=dataset_paths or [],

@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     # off only to debug the conversion itself; the workbook is still readable.
     convert_excel_to_csv: bool = True
 
+    # WHERE MODEL-WRITTEN PROGRAMS RUN. "local" is a subprocess on this
+    # machine (development). "runner" sends each run to the runner sidecar
+    # (runner/app.py), which starts a throwaway, network-less container that
+    # sees only the task's own folder. The server sets "runner"; see compose.yaml.
+    sandbox_backend: str = Field(default="local", alias="SANDBOX_BACKEND")
+    runner_url: str = Field(default="http://runner:7000", alias="RUNNER_URL")
+    runner_token: str = Field(default="", alias="RUNNER_TOKEN")
+    # Where runs live. On the server this must be the SAME absolute path in
+    # the app and the runner, because the runner asks the host's Docker to
+    # mount it, and the host resolves the path on the host.
+    runs_dir: Path = Field(default=PROJECT_ROOT / "runs", alias="LABSAGENT_RUNS_DIR")
+
     model_name: str = "deepseek-flash"
     temperature: float = 0.0
     timeout_s: int = 30

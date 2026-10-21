@@ -10,6 +10,7 @@ a document.
 from __future__ import annotations
 
 import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -106,8 +107,35 @@ def _links_of(paragraph) -> tuple[tuple[str, str], ...]:
     return tuple(found)
 
 
+#: What a .docx may unpack to before python-docx is allowed to parse it. A real
+#: lab manual is a few MB with its pictures; the audit's 81 KB bomb made
+#: python-docx reach 4.4 GB of memory parsing an 80 MB document.xml.
+MAX_DOCX_UNPACKED_BYTES = 100 * 1024 * 1024
+
+
+def _refuse_zip_bomb(path: Path) -> None:
+    """Refuse a .docx whose members add up to more than the cap.
+
+    The sizes come from the zip's own directory, which the file's author
+    wrote -- but Python's zipfile never reads past a member's declared size
+    (a member that lies fails its CRC check instead), so for this reader the
+    declared total is a true upper bound.
+    """
+    try:
+        with zipfile.ZipFile(path) as bundle:
+            total = sum(member.file_size for member in bundle.infolist())
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise IngestError(f"could not open {path.name}: {exc}") from exc
+    if total > MAX_DOCX_UNPACKED_BYTES:
+        raise IngestError(
+            f"{path.name} unpacks to {total // 1024 // 1024} MB, which is far more than "
+            "a lab manual. Save it again from Word, or paste the tasks into the message."
+        )
+
+
 def read_manual(path: Path) -> RawManual:
     path = Path(path)
+    _refuse_zip_bomb(path)
     try:
         doc = docx.Document(str(path))
     except Exception as exc:

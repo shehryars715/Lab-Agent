@@ -74,6 +74,10 @@ class ExecResult:
     stderr: str
     duration_s: float
     timed_out: bool
+    #: Output passed `OUTPUT_CAP_BYTES` and was cut there (the program was
+    #: stopped). A runaway print loop once filled 538 MB in 10 s and took the
+    #: whole 1 GB server down with it.
+    truncated: bool = False
 
     @property
     def ok(self) -> bool:

@@ -227,6 +227,11 @@ def build_tools(
         parts = [f"exit_code: {outcome.result.exit_code}"]
         if outcome.result.timed_out:
             parts.append(f"TIMED OUT after {timeout_s}s")
+        if outcome.result.truncated:
+            parts.append(
+                "OUTPUT CUT OFF: the program printed more than 2 MB and was stopped. "
+                "Look for a loop that never ends or prints far too much."
+            )
         parts.append(f"stdout:\n{outcome.result.stdout or '(empty)'}")
         if outcome.result.stderr.strip():
             parts.append(f"stderr:\n{outcome.result.stderr}")

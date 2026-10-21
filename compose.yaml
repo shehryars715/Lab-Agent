@@ -1,22 +1,82 @@
-# One server, two containers.
+# One server, four containers.
 #
-#   internet --443--> caddy --http--> app:8000
+#   internet --443--> caddy --http--> app:8000 --http--> runner:7000 --docker.sock--> program
 #
 # Caddy owns the public ports and the HTTPS certificate; the app publishes no
-# port at all, so the only way in is through Caddy. Both read .env from this
-# directory: the app for its keys and the sign-in, Caddy for SITE_ADDRESS.
+# port at all, so the only way in is through Caddy. The runner publishes none
+# either: only the app can reach it, and only with RUNNER_TOKEN.
+#
+# Each program the model writes runs in its own throwaway container, started by
+# the runner (runner/app.py) from the app's own image -- so the libraries a
+# program sees are exactly the app's. That container has no network and sees
+# only its own task folder.
 #
 #   docker compose up -d --build     first run, and after every `git pull`
 #   docker compose logs -f app       watch a run
+#
+# RUNS LIVE AT THE SAME ABSOLUTE PATH IN EVERY CONTAINER (LABSAGENT_RUNS_DIR,
+# default /srv/labsagent/runs). The runner asks the HOST's Docker to mount a
+# task folder, and the host resolves that path on the host. A named volume, or
+# a different path inside the app, would make it mount nothing (or the wrong
+# thing).
+x-runs: &runs ${LABSAGENT_RUNS_DIR:-/srv/labsagent/runs}
+
 services:
+  # Creates the runs folder owned by the app's user (uid 1000) and exits. Done
+  # here rather than as a manual step on the host, so a fresh machine works.
+  runs-init:
+    image: busybox:1.36
+    command: ["sh", "-c", "chown 1000:1000 \"$$D\""]
+    environment:
+      D: *runs
+    volumes:
+      - type: bind
+        source: *runs
+        target: *runs
+        bind:
+          create_host_path: true
+
   app:
     build: .
+    # Named, because the runner starts program containers from this image.
+    image: labsagent-app
     env_file: .env
+    environment:
+      SANDBOX_BACKEND: runner
+      RUNNER_URL: http://runner:7000
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env}
+      LABSAGENT_RUNS_DIR: *runs
     restart: unless-stopped
+    # A tiny init as PID 1 reaps orphaned processes (audit finding 6).
+    init: true
+    depends_on:
+      runs-init:
+        condition: service_completed_successfully
+      runner:
+        condition: service_started
     volumes:
-      # Past runs survive a rebuild. Without this they live in the container
-      # and vanish with it on every deploy.
-      - runs:/app/runs
+      - type: bind
+        source: *runs
+        target: *runs
+
+  runner:
+    build: ./runner
+    restart: unless-stopped
+    # Only what the runner needs -- NOT env_file. It never sees the model key.
+    environment:
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env (python -c "import secrets; print(secrets.token_urlsafe(32))")}
+      RUNS_DIR: *runs
+      SANDBOX_IMAGE: labsagent-app
+    depends_on:
+      runs-init:
+        condition: service_completed_successfully
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read-only: the runner only checks that a task folder exists.
+      - type: bind
+        source: *runs
+        target: *runs
+        read_only: true
 
   caddy:
     image: caddy:2
@@ -36,6 +96,5 @@ services:
       - caddy_config:/config
 
 volumes:
-  runs:
   caddy_data:
   caddy_config:

@@ -67,7 +67,7 @@ from labsagent.prerequisites import solver_lines
 from labsagent.runner import run_sections
 from labsagent.runner import run_solution as _run_file
 from labsagent.runstore import RunStore, pending_tasks
-from labsagent.sandbox.local import LocalSandbox
+from labsagent.sandbox import make_sandbox
 from labsagent.usage import RunUsage
 
 # Moved to `intent.py`, which needs the same scan to work out what a scoped
@@ -599,7 +599,7 @@ def solve_task(
 
         # A fresh sandbox handle and agent per attempt: the agent's context is
         # reset, so its workspace view should be too.
-        with LocalSandbox(workdir=workspace, keep=True) as sandbox:
+        with make_sandbox(settings, workspace) as sandbox:
             result = None
             agent, recorder = build_solver(
                 sandbox, settings, model=fast_variant(model, settings) if fast else model

@@ -4,6 +4,8 @@ report writer that cannot print raw JSON. Offline -- no model, no network."""
 
 from __future__ import annotations
 
+import itertools
+
 import sys
 import zipfile
 from dataclasses import replace
@@ -313,9 +315,14 @@ def test_card_answers_never_become_notes_or_downloads():
     assert dataset_refs_in(answers) == []
 
 
+_JOB_IDS = itertools.count()
+
+
 class _AnsweringJob(Job):
     def __init__(self, answers: dict) -> None:
-        super().__init__("test")
+        # A fresh id each time, as JobRegistry guarantees: the run directory
+        # carries the job id and must not already exist.
+        super().__init__(f"test{next(_JOB_IDS)}")
         self.canned = answers
         self.asked: list = []
 

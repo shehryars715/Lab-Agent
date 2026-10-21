@@ -16,12 +16,13 @@ could plausibly answer. So the guard is not "looks like a URL" but:
   - a byte cap enforced while streaming, not after
   - a connect and read timeout, so a slow endpoint cannot hold a worker thread
 
-The known gap is DNS rebinding: we resolve the name to check it, and urllib
-resolves it again to connect, so a hostile resolver could answer differently the
-second time. Closing that needs connection-level address pinning, which is a
-real amount of code for a tool that today runs on one machine for one person.
-Recorded here rather than left to be discovered -- and it is the thing to fix
-first if this ever serves more than one user.
+DNS REBINDING IS CLOSED BY PINNING (2026-10-21, for public sign-up). It used
+to be: resolve the name to check it, then let urllib resolve it AGAIN to
+connect -- and a hostile resolver can answer a public address the first time
+and 169.254.169.254 the second. Now the connection itself resolves, checks
+and connects to the SAME address (`_Pinned*Connection`), so there is no second
+answer to trust. HTTPS still verifies the certificate against the hostname.
+Proxies are switched off: a proxy would make the checked address the proxy's.
 
 ARCHIVES ARE EXTRACTED WITH THE SAME SUSPICION. A zip entry named
 "../../.ssh/authorized_keys" is the oldest trick there is; every member is
@@ -30,6 +31,7 @@ resolved and checked to be inside the destination before anything is written.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import os
 import re
@@ -52,6 +54,11 @@ FETCH_TIMEOUT_S = 30
 #: How many files we keep out of one archive or Kaggle dataset. A Kaggle
 #: release can hold hundreds; the prompt can carry a handful.
 MAX_FILES_PER_REF = 8
+
+#: Everything one archive may unpack to, counted as it is written, and how
+#: many members it may have. Far above a real dataset, far below a full disk.
+MAX_ARCHIVE_BYTES = 500 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 2000
 
 #: "owner/dataset-name" and nothing else -- no scheme, no spaces, exactly one
 #: slash. Narrow on purpose: "data/train.csv" is a path, not a Kaggle slug, and
@@ -349,11 +356,21 @@ def _check_public(url: str) -> None:
 
     if not host:
         raise DataError(f"no host in {url!r}")
+    _vetted_address(host, port or (443 if parsed.scheme == "https" else 80))
 
+
+def _vetted_address(host: str, port: int) -> str:
+    """Resolve `host` once, refuse it unless EVERY answer is public, return one.
+
+    Every answer, not just the one we use: a name that resolves to a public and
+    a private address is someone hedging their bets.
+    """
     try:
-        infos = socket.getaddrinfo(host, port or (443 if parsed.scheme == "https" else 80))
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise DataError(f"could not resolve {host}: {exc}") from exc
+    if not infos:
+        raise DataError(f"could not resolve {host}")
 
     for info in infos:
         address = ipaddress.ip_address(info[4][0])
@@ -369,6 +386,36 @@ def _check_public(url: str) -> None:
                 f"refusing to fetch {host}: it resolves to {address}, which is not a "
                 "public address. If that file is on this machine, attach it instead."
             )
+    return infos[0][4][0]
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Connects to the address it just checked -- never a fresh lookup."""
+
+    def connect(self) -> None:
+        address = _vetted_address(self.host, self.port)
+        self.sock = socket.create_connection(
+            (address, self.port), self.timeout, self.source_address
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self) -> None:
+        address = _vetted_address(self.host, self.port)
+        sock = socket.create_connection((address, self.port), self.timeout, self.source_address)
+        # server_hostname is the NAME, so the certificate is still checked
+        # against what the manual asked for, not against a bare IP.
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req, context=self._context)
 
 
 class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
@@ -440,7 +487,12 @@ def from_url(
     """Stream an http(s) URL to disk, refusing anything non-public or oversized."""
     _check_public(ref)
 
-    opener = urllib.request.build_opener(_GuardedRedirect())
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _PinnedHTTPHandler(),
+        _PinnedHTTPSHandler(),
+        _GuardedRedirect(),
+    )
     request = urllib.request.Request(ref, headers={"User-Agent": USER_AGENT})
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -633,11 +685,20 @@ def _from_zip(
     staging.mkdir(parents=True, exist_ok=True)
     root = staging.resolve()
 
+    # A ZIP BOMB IS COUNTED, NOT TRUSTED. An 81 KB zip expanded 1,027x in the
+    # audit (finding 3). The sizes in the zip's own directory are written by
+    # whoever made the file, so the cap is enforced on the bytes actually
+    # written, while writing, across all members together.
+    written = 0
     try:
         with zipfile.ZipFile(archive) as bundle:
-            for member in bundle.infolist():
-                if member.is_dir():
-                    continue
+            members = [m for m in bundle.infolist() if not m.is_dir()]
+            if len(members) > MAX_ARCHIVE_MEMBERS:
+                raise DataError(
+                    f"{archive.name} holds {len(members)} files; I unpack at most "
+                    f"{MAX_ARCHIVE_MEMBERS}."
+                )
+            for member in members:
                 target = (staging / member.filename).resolve()
                 if root != target and root not in target.parents:
                     raise DataError(
@@ -646,9 +707,21 @@ def _from_zip(
                     )
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with bundle.open(member) as src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
+                    while chunk := src.read(1 << 16):
+                        written += len(chunk)
+                        if written > MAX_ARCHIVE_BYTES:
+                            raise DataError(
+                                f"{archive.name} unpacks to more than "
+                                f"{MAX_ARCHIVE_BYTES // 1024 // 1024} MB, so I stopped "
+                                "unpacking it. Send the data files themselves instead."
+                            )
+                        dst.write(chunk)
     except zipfile.BadZipFile as exc:
+        shutil.rmtree(staging, ignore_errors=True)
         raise DataError(f"{archive.name} is not a readable zip: {exc}") from exc
+    except DataError:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
     found, refused = _adopt_each(
         _pick(list(staging.rglob("*"))), dest_dir, origin, ref, taken, convert_excel

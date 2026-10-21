@@ -14,5 +14,11 @@
 	# buffering it, and the run stream is server-sent events that must reach
 	# the browser the moment each one is written. Caddy flushes
 	# text/event-stream immediately as long as nothing sits in between.
+	# The largest request we accept: a manual (25 MB) plus up to 8 data files
+	# is checked again by the app, but stopping a 5 GB body here means it is
+	# never streamed into the app at all.
+	request_body {
+		max_size 120MB
+	}
 	reverse_proxy app:8000
 }

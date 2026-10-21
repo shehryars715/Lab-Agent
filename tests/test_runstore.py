@@ -80,7 +80,7 @@ def test_create_makes_the_full_tree(tmp_path):
     for d in (store.workspace, store.code_dir, store.shots_dir,
               store.report_dir, store.logs_dir):
         assert d.is_dir()
-    assert store.run_id.endswith("_lab03")
+    assert "_lab03_" in store.run_id
 
 
 def test_save_then_load(tmp_path):
@@ -265,3 +265,18 @@ def test_reset_workspace_on_a_missing_directory_is_a_no_op(tmp_path):
     from labsagent.runstore import RunStore
 
     RunStore.reset_workspace(tmp_path / "nope", keep=set())
+
+
+def test_two_runs_in_the_same_second_get_different_directories(tmp_path):
+    now = datetime(2026, 10, 21, 9, 0, 0, tzinfo=timezone.utc)
+    a = RunStore.create("03", root=tmp_path, now=now)
+    b = RunStore.create("03", root=tmp_path, now=now)
+    assert a.dir != b.dir
+
+
+def test_a_suffix_names_the_run_and_cannot_be_reused(tmp_path):
+    now = datetime(2026, 10, 21, 9, 0, 0, tzinfo=timezone.utc)
+    store = RunStore.create("03", root=tmp_path, now=now, suffix="job123")
+    assert store.run_id == "20261021-090000_lab03_job123"
+    with pytest.raises(FileExistsError):
+        RunStore.create("03", root=tmp_path, now=now, suffix="job123")

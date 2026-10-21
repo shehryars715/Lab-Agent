@@ -1,0 +1,3 @@
+# The runner's only dependency. Everything else is the standard library, on
+# purpose: this process holds the Docker socket, so less code is less to trust.
+docker==7.1.0

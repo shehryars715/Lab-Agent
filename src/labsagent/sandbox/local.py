@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 from labsagent.errors import SandboxError
 from labsagent.models import ExecResult
-from labsagent.sandbox.base import DEFAULT_TIMEOUT_S
+from labsagent.sandbox.base import DEFAULT_TIMEOUT_S, OUTPUT_CAP_BYTES
 
 # WHAT A PROGRAM INHERITS: AN ALLOWLIST, NEVER THE SERVER'S ENVIRONMENT.
 #
@@ -55,6 +57,115 @@ def program_env() -> dict[str, str]:
     return env
 
 
+def _drain(
+    proc: subprocess.Popen, stdin: str | None, timeout: float
+) -> tuple[bytes, bytes, bool]:
+    """Collect a process's output until it exits, times out, or passes the cap.
+
+    One thread per pipe: reading one pipe to the end while the other fills
+    deadlocks as soon as the child blocks writing to the full one. Returns with
+    `proc.returncode` still None on a timeout or a cap stop; the caller kills.
+    """
+    buffers = (bytearray(), bytearray())
+    total = [0]
+    lock = threading.Lock()
+    over = threading.Event()
+
+    def pump(pipe, buffer: bytearray) -> None:
+        try:
+            while chunk := pipe.read1(65536):
+                with lock:
+                    room = OUTPUT_CAP_BYTES - total[0]
+                    if room <= 0:
+                        over.set()
+                        return
+                    buffer.extend(chunk[:room])
+                    total[0] += len(chunk)
+                    if total[0] > OUTPUT_CAP_BYTES:
+                        over.set()
+                        return
+        except (OSError, ValueError):
+            return
+
+    readers = [
+        threading.Thread(target=pump, args=(proc.stdout, buffers[0]), daemon=True),
+        threading.Thread(target=pump, args=(proc.stderr, buffers[1]), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+
+    if proc.stdin is not None:
+        def feed() -> None:
+            try:
+                proc.stdin.write((stdin or "").encode("utf-8"))
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+
+        threading.Thread(target=feed, daemon=True).start()
+
+    deadline = time.monotonic() + timeout
+    while not over.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            proc.wait(timeout=min(0.1, remaining))
+            break
+        except subprocess.TimeoutExpired:
+            continue
+
+    truncated = over.is_set()
+    if proc.returncode is not None and not truncated:
+        # Exited on its own: the pipes reach EOF promptly unless a grandchild
+        # kept them open, which is what the bounded join is for.
+        for reader in readers:
+            reader.join(timeout=2)
+        truncated = over.is_set()
+    if truncated and proc.returncode is not None:
+        # It finished, but only after flooding past the cap; report the stop.
+        proc.returncode = None
+    return bytes(buffers[0]), bytes(buffers[1]), truncated
+
+
+def _text(raw: bytes) -> str:
+    """Bytes to text the way `text=True` did: UTF-8, universal newlines.
+
+    Windows programs end lines with CRLF; every consumer (transcripts,
+    screenshots, tests) expects LF, which is what text mode used to give.
+    """
+    return raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the program and everything it started, then reap it."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=10,
+            )
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    for pipe in (proc.stdout, proc.stderr, proc.stdin):
+        try:
+            if pipe is not None:
+                pipe.close()
+        except OSError:
+            pass
+
+
 class LocalSandbox:
     """Runs commands in a scratch directory using the current interpreter."""
 
@@ -88,7 +199,9 @@ class LocalSandbox:
         else:
             target = (self._workdir / str(path).lstrip("/\\")).resolve()
         # Keep writes inside the workspace even if the agent proposes "../".
-        if not str(target).startswith(str(self._workdir.resolve())):
+        # is_relative_to, not a string prefix: "task1" is a prefix of "task10",
+        # so the old check let task1 reach task10/.
+        if not target.is_relative_to(self._workdir):
             raise SandboxError(f"path escapes workspace: {path}")
         return target
 
@@ -120,37 +233,49 @@ class LocalSandbox:
             raise SandboxError("sandbox is closed")
 
         resolved = [sys.executable if c == "python" else c for c in cmd]
-        env = program_env()
         started = time.monotonic()
+        # STREAMED, NOT `capture_output=True`. capture_output buffers without
+        # limit, so a print loop grows the SERVER's memory until the kernel
+        # kills it. Reading in chunks lets us count and stop at the cap.
+        #
+        # Its own process group/session, so a timeout kills the program's
+        # children too -- killing only the direct child left grandchildren
+        # spinning with nothing to reap them (audit finding 6).
+        group = (
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        )
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 resolved,
                 cwd=self._workdir,
-                env=env,
-                input=stdin,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except subprocess.TimeoutExpired as exc:
-            return ExecResult(
-                exit_code=-1,
-                stdout=exc.stdout or "",
-                stderr=(exc.stderr or "") + f"\n[timed out after {timeout}s]",
-                duration_s=time.monotonic() - started,
-                timed_out=True,
+                env=program_env(),
+                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **group,
             )
         except OSError as exc:
             raise SandboxError(f"could not launch {resolved[0]!r}: {exc}") from exc
 
+        out, err, truncated = _drain(proc, stdin, timeout)
+        timed_out = proc.returncode is None and not truncated
+        if timed_out or truncated:
+            _kill_tree(proc)
+        stderr = _text(err)
+        if timed_out:
+            stderr += f"\n[timed out after {timeout}s]"
         return ExecResult(
-            exit_code=proc.returncode,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
+            exit_code=-1 if (timed_out or truncated) else proc.returncode,
+            # Decoded on every path. On Linux `TimeoutExpired.stdout` is bytes
+            # even with text=True, which used to crash the run tool on exactly
+            # the timeouts it exists to report (audit finding 5).
+            stdout=_text(out),
+            stderr=stderr,
             duration_s=time.monotonic() - started,
-            timed_out=False,
+            timed_out=timed_out,
+            truncated=truncated,
         )
 
     def close(self) -> None:

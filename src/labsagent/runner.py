@@ -170,6 +170,7 @@ def run_solution(
         stderr=_clean_stderr(raw.stderr),
         duration_s=raw.duration_s,
         timed_out=raw.timed_out,
+        truncated=raw.truncated,
     )
 
     return RunOutcome(

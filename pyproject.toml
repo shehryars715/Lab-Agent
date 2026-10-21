@@ -9,6 +9,9 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "deepagents>=0.7.13",
+    # The runner sandbox talks to its sidecar over HTTP. Already arriving via
+    # langchain; named here so it stops being luck (the pandas/tiktoken lesson).
+    "httpx>=0.28",
     # Only used when a lab says to download its data from Kaggle. The
     # import is guarded anyway (see data/sources.py), so a stripped
     # install still runs -- a Kaggle reference just fails with a

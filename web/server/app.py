@@ -155,6 +155,31 @@ def logout(response: Response) -> dict:
 # --------------------------------------------------------------------- runs
 
 
+async def _save_capped(upload: UploadFile, target: Path, limit: int) -> int:
+    """Copy an upload to disk in chunks, stopping the moment it passes `limit`.
+
+    `await upload.read()` used to pull the whole file into memory BEFORE the
+    size check (audit finding 4) -- so the check guarded the disk but not the
+    1 GB server's memory. Starlette has already spooled the body to a temp
+    file; this copies it out 1 MB at a time. Returns the bytes written.
+    """
+    written = 0
+    try:
+        with target.open("wb") as handle:
+            while chunk := await upload.read(1 << 20):
+                written += len(chunk)
+                if written > limit:
+                    raise HTTPException(
+                        413,
+                        f"{target.name} is larger than {limit // 1024 // 1024} MB.",
+                    )
+                handle.write(chunk)
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        raise
+    return written
+
+
 async def _save_datasets(uploads, upload_dir: Path) -> list[Path]:
     """Validate and store attached data files. Returns where they landed.
 
@@ -186,13 +211,8 @@ async def _save_datasets(uploads, upload_dir: Path) -> list[Path]:
                 f"I cannot read {filename} as data. Data files can be: "
                 f"{', '.join(DATA_SUFFIXES)}.",
             )
-        blob = await upload.read()
-        if len(blob) > MAX_DATA_BYTES:
-            raise HTTPException(
-                413, f"{filename} is larger than {MAX_DATA_BYTES // 1024 // 1024} MB."
-            )
         target = upload_dir / filename
-        target.write_bytes(blob)
+        await _save_capped(upload, target, MAX_DATA_BYTES)
         saved.append(target)
 
     return saved
@@ -221,7 +241,9 @@ async def create_run(
     manual_bytes = b""
     manual_name = ""
     if has_manual:
-        manual_bytes = await manual.read()
+        # At most one byte past the cap: enough to know it is too big without
+        # pulling a 120 MB body into memory to find out.
+        manual_bytes = await manual.read(MAX_UPLOAD_BYTES + 1)
         if len(manual_bytes) > MAX_UPLOAD_BYTES:
             raise HTTPException(
                 413, f"File is larger than {MAX_UPLOAD_BYTES // 1024 // 1024} MB."

@@ -14,6 +14,11 @@ from labsagent.models import ExecResult
 
 DEFAULT_TIMEOUT_S = 30
 
+# Combined stdout+stderr a program may print before it is stopped. A lab's real
+# output is kilobytes; 2 MB is far above any honest program and far below what
+# kills a 1 GB server. Both backends enforce it and set `ExecResult.truncated`.
+OUTPUT_CAP_BYTES = 2_000_000
+
 
 @runtime_checkable
 class Sandbox(Protocol):
