@@ -54,6 +54,7 @@ function headline(run, stages, waiting) {
     return s.failed === 0 ? 'Your draft is ready to check' : `${s.passed} of ${s.total} tasks solved`
   }
   if (waiting) return 'Your turn — a quick check'
+  if (run.queued > 0 && !run.error) return `Queued · ${run.queued} ahead`
   const active = stages.find((st) => st.state === 'running')
   if (active?.key === 'solve' && run.progress.total) {
     return `Solving task ${Math.min(run.progress.done + 1, run.progress.total)} of ${run.progress.total}`
@@ -70,6 +71,9 @@ function subline(run, waiting) {
     return 'The failed ones are marked in the report, so you can see exactly where.'
   }
   if (waiting) return 'Nothing gets written until you answer.'
+  if (run.queued > 0 && !run.error) {
+    return 'Waiting for a free slot. Another lab is solving; yours starts when it finishes.'
+  }
   return null
 }
 
@@ -181,7 +185,7 @@ export default function RunPanel({
           </h2>
           {(!run.summary || subline(run, parked)) && (
             <p className="run-sub">
-              {!run.summary && statusLine ? (
+              {!run.summary && statusLine && !(run.queued > 0) ? (
                 <span className="status-line" key={statusLine}>
                   {statusLine}
                 </span>

@@ -40,6 +40,7 @@ from labsagent.data import DATA_SUFFIXES
 from labsagent.ingest.readers import ACCEPTED_SUFFIXES
 
 from .pipeline import UPLOADS_ROOT, repackage_job, revise_job, run_job
+from .slots import SOLVE_SLOTS
 
 # The upload ceiling. A lab manual is tens of kilobytes; this exists to turn a
 # wrong-file-selected mistake into a fast error rather than a slow one.
@@ -105,6 +106,8 @@ def health() -> dict:
         "model": settings.model_name,
         "api_key_configured": settings.configured,
         "ui_built": UI_DIST.is_dir(),
+        # How busy the solve queue is: what to curl when labs seem slow.
+        "solves": SOLVE_SLOTS.stats(),
     }
 
 

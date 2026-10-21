@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # mount it, and the host resolves the path on the host.
     runs_dir: Path = Field(default=PROJECT_ROOT / "runs", alias="LABSAGENT_RUNS_DIR")
 
+    # How many labs may SOLVE at once (reading and questions never wait). One,
+    # because a solve plus its program container is most of a 1 GB server.
+    max_concurrent_solves: int = 1
+
     model_name: str = "deepseek-flash"
     temperature: float = 0.0
     timeout_s: int = 30

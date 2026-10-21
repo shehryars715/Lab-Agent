@@ -228,8 +228,14 @@ export function reduce(state, frame) {
   const base = { ...state, seq: frame.seq ?? state.seq }
 
   switch (frame.type) {
+    // Any phase after a wait means the lab got its slot, so the queue line goes.
     case 'phase':
-      return patchRun(base, { phase: frame.key, phaseLabel: frame.label })
+      return patchRun(base, { phase: frame.key, phaseLabel: frame.label, queued: null })
+
+    // Another lab is solving; this one waits its turn. `ahead` counts the
+    // labs that finish before this one starts, and only ever goes down.
+    case 'queued':
+      return patchRun(base, { queued: frame.ahead })
 
     // What kind of follow-up this turned out to be. A QUESTION changes no
     // files, so it must not replace the result on screen: the empty run entry

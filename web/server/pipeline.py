@@ -52,6 +52,7 @@ from labsagent.usage import RunUsage
 from .briefing import read_briefing
 from .jobs import Job
 from .revise import answer_question, read_revision
+from .slots import SOLVE_SLOTS
 from .trace import tracing_tools
 
 # How long the browser gets to answer before the run continues without it.
@@ -848,6 +849,11 @@ def _emit(
     return [name for name, _ in failed]
 
 
+def _queued(job: Job):
+    """Tell the browser where this lab is in the solve queue."""
+    return lambda ahead: job.publish({"type": "queued", "ahead": ahead})
+
+
 def run_job(
     job: Job,
     *,
@@ -1126,40 +1132,43 @@ def run_job(
         data_failures = list(acquired.failures)
 
         # -- 5. solve ------------------------------------------------------
-        job.phase("solving", "Solving each task")
+        # ONLY THE SOLVE WAITS FOR A SLOT (slots.py). Reading and questions
+        # already happened; the files are written after the slot is free.
+        with SOLVE_SLOTS.hold(on_wait=_queued(job)):
+            job.phase("solving", "Solving each task")
 
-        # Two consumers, and the core knows about neither. `Emitter` fans out
-        # and swallows a failing consumer's exception, so a bug in the web
-        # renderer cannot take down a run that is otherwise going fine.
-        recorder = ev.Recorder()
-        emitter = ev.Emitter(
-            lambda event: job.publish({"type": "event", "event": wire_event(event)}),
-            recorder,
-        )
-
-        # `tracing_tools` is scoped around the whole solve phase, and the
-        # tracer is told which task is running by these same task-level
-        # events. A tool callback does not know its own task; the event
-        # stream does. Both arrive on this thread, in order.
-        def note_current_task(event: ev.Event) -> None:
-            if isinstance(event, ev.TaskStarted):
-                tracer.task_id = event.task_id
-
-        screenshots = screenshot_backend(spec, manual, reading.kind, manual_path)
-        with tracing_tools(job.publish) as tracer:
-            emitter.subscribe(note_current_task)
-            manifest = run_lab(
-                spec,
-                store,
-                settings,
-                screenshots,
-                emitter=emitter,
-                usage=usage,
-                model=build_model(settings),
-                explainer=_only_when_wanted(build_explainer(settings, usage), reading.plans),
-                datasets=datasets,
-                data_failures=data_failures,
+            # Two consumers, and the core knows about neither. `Emitter` fans out
+            # and swallows a failing consumer's exception, so a bug in the web
+            # renderer cannot take down a run that is otherwise going fine.
+            recorder = ev.Recorder()
+            emitter = ev.Emitter(
+                lambda event: job.publish({"type": "event", "event": wire_event(event)}),
+                recorder,
             )
+
+            # `tracing_tools` is scoped around the whole solve phase, and the
+            # tracer is told which task is running by these same task-level
+            # events. A tool callback does not know its own task; the event
+            # stream does. Both arrive on this thread, in order.
+            def note_current_task(event: ev.Event) -> None:
+                if isinstance(event, ev.TaskStarted):
+                    tracer.task_id = event.task_id
+
+            screenshots = screenshot_backend(spec, manual, reading.kind, manual_path)
+            with tracing_tools(job.publish) as tracer:
+                emitter.subscribe(note_current_task)
+                manifest = run_lab(
+                    spec,
+                    store,
+                    settings,
+                    screenshots,
+                    emitter=emitter,
+                    usage=usage,
+                    model=build_model(settings),
+                    explainer=_only_when_wanted(build_explainer(settings, usage), reading.plans),
+                    datasets=datasets,
+                    data_failures=data_failures,
+                )
 
         # Remember what a revision would need. A re-run has to reach the same
         # run directory, the same manual and the same cover decisions, and
@@ -1421,25 +1430,26 @@ def revise_job(job: Job, feedback: str) -> None:
                 if isinstance(event, ev.TaskStarted):
                     tracer.task_id = event.task_id
 
-            job.phase("solving", "Updating the tasks")
-            with tracing_tools(job.publish) as tracer:
-                emitter.subscribe(note_current_task)
-                manifest = run_lab(
-                    manifest.spec,
-                    store,
-                    settings,
-                    context.screenshots or RenderedBackend(),
-                    emitter=emitter,
-                    usage=usage,
-                    model=build_model(settings),
-                    resume=True,
-                    explainer=_only_when_wanted(
-                        build_explainer(settings, usage), context.plans
-                    ),
-                    # The same files, not a fresh download: a live URL is not
-                    # guaranteed to serve the same bytes twice.
-                    datasets=context.datasets,
-                )
+            with SOLVE_SLOTS.hold(on_wait=_queued(job)):
+                job.phase("solving", "Updating the tasks")
+                with tracing_tools(job.publish) as tracer:
+                    emitter.subscribe(note_current_task)
+                    manifest = run_lab(
+                        manifest.spec,
+                        store,
+                        settings,
+                        context.screenshots or RenderedBackend(),
+                        emitter=emitter,
+                        usage=usage,
+                        model=build_model(settings),
+                        resume=True,
+                        explainer=_only_when_wanted(
+                            build_explainer(settings, usage), context.plans
+                        ),
+                        # The same files, not a fresh download: a live URL is not
+                        # guaranteed to serve the same bytes twice.
+                        datasets=context.datasets,
+                    )
             # run_lab resumes in task order of completion; put them back in
             # the order the lab lists them.
             order = [t.id for t in manifest.spec.tasks]

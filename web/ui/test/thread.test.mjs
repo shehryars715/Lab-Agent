@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
+import { stagesFor } from '../src/lib/stages.js'
 import { initial, lastRun, reduce } from '../src/lib/thread.js'
 
 function play(frames, from = initial) {
@@ -239,4 +240,34 @@ test('a user message is appended as a bubble', () => {
 test('nothing is rendered before a run starts', () => {
   assert.deepEqual(initial.entries, [])
   assert.equal(lastRun(initial), null)
+})
+
+// ---- the solve queue ----------------------------------------------------
+
+
+const QUEUED = [
+  START,
+  { type: 'phase', key: 'reading', label: 'Reading the manual', seq: 1 },
+  { type: 'phase', key: 'planning', label: 'Working out what to ask', seq: 2 },
+  { type: 'queued', ahead: 2, seq: 3 },
+]
+
+test('a queued lab shows its place, with the solve pending, not running', () => {
+  const run = lastRun(play(QUEUED)).state
+  assert.equal(run.queued, 2)
+  const solve = stagesFor(run, null).find((s) => s.key === 'solve')
+  assert.equal(solve.state, 'pending')
+  assert.equal(solve.detail, 'Queued · 2 ahead')
+  assert.ok(stagesFor(run, null).filter((s) => s.state === 'running').length === 0)
+})
+
+test('the place goes down, then the solving phase clears the queue', () => {
+  const state = play([
+    ...QUEUED,
+    { type: 'queued', ahead: 1, seq: 4 },
+    { type: 'phase', key: 'solving', label: 'Solving each task', seq: 5 },
+  ])
+  const run = lastRun(state).state
+  assert.equal(run.queued, null)
+  assert.equal(stagesFor(run, null).find((s) => s.key === 'solve').state, 'running')
 })

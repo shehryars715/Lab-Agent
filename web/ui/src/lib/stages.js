@@ -75,6 +75,13 @@ export function stagesFor(run, question, { waiting = false, revision = false } =
     state = { read: 'done', plan: 'done', brief: 'done', solve: 'done', package: 'running' }
   }
 
+  // Waiting for a solve slot: everything before the solve is done, and the
+  // solve itself has not started -- PENDING, not running, because nothing is.
+  const queued = !finished && !failed && run.queued > 0
+  if (queued) {
+    state = { read: 'done', plan: 'done', brief: 'done', solve: 'pending', package: 'pending' }
+  }
+
   if (revision) {
     state.read = 'skipped'
     state.brief = 'skipped'
@@ -97,7 +104,7 @@ export function stagesFor(run, question, { waiting = false, revision = false } =
     read: run.lab ? plural(run.lab.task_count ?? run.order.length, 'task') : null,
     plan: null,
     brief: waiting ? 'Your turn' : state.brief === 'running' ? 'Data' : null,
-    solve: solveDetail,
+    solve: queued ? `Queued · ${run.queued} ahead` : solveDetail,
     package: files ? plural(files, 'file') : null,
   }
 
