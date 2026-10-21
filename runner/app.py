@@ -155,6 +155,19 @@ def run(task_dir: str, argv: list[str], timeout: int) -> dict:
         # Attached BEFORE start, so not a byte of early output is missed.
         stream = container.attach(stdout=True, stderr=True, stream=True, demux=True, logs=False)
 
+        def kill() -> None:
+            try:
+                container.kill()
+            except docker.errors.APIError:
+                pass
+
+        # KEEP READING AFTER THE CAP, AND KILL FROM ANOTHER THREAD. The first
+        # version stopped reading the moment it passed the cap and called
+        # kill(). The program then blocked writing to a full pipe, and Docker
+        # 29.8 (the server's; Docker Desktop did not show it) would not finish
+        # the kill while that output was still undelivered: the kill, the
+        # container and every later `docker inspect` of it hung. So the
+        # reader drains to the end, discarding, and the kill runs beside it.
         def pump() -> None:
             total = 0
             try:
@@ -163,15 +176,12 @@ def run(task_dir: str, argv: list[str], timeout: int) -> dict:
                         if not chunk:
                             continue
                         room = OUTPUT_CAP_BYTES - total
-                        buffer.extend(chunk[: max(room, 0)])
+                        if room > 0:
+                            buffer.extend(chunk[:room])
                         total += len(chunk)
                         if total > OUTPUT_CAP_BYTES and not over.is_set():
                             over.set()
-                            try:
-                                container.kill()
-                            except docker.errors.APIError:
-                                pass
-                            return
+                            threading.Thread(target=kill, daemon=True).start()
             except Exception:  # noqa: BLE001 -- the stream ends when the container does
                 return
 
@@ -185,11 +195,8 @@ def run(task_dir: str, argv: list[str], timeout: int) -> dict:
             exit_code = int(container.wait(timeout=timeout).get("StatusCode", -1))
         except Exception:  # noqa: BLE001 -- requests' ReadTimeout: the program is still going
             timed_out = not over.is_set()
-            try:
-                container.kill()
-            except docker.errors.APIError:
-                pass
-        reader.join(timeout=5)
+            kill()
+        reader.join(timeout=10)
         truncated = over.is_set()
         stderr = err.decode("utf-8", errors="replace")
         if timed_out:
