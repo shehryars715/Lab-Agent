@@ -863,6 +863,7 @@ def run_job(
     profile_seed: dict[str, str],
     settings: Settings,
     dataset_paths: list[Path] | None = None,
+    usage: RunUsage | None = None,
 ) -> None:
     """Do the work. Runs on a worker thread; never raises.
 
@@ -876,7 +877,9 @@ def run_job(
             job.finish(error="DEEPSEEK_API_KEY is not set. Add it to .env and restart.")
             return
 
-        usage = RunUsage(model=settings.model_name)
+        # Passed in when the run is metered (metering.py), so the charge can
+        # be read back even if this function dies half way.
+        usage = usage if usage is not None else RunUsage(model=settings.model_name)
 
         # -- 1. read ------------------------------------------------------
         job.phase("reading", "Reading what you sent")
@@ -1308,7 +1311,12 @@ def _rewrite(context: RunContext, outcomes, followup, usage: RunUsage) -> None:
             outcome.answers = list(written.answers) or outcome.answers
 
 
-def revise_job(job: Job, feedback: str) -> None:
+def revise_job(
+    job: Job,
+    feedback: str,
+    usage: RunUsage | None = None,
+    cap_usd: float | None = None,
+) -> None:
     """Handle a follow-up on a finished run, in the same run directory.
 
     Same contract as `run_job`: never raises, always ends in `job.finish()`.
@@ -1327,8 +1335,16 @@ def revise_job(job: Job, feedback: str) -> None:
 
     try:
         settings = context.settings
+        if cap_usd is not None:
+            # This follow-up's own ceiling: what its credit hold can pay for.
+            settings = settings.model_copy(
+                update={
+                    "max_cost_per_run_usd": min(settings.max_cost_per_run_usd, cap_usd),
+                    "max_cost_per_task_usd": min(settings.max_cost_per_task_usd, cap_usd),
+                }
+            )
         store = context.store
-        usage = RunUsage(model=settings.model_name)
+        usage = usage if usage is not None else RunUsage(model=settings.model_name)
         manifest = store.load()
         prior_cost = manifest.cost_usd
         prior_usage = dict(manifest.usage)

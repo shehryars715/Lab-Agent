@@ -34,7 +34,7 @@ from pydantic import BaseModel
 
 from labsagent.config import PROJECT_ROOT, load_settings
 
-from . import auth, history, ownership, profiles, supa
+from . import auth, history, metering, ownership, profiles, supa
 from .jobs import HEARTBEAT_S, JobRegistry
 from labsagent.data import DATA_SUFFIXES
 from labsagent.ingest.readers import ACCEPTED_SUFFIXES
@@ -79,6 +79,8 @@ def _start_retention() -> None:
 
     settings = load_settings()
     retention.start(settings.runs_dir.resolve(), settings.retention_days)
+    # Holds left by runs that died with the last process: release them.
+    metering.release_stale_holds()
 
 UI_DIST = PROJECT_ROOT / "web" / "ui" / "dist"
 
@@ -206,7 +208,12 @@ def logout(response: Response) -> dict:
 
 @app.get("/api/me")
 def me(request: Request) -> dict:
-    return {"user_id": request.state.user_id, "mode": auth.mode()}
+    """Who you are, and (with accounts) how many credits you have left."""
+    return {
+        "user_id": request.state.user_id,
+        "mode": auth.mode(),
+        "credits": metering.balance(request.state.user_id, load_settings()),
+    }
 
 
 @app.get("/api/profile")
@@ -347,19 +354,33 @@ async def create_run(
             409, "You already have a lab running. Start the next one when it finishes."
         )
     job = registry.create()
-    ownership.record(job, user_id)
+    hold = metering.UNMETERED
+    try:
+        ownership.record(job, user_id)
 
-    # Made unconditionally now: data can arrive with a pasted lab and no file,
-    # and it still needs somewhere of its own to land.
-    upload_dir = UPLOADS_ROOT / job.id
-    upload_dir.mkdir(parents=True, exist_ok=True)
+        # Made unconditionally now: data can arrive with a pasted lab and no
+        # file, and it still needs somewhere of its own to land.
+        upload_dir = UPLOADS_ROOT / job.id
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
-    manual_path = None
-    if has_manual:
-        manual_path = upload_dir / manual_name
-        manual_path.write_bytes(manual_bytes)
+        manual_path = None
+        if has_manual:
+            manual_path = upload_dir / manual_name
+            manual_path.write_bytes(manual_bytes)
 
-    dataset_paths = await _save_datasets(datasets, upload_dir)
+        dataset_paths = await _save_datasets(datasets, upload_dir)
+
+        # LAST, after every check that can refuse the upload, so a refused
+        # file never holds credits. A refusal here is an HTTP answer (402,
+        # 503) before any work starts, not an event in a stream.
+        settings = load_settings()
+        hold = metering.reserve(user_id, job.id, "run", settings)
+    except Exception as exc:
+        # Never leave a job "queued" forever: it would count as this
+        # account's running lab and block the next one.
+        job.finish(error=str(getattr(exc, "detail", exc))[:300])
+        metering.settle(hold, metering.RunUsage(), free=True)
+        raise
 
     job.publish(
         {
@@ -371,8 +392,11 @@ async def create_run(
     )
 
     threading.Thread(
-        target=run_job,
+        target=metering.run_metered,
+        args=(run_job, hold),
         kwargs={
+            # Free if it stops before solving (not a lab, out of scope, no data).
+            "free_unless_solved": True,
             "job": job,
             "manual_path": manual_path,
             "dataset_paths": dataset_paths,
@@ -385,7 +409,8 @@ async def create_run(
                     {"name": name, "cms_id": cms_id, "section": section, "program": program}
                 ),
             },
-            "settings": load_settings(),
+            # Its cost ceiling is what its credit hold can pay for.
+            "settings": metering.capped(settings, hold),
         },
         name=f"labsagent-{job.id}",
         daemon=True,  # a stuck job must never keep the process alive
@@ -487,6 +512,8 @@ def revise_run(job_id: str, body: Feedback, request: Request) -> dict:
         raise HTTPException(409, "this run is still working")
     if not body.feedback.strip():
         raise HTTPException(422, "feedback is empty")
+    # A follow-up is paid for like a run: even a question is a model call.
+    hold = metering.reserve(request.state.user_id, job.id, "followup", load_settings())
 
     # Reopen the event stream's producer. `finish()` set a terminal status, so
     # the job has to go back to running or `_sse` would end the response the
@@ -494,8 +521,16 @@ def revise_run(job_id: str, body: Feedback, request: Request) -> dict:
     # arrive after a stream that had already closed.
     job.reopen()
     threading.Thread(
-        target=revise_job,
-        args=(job, body.feedback),
+        target=metering.run_metered,
+        args=(revise_job, hold),
+        kwargs={
+            "free_unless_solved": False,
+            "job": job,
+            "feedback": body.feedback,
+            "cap_usd": metering.capped(load_settings(), hold).max_cost_per_run_usd
+            if hold.id
+            else None,
+        },
         name=f"labsagent-revise-{job.id}",
         daemon=True,
     ).start()

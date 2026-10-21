@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     # you mean to keep.
     retention_days: int = 0
 
+    # CREDITS PER ACCOUNT (public sign-up only; web/server/metering.py). 1
+    # credit = $0.0001 (credits.py). Each account gets `monthly_credits` per
+    # calendar month (UTC), no rollover. A run or follow-up holds at most
+    # `max_hold_credits` (its ceiling, $0.015) and needs `min_start_credits`
+    # free to start. `daily_cap_usd` bounds real spend across ALL accounts.
+    monthly_credits: int = 300
+    max_hold_credits: int = 150
+    min_start_credits: int = 10
+    daily_cap_usd: float = 2.0
+
     model_name: str = "deepseek-flash"
     temperature: float = 0.0
     timeout_s: int = 30

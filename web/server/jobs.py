@@ -59,6 +59,7 @@ class Job:
         #: Who started it (auth's user id). Set once, before any work, by
         #: ownership.record; every route that takes this job's id checks it.
         self.owner: str | None = None
+        self.solve_started = False
         self.status = "queued"  # queued | running | awaiting_input | done | failed
         self.created_at = time.time()
         self.error: str | None = None
@@ -87,6 +88,10 @@ class Job:
     def phase(self, key: str, label: str) -> None:
         """Announce a stage by name. The core has no notion of phases; this is
         the web layer's own vocabulary for the stepper in the UI."""
+        if key == "solving":
+            # The line between free and paid: a lab stopped before this point
+            # (not a lab, out of scope, missing data) is never charged.
+            self.solve_started = True
         self.publish({"type": "phase", "key": key, "label": label})
 
     def register(self, key: str, path: Path, *, label: str, kind: str) -> None:

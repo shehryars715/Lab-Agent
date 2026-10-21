@@ -43,6 +43,13 @@ class FakeDB:
             self.profiles[a["p_user_id"]] = {k[2:]: v for k, v in a.items() if k != "p_user_id"}
         elif name == "ensure_user":
             return None
+        # Credits are tested in test_metering.py; here every account has plenty.
+        elif name == "reserve":
+            return {"hold_id": f"hold-{a['p_job_id']}", "credits": 150}
+        elif name in ("settle", "release_open_holds"):
+            return None
+        elif name == "my_balance":
+            return {"balance": 300}
         else:
             raise AssertionError(f"unexpected rpc {name}")
 
