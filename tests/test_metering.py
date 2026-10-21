@@ -23,14 +23,14 @@ USER = "cccccccc-0000-0000-0000-000000000003"
 class Ledger:
     def __init__(self, reply=None):
         self.calls = []
-        self.reply = reply or {"hold_id": "h1", "credits": 100, "balance": 200}
+        self.reply = reply or {"hold_id": "h1", "credits": 2000, "balance": 3000}
 
     def __call__(self, name, **args):
         self.calls.append((name, args))
         if name == "reserve":
             return self.reply
         if name == "my_balance":
-            return {"balance": 181, "held": 100}
+            return {"balance": 2580, "held": 2000}
         return None
 
     def settled(self):
@@ -79,19 +79,20 @@ def _usage(usd: float) -> FakeUsage:
 
 def test_a_hold_sets_the_runs_cost_ceiling(ledger):
     hold = metering.reserve(USER, "j1", "run", Settings())
-    assert hold == metering.Hold(id="h1", credits=100)
+    assert hold == metering.Hold(id="h1", paisa=2000)
     capped = metering.capped(Settings(), hold)
-    assert capped.max_cost_per_run_usd == pytest.approx(0.01)
-    assert capped.max_cost_per_task_usd == pytest.approx(0.01)
+    # 20 credits = Rs 20 = $0.0714; the per-task default ($0.02) stays lower.
+    assert capped.max_cost_per_run_usd == pytest.approx(20 / 280)
+    assert capped.max_cost_per_task_usd == pytest.approx(0.02)
     # A small hold makes a smaller ceiling than the per-task default.
-    small = metering.capped(Settings(), metering.Hold(id="h", credits=12))
-    assert small.max_cost_per_task_usd == pytest.approx(0.0012)
+    small = metering.capped(Settings(), metering.Hold(id="h", paisa=280))
+    assert small.max_cost_per_task_usd == pytest.approx(0.01)
 
 
 @pytest.mark.parametrize(
     "reply,status,words",
     [
-        ({"error": "no_credits", "balance": 3}, 402, "this month’s 300 credits"),
+        ({"error": "no_credits", "balance": 3}, 402, "this month’s 50 credits"),
         ({"error": "daily_cap"}, 503, "today’s limit"),
         ({}, 503, "Try again"),
     ],
@@ -109,7 +110,7 @@ def test_a_lab_stopped_before_solving_is_free(ledger):
     def run_job(usage, **kwargs):
         usage.phase("ingest").cost_usd = 0.0004  # the read was paid for, by us
 
-    metering.run_metered(run_job, metering.Hold("h1", 150), free_unless_solved=True, job=job)
+    metering.run_metered(run_job, metering.Hold("h1", 2000), free_unless_solved=True, job=job)
     assert ledger.settled() == [{"p_hold_id": "h1", "p_charged": 0, "p_actual_usd": pytest.approx(0.0004)}]
 
 
@@ -120,8 +121,8 @@ def test_a_solved_lab_pays_its_real_cost_rounded_up(ledger):
         job.phase("solving", "Solving")
         usage.phase("solve").cost_usd = 0.00181
 
-    metering.run_metered(run_job, metering.Hold("h1", 150), free_unless_solved=True, job=job)
-    assert ledger.settled()[0]["p_charged"] == 19
+    metering.run_metered(run_job, metering.Hold("h1", 2000), free_unless_solved=True, job=job)
+    assert ledger.settled()[0]["p_charged"] == 51  # paisa: $0.00181 = Rs 0.5068, up
 
 
 def test_a_crash_after_solving_is_still_settled(ledger):
@@ -133,13 +134,13 @@ def test_a_crash_after_solving_is_still_settled(ledger):
         raise RuntimeError("worker died")
 
     with pytest.raises(RuntimeError):
-        metering.run_metered(run_job, metering.Hold("h1", 150), free_unless_solved=True, job=job)
-    assert ledger.settled()[0]["p_charged"] == 30
+        metering.run_metered(run_job, metering.Hold("h1", 2000), free_unless_solved=True, job=job)
+    assert ledger.settled()[0]["p_charged"] == 84  # paisa
 
 
 def test_an_overrun_is_clamped_to_the_hold_but_its_real_cost_recorded(ledger):
     charged = metering.settle(metering.Hold("h1", 20), _usage(0.05))
-    assert charged == 20
+    assert charged == 20  # paisa, clamped to the hold
     assert ledger.settled()[0]["p_actual_usd"] == pytest.approx(0.05)
 
 
@@ -149,8 +150,8 @@ def test_a_follow_up_question_is_never_free(ledger):
     def revise_job(usage, **kwargs):
         usage.phase("revise").cost_usd = 0.0002  # answered, no solve
 
-    metering.run_metered(revise_job, metering.Hold("h1", 150), free_unless_solved=False, job=job)
-    assert ledger.settled()[0]["p_charged"] == 2
+    metering.run_metered(revise_job, metering.Hold("h1", 2000), free_unless_solved=False, job=job)
+    assert ledger.settled()[0]["p_charged"] == 6  # paisa: $0.0002 = 5.6, up
 
 
 def test_unmetered_servers_hold_nothing_and_change_nothing(monkeypatch):
@@ -186,7 +187,7 @@ def test_me_reports_the_balance(ledger):
     client = TestClient(app_module.app)
     client.cookies.set(auth.COOKIE, auth.mint(USER))
     credits = client.get("/api/me").json()["credits"]
-    assert credits["balance"] == 181 and credits["held"] == 100 and credits["allowance"] == 300 and credits["refills_on"]
+    assert credits["balance"] == 25.8 and credits["held"] == 20 and credits["allowance"] == 50 and credits["refills_on"]
 
 
 def test_a_run_stopped_by_its_limit_says_so_in_plain_words():

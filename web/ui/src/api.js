@@ -261,14 +261,18 @@ export function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-/** Credits, the only unit the student sees. The server sends EXACT credits
- *  while a run is live and a whole, settled charge once it finishes; both are
- *  shown rounded UP, because that is how a charge settles (labsagent/credits.py)
- *  and a live figure should never read lower than the bill it becomes. */
+/** Whole credits, rounded to the nearest -- the only number the student sees.
+ *  The server counts to the hundredth (labsagent/credits.py); most labs cost
+ *  less than one credit, so a real charge that rounds to nothing reads
+ *  "<1 credit" rather than a misleading "0". */
+export function wholeCredits(n) {
+  return Math.max(0, Math.round(n + 1e-9))
+}
+
 export function formatCredits(n) {
   if (typeof n !== 'number') return '—'
-  // Guard float noise: 19.000000001 is 19, not 20.
-  const whole = Math.max(0, Math.ceil(n - 1e-6))
+  if (n > 0 && n < 0.5) return '<1 credit'
+  const whole = wholeCredits(n)
   return `${whole.toLocaleString('en-US')} credit${whole === 1 ? '' : 's'}`
 }
 

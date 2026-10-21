@@ -1,38 +1,44 @@
 """Credits: the unit a student sees and is charged in.
 
+ONE CREDIT IS ONE PAKISTANI RUPEE (owner's decision, 2026-10-22). That peg is
+deliberately never shown: the screen says "credits" and nothing else. This
+module is the only place the peg lives.
+
 USD STAYS THE MEASURED TRUTH. `usage.py` prices tokens in dollars because that
 is what the provider bills; the eval reports and the safety caps in `budget.py`
-guard real money, so they stay in dollars too. Credits are a display and
-billing layer on top: this module is the only place that knows the rate, and
-the web boundary (`wire_event`, the job summaries, history) is the only place
-that converts.
+guard real money, so they stay in dollars too. Credits are a billing and
+display layer on top, converted at a fixed `PKR_PER_USD` (Settings, default
+280) -- fixed rather than fetched, so a price never moves under a student
+between one day and the next.
 
-WHY A HUNDREDTH OF A CENT. A basic follow-up costs about $0.0002 and a typical
-three-task lab about $0.002. At 1 credit = $0.0001 those are 2 and 19 credits:
-whole numbers with at most one credit of rounding on each charge. A tenth of a
-cent would have charged the same follow-up 1 credit -- a 5x markup -- and
-priced a $0.0014 lab like a $0.002 one.
-
-WHY ROUND UP, ONCE. Fractional credits are kept exactly until a charge is
-settled (a run, or one follow-up); then they are rounded up to a whole credit,
-so a charge is never under-reported, and rounding happens once per charge so
-it cannot compound across the calls inside it. `exact()` is for live running
-totals; `charge()` is what gets recorded.
+COUNTED IN PAISA, SHOWN IN WHOLE CREDITS. Almost everything costs less than one
+credit: a follow-up question is about Rs 0.06, a small lab Rs 0.10-0.50, a
+heavy data lab Rs 2-5. Charging whole credits would make every small lab cost
+1 (a 2-15x markup) and every lab look the same price. So:
+  - the ledger counts PAISA (1/100 credit) as integers -- `paisa()`;
+  - a settled charge is rounded UP to the next paisa, once per charge, so it is
+    never under-reported and rounding cannot compound across calls;
+  - the screen rounds to whole credits (the UI's `formatCredits`), with
+    "<1 credit" for a charge that rounds to nothing.
+`exact()` is for live running totals; `charge()` is the receipt.
 
 THE RATE IS RECORDED WITH THE CHARGE. The manifest stores the credits it was
-charged and the `usd_per_credit` in effect, so re-pegging this constant later
-never rewrites what an old run cost.
-
-How many credits each student gets is a separate, open decision (PLAN.md,
-"per-user credits").
+charged and the `usd_per_credit` in effect, so changing the rate later never
+rewrites what an old run cost -- `shown()` converts an old receipt instead.
 """
 
 from __future__ import annotations
 
 import math
 
-#: One credit is a hundredth of a cent of model cost.
-USD_PER_CREDIT = 0.0001
+from labsagent.config import load_settings
+
+#: Rupees per US dollar. The one knob; recorded with every charge.
+PKR_PER_USD = float(load_settings().pkr_per_usd)
+#: One credit = Rs 1.
+USD_PER_CREDIT = 1.0 / PKR_PER_USD
+PAISA_PER_CREDIT = 100
+USD_PER_PAISA = USD_PER_CREDIT / PAISA_PER_CREDIT
 
 
 def exact(usd: float) -> float:
@@ -40,13 +46,35 @@ def exact(usd: float) -> float:
     return max(0.0, usd) / USD_PER_CREDIT
 
 
-def charge(usd: float) -> int:
-    """Whole credits for one settled charge, rounded up.
+def paisa(usd: float) -> int:
+    """Whole paisa for one settled charge, rounded up. What the ledger stores.
 
-    Rounded to six places before the ceiling, because binary floats make
-    0.002 / 0.0001 come out as 20.000000000000004 -- a naive ceil would charge
-    21 credits for exactly 20 credits' worth of work.
+    Rounded to six places before the ceiling, because binary floats turn an
+    exact amount into 20.000000000000004 -- a naive ceil would charge one
+    paisa more than the work cost.
     """
     if usd <= 0:
         return 0
-    return math.ceil(round(usd / USD_PER_CREDIT, 6))
+    return math.ceil(round(usd / USD_PER_PAISA, 6))
+
+
+def charge(usd: float) -> float:
+    """The settled charge in credits: whole paisa, as a credit amount (Rs)."""
+    return paisa(usd) / PAISA_PER_CREDIT
+
+
+def to_paisa(credits: float) -> int:
+    """A credit amount (a setting, a balance) as whole paisa."""
+    return int(round(credits * PAISA_PER_CREDIT))
+
+
+def from_paisa(amount: int) -> float:
+    return amount / PAISA_PER_CREDIT
+
+
+def shown(credits_charged: float, usd_per_credit: float | None) -> float:
+    """An old receipt in today's credits. Receipts from before the rupee peg
+    (1 credit = $0.0001) are converted through the dollars they stood for."""
+    if not usd_per_credit or math.isclose(usd_per_credit, USD_PER_CREDIT):
+        return credits_charged
+    return round(credits_charged * usd_per_credit / USD_PER_CREDIT, 2)

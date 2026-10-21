@@ -206,9 +206,15 @@ def manifest_from_dict(data: dict[str, Any]) -> RunManifest:
         followups=[dict(f) for f in (data.get("followups") or [])],
         # Runs recorded before credits existed were never charged in them; the
         # current rate stands in so history can still show a number. A run
-        # that WAS charged keeps its own figure and its own rate.
-        credits=int(data["credits"]) if "credits" in data else credits.charge(data.get("cost_usd", 0.0)),
-        usd_per_credit=data.get("usd_per_credit") or credits.USD_PER_CREDIT,
+        # charged at an older rate (before 1 credit = Rs 1) is converted to
+        # today's credits through the dollars it stood for, so a follow-up's
+        # charge can be added to it in the same unit.
+        credits=(
+            credits.shown(float(data["credits"]), data.get("usd_per_credit"))
+            if "credits" in data
+            else credits.charge(data.get("cost_usd", 0.0))
+        ),
+        usd_per_credit=credits.USD_PER_CREDIT,
     )
 
 

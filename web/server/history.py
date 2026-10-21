@@ -131,9 +131,14 @@ def summarise(directory: Path) -> dict[str, Any]:
         "total": len(outcomes),
         "passed": passed,
         "failed": len(outcomes) - passed,
-        # Credits the run was charged; a run from before credits existed shows
-        # its dollar cost at today's rate (the same fallback as the run store).
-        "credits": manifest["credits"] if "credits" in manifest else credits.charge(manifest.get("cost_usd", 0.0)),
+        # Credits the run was charged, in today's credits (an older rate is
+        # converted); a run from before credits existed shows its dollar cost
+        # at today's rate (the same fallback as the run store).
+        "credits": (
+            credits.shown(float(manifest["credits"]), manifest.get("usd_per_credit"))
+            if "credits" in manifest
+            else credits.charge(manifest.get("cost_usd", 0.0))
+        ),
     }
 
 

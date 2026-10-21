@@ -71,7 +71,7 @@ or email the same address.
   notebook (`.ipynb`), a script (`.py`), a write-up (`.md`), or a `.zip` of them.
   Screenshots are real terminal output, captured as the program ran.
 
-Usage is counted in credits (1 credit = $0.0001 of model time); a typical lab uses 10–40. Open the app, attach the manual (and any data),
+Each account gets 50 credits a month; most labs use less than one, a long data lab a few. Open the app, attach the manual (and any data),
 say what you want — *"just the notebook for tasks 2 and 4"* — and ask for changes
 afterwards in the same chat.
 

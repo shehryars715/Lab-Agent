@@ -56,15 +56,19 @@ class Settings(BaseSettings):
     # you mean to keep.
     retention_days: int = 0
 
-    # CREDITS PER ACCOUNT (public sign-up only; web/server/metering.py). 1
-    # credit = $0.0001 (credits.py). Each account gets `monthly_credits` per
-    # calendar month (UTC), no rollover. A run or follow-up holds at most
-    # `max_hold_credits` (its ceiling, $0.01; owner's choice 2026-10-22,
-    # ~1.5x the heaviest real lab seen) and needs `min_start_credits`
-    # free to start. `daily_cap_usd` bounds real spend across ALL accounts.
-    monthly_credits: int = 300
-    max_hold_credits: int = 100
-    min_start_credits: int = 10
+    # CREDITS (labsagent/credits.py). 1 credit = Rs 1, never said on screen;
+    # `pkr_per_usd` is the fixed rate. Per account (public sign-up only;
+    # web/server/metering.py): `monthly_credits` per calendar month (UTC), no
+    # rollover. A run or follow-up holds at most `max_hold_credits` -- also its
+    # spending ceiling -- and needs `min_start_credits` free to start. Owner's
+    # numbers, 2026-10-22: a 6-task lab stopped after task 1 at the old ~Rs 4
+    # ceiling, so one lab may spend Rs 20 and an account gets Rs 50 a month.
+    # `daily_cap_usd` bounds REAL spend across all accounts, so it stays in
+    # dollars.
+    pkr_per_usd: float = 280.0
+    monthly_credits: float = 50.0
+    max_hold_credits: float = 20.0
+    min_start_credits: float = 1.0
     daily_cap_usd: float = 2.0
 
     model_name: str = "deepseek-flash"

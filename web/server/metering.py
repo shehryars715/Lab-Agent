@@ -5,7 +5,11 @@ charge the real cost at the end: two tabs with 160 credits left both see 160,
 both start, and the balance ends at -140. Balances go negative, and parallel
 runs race past the check.
 
-RESERVE, THEN SETTLE. Before a run starts, the database HOLDS up to 100
+THE LEDGER COUNTS PAISA. 1 credit = Rs 1 (credits.py), and labs cost
+fractions of a credit, so every amount the database sees is whole paisa.
+Settings stay in credits; this module converts at the boundary.
+
+RESERVE, THEN SETTLE. Before a run starts, the database HOLDS up to 20
 credits (never more than the balance) in one locked step -- `reserve()` in
 002_credits.sql locks the account's row, so the second tab waits, then sees
 10. The run's cost ceiling is set to exactly what was held, so it cannot
@@ -50,10 +54,15 @@ PROCESS_STARTED = datetime.now(timezone.utc)
 @dataclass(frozen=True)
 class Hold:
     id: str | None  # None: not metered (single-user server)
-    credits: int
+    paisa: int  # what was held, in paisa (1/100 credit)
 
 
-UNMETERED = Hold(id=None, credits=0)
+UNMETERED = Hold(id=None, paisa=0)
+
+
+def _whole(amount: float) -> str:
+    """50.0 -> "50", 2.5 -> "2.5": a setting, as a student reads it."""
+    return f"{amount:g}"
 
 
 def metered() -> bool:
@@ -77,10 +86,11 @@ def reserve(user_id: str, job_id: str, kind: str, settings: Settings) -> Hold:
             p_user_id=user_id,
             p_job_id=job_id,
             p_kind=kind,
-            p_max=settings.max_hold_credits,
-            p_min=settings.min_start_credits,
-            p_monthly=settings.monthly_credits,
-            p_usd_per_credit=credits.USD_PER_CREDIT,
+            p_max=credits.to_paisa(settings.max_hold_credits),
+            p_min=credits.to_paisa(settings.min_start_credits),
+            p_monthly=credits.to_paisa(settings.monthly_credits),
+            # The ledger's unit is the paisa, so this is dollars per paisa.
+            p_usd_per_credit=credits.USD_PER_PAISA,
             p_daily_cap_usd=settings.daily_cap_usd,
         ) or {}
     except supa.SupaError as exc:
@@ -89,7 +99,7 @@ def reserve(user_id: str, job_id: str, kind: str, settings: Settings) -> Hold:
     if error == "no_credits":
         raise HTTPException(
             402,
-            f"You’ve used this month’s {settings.monthly_credits} credits. "
+            f"You’ve used this month’s {_whole(settings.monthly_credits)} credits. "
             f"They refill on {refills_on()}.",
         )
     if error == "daily_cap":
@@ -99,14 +109,14 @@ def reserve(user_id: str, job_id: str, kind: str, settings: Settings) -> Hold:
         )
     if error or not result.get("hold_id"):
         raise HTTPException(503, "Can’t reserve credits right now. Try again in a minute.")
-    return Hold(id=str(result["hold_id"]), credits=int(result["credits"]))
+    return Hold(id=str(result["hold_id"]), paisa=int(result["credits"]))
 
 
 def capped(settings: Settings, hold: Hold) -> Settings:
     """This run's settings, with its cost ceiling set to what its hold can pay."""
     if hold.id is None:
         return settings
-    cap = hold.credits * credits.USD_PER_CREDIT
+    cap = hold.paisa * credits.USD_PER_PAISA
     return settings.model_copy(
         update={
             "max_cost_per_run_usd": min(settings.max_cost_per_run_usd, cap),
@@ -116,11 +126,12 @@ def capped(settings: Settings, hold: Hold) -> Settings:
 
 
 def settle(hold: Hold, usage: RunUsage, *, free: bool = False) -> int:
-    """Charge the real cost (0 when `free`), release the rest. Never raises."""
+    """Charge the real cost (0 when `free`), release the rest. Never raises.
+    Returns the paisa charged."""
     if hold.id is None:
         return 0
     actual_usd = usage.total.cost_usd
-    charged = 0 if free else min(credits.charge(actual_usd), hold.credits)
+    charged = 0 if free else min(credits.paisa(actual_usd), hold.paisa)
     for attempt in range(3):
         try:
             supa.rpc("settle", p_hold_id=hold.id, p_charged=charged, p_actual_usd=actual_usd)
@@ -148,18 +159,21 @@ def balance(user_id: str, settings: Settings) -> dict | None:
     """{balance, held, allowance, refills_on} for the sidebar, or None when unmetered.
 
     `held` is what a running lab has reserved. Shown as "reserved", not as
-    spent: a balance that drops by 100 the moment a lab starts reads as a
+    spent: a balance that drops by 20 the moment a lab starts reads as a
     charge, though most of it comes back when the lab ends.
     """
     if not metered():
         return None
     try:
-        result = supa.rpc("my_balance", p_user_id=user_id, p_monthly=settings.monthly_credits) or {}
+        result = supa.rpc(
+            "my_balance", p_user_id=user_id, p_monthly=credits.to_paisa(settings.monthly_credits)
+        ) or {}
     except supa.SupaError:
         return None
     return {
-        "balance": int(result.get("balance", 0)),
-        "held": int(result.get("held", 0)),
+        # Credits (with paisa); the sidebar rounds them for display.
+        "balance": credits.from_paisa(int(result.get("balance", 0))),
+        "held": credits.from_paisa(int(result.get("held", 0))),
         "allowance": settings.monthly_credits,
         "refills_on": refills_on(),
     }

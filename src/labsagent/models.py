@@ -202,10 +202,11 @@ class RunManifest:
     #: cost. `usage`/`cost_usd` above are the RUNNING TOTAL -- a revision used
     #: to overwrite them, so the first pass's cost was lost.
     followups: list[dict] = field(default_factory=list)
-    #: What the student was CHARGED, in whole credits: the first run plus every
-    #: follow-up, each rounded up once when it settled (`credits.charge`). Not
-    #: `charge(cost_usd)` -- that would round the sum, not each charge.
-    credits: int = 0
+    #: What the student was CHARGED, in credits counted to the paisa: the first
+    #: run plus every follow-up, each rounded up once when it settled
+    #: (`credits.charge`). Not `charge(cost_usd)` -- that would round the sum,
+    #: not each charge.
+    credits: float = 0.0
     #: The rate those credits were charged at, so re-pegging `USD_PER_CREDIT`
     #: never rewrites what an old run cost.
     usd_per_credit: float = 0.0
