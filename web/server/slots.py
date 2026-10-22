@@ -57,6 +57,10 @@ class SolveSlots:
                 self._cv.wait(timeout=5)
             self._waiting.popleft()
             self._active += 1
+            # Everyone behind just moved up one. Without this they learned it
+            # only if they happened to wake after us, so a lab could keep
+            # showing "2 ahead" until the next lab finished.
+            self._cv.notify_all()
         try:
             yield
         finally:
