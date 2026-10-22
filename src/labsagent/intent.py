@@ -78,14 +78,37 @@ FORMAT_HINTS: dict[str, tuple[str, ...]] = {
     "py": (r"\.py\b", r"\bpython\s+(?:script|file|source)\b", r"\bas\s+a\s+script\b"),
     "md": (r"\.md\b", r"\bmarkdown\b"),
     "docx": (r"\.docx\b", r"\bdocx\b", r"\bword\s+(?:document|doc|report|file)\b"),
+    "pdf": (r"\.pdf\b", r"\bpdf\b"),
+    "html": (r"\.html?\b", r"\bhtml\b", r"\bweb\s?page\b"),
+    "txt": (r"\.txt\b", r"\bplain[\s-]text\b", r"\btext\s+file\b"),
     "zip": (r"\.zip\b", r"\bzip\b", r"\barchives?\b"),
 }
 
-#: "no zip", "without a zip", "do not give me a notebook".
+#: "no zip", "without a zip", "do not give me a notebook", "remove the
+#: screenshots". The verbs matter: "remove the screenshots" used to read as
+#: a request FOR screenshots, because only no/not/without/skip counted.
 _NEGATED = re.compile(
-    r"(?:\bno\b|\bnot\b|\bwithout\b|\bskip\b|\bdon'?t\b|\bexcept\b)[^.]{0,20}$",
+    r"(?:\bno\b|\bnot\b|\bwithout\b|\bskip\b|\bdon'?t\b|\bexcept\b|\bremove\b"
+    r"|\bexclude\b|\bdrop\b|\bomit\b|\bdelete\b|\bhide\b|\bget rid of\b"
+    r"|\bleave out\b|\btake out\b|\bno need for\b)[^.]{0,20}$",
     re.IGNORECASE,
 )
+
+#: The same refusal said after the noun: "screenshots aren't needed",
+#: "screenshots: none", "the charts, remove them".
+_NEGATED_AFTER = re.compile(
+    r"^[^.]{0,25}?(?:\b(?:are|is)\s*n[o']?t\s+(?:needed|required|necessary|wanted)"
+    r"|\bnot\s+(?:needed|required|necessary|wanted)|\bunnecessary\b|:\s*none\b"
+    r"|\b(?:remove|drop|delete)\s+(?:them|it)\b|\bleave\s+(?:them|it)\s+out\b)",
+    re.IGNORECASE,
+)
+
+
+def _negated(low: str, start: int, end: int) -> bool:
+    """Is the mention at low[start:end] a refusal rather than a request?"""
+    return bool(
+        _NEGATED.search(low[max(0, start - 24):start]) or _NEGATED_AFTER.search(low[end:end + 40])
+    )
 
 
 def detect_formats(text: str) -> list[str]:
@@ -110,7 +133,7 @@ def detect_formats(text: str) -> list[str]:
         for pattern in patterns:
             for match in re.finditer(pattern, low):
                 # "and no zip" must not be read as "and a zip".
-                if _NEGATED.search(low[max(0, match.start() - 24):match.start()]):
+                if _negated(low, match.start(), match.end()):
                     continue
                 if name not in found:
                     found.append(name)
@@ -120,10 +143,15 @@ def detect_formats(text: str) -> list[str]:
 
 #: Parts of the answers a request names outright. Narrow on purpose, like
 #: FORMAT_HINTS: "explain how loops work" in a request is a question, not a
-#: request for explanations in the report, so only the noun counts.
-PART_HINTS: dict[str, tuple[str, ...]] = {
-    "screenshots": (r"\bscreen\s?shots?\b", r"\bsnap\s?shots?\b"),
-    "explanation": (r"\bexplanations?\b",),
+#: request for explanations in the report, so only the noun counts -- and
+#: "plot" alone is a verb about the code, so only the plural is a part.
+#: "Pictures" or "images" mean both kinds of picture.
+PART_HINTS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("screenshots",): (r"\bscreen\s?shots?\b", r"\bsnap\s?shots?\b", r"\bscreen\s?grabs?\b"),
+    ("figures",): (r"\bcharts?\b", r"\bgraphs?\b", r"\bplots\b", r"\bfigures\b"),
+    ("screenshots", "figures"): (r"\bpictures?\b", r"\bimages?\b"),
+    ("explanation",): (r"\bexplanations?\b",),
+    ("statement",): (r"\b(?:task|question)\s+(?:statements?|text)\b",),
 }
 
 
@@ -137,13 +165,13 @@ def detect_parts(text: str) -> tuple[list[str], list[str]]:
     show: list[str] = []
     hide: list[str] = []
     low = (text or "").lower()
-    for part, patterns in PART_HINTS.items():
+    for parts, patterns in PART_HINTS.items():
         for pattern in patterns:
             match = re.search(pattern, low)
             if not match:
                 continue
-            negated = _NEGATED.search(low[max(0, match.start() - 24):match.start()])
-            (hide if negated else show).append(part)
+            target = hide if _negated(low, match.start(), match.end()) else show
+            target.extend(p for p in parts if p not in show and p not in hide)
             break
     return show, hide
 

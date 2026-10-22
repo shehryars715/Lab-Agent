@@ -26,7 +26,7 @@ import nbformat as nbf
 
 from labsagent.blocks import SCREENSHOT
 from labsagent.models import LabSpec, TaskOutcome
-from labsagent.present import AnswerPlan, Include, arrange, vocabulary
+from labsagent.present import Include, Presentation, Vocabulary, arrange, vocabulary
 
 
 def _image_output(path: Path) -> nbf.NotebookNode:
@@ -53,11 +53,17 @@ def _stdout_of(outcome: TaskOutcome, block) -> str:
 
 
 def _task_cells(
-    outcome: TaskOutcome, style: str, include: Include | None = None
+    outcome: TaskOutcome,
+    style: str,
+    include: Include | None = None,
+    words: Vocabulary | None = None,
 ) -> list[nbf.NotebookNode]:
     task = outcome.task
-    words = vocabulary(style)
-    if style == "classic":
+    include = include or Include()
+    words = words or vocabulary(style)
+    if not include.statement:
+        heading = f"## {task.title}"
+    elif style == "classic":
         heading = "\n".join([f"## {task.title}", "", task.statement])
     else:
         quoted = "\n".join(f"> {line}" if line.strip() else ">" for line in task.statement.splitlines())
@@ -66,7 +72,7 @@ def _task_cells(
 
     code_cell = None
     answers_headed = False
-    for block in arrange(outcome, style, include or Include()):
+    for block in arrange(outcome, style, include):
         if block.kind == "code":
             if block.title:
                 cells.append(nbf.v4.new_markdown_cell(f"### {block.title}"))
@@ -99,15 +105,14 @@ def build_notebook(
     spec: LabSpec,
     outcomes: list[TaskOutcome],
     student: dict[str, str] | None = None,
-    style: str = "classic",
-    tagline: str = "",
-    plans: dict | None = None,
+    presentation: Presentation | None = None,
 ) -> nbf.NotebookNode:
     nb = nbf.v4.new_notebook()
+    pres = presentation or Presentation()
 
-    header = [f"# {spec.title}"]
-    if tagline:
-        header.append(f"*{tagline}*")
+    header = [f"# {pres.cover.title or spec.title}"]
+    if pres.cover.tagline:
+        header.append(f"*{pres.cover.tagline}*")
     if spec.course:
         header.append(f"**Course:** {spec.course}")
     for key, value in (student or {}).items():
@@ -118,8 +123,10 @@ def build_notebook(
     cells: list[nbf.NotebookNode] = [nbf.v4.new_markdown_cell("\n\n".join(header))]
 
     for outcome in outcomes:
-        plan = (plans or {}).get(outcome.task.id) or AnswerPlan()
-        cells.extend(_task_cells(outcome, style, plan.include))
+        tid = outcome.task.id
+        cells.extend(
+            _task_cells(outcome, pres.style_for(tid), pres.include_for(tid), pres.words_for(tid))
+        )
 
     nb.cells = cells
     nb.metadata = {
@@ -135,11 +142,9 @@ def write_notebook(
     spec: LabSpec,
     outcomes: list[TaskOutcome],
     student: dict[str, str] | None = None,
-    style: str = "classic",
-    tagline: str = "",
-    plans: dict | None = None,
+    presentation: Presentation | None = None,
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    nbf.write(build_notebook(spec, outcomes, student, style, tagline, plans), str(path))
+    nbf.write(build_notebook(spec, outcomes, student, presentation), str(path))
     return path

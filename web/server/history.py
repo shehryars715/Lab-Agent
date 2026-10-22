@@ -109,7 +109,14 @@ def artifacts_for(directory: Path) -> list[dict[str, Any]]:
             if path.is_file() and emitter is not None:
                 add(emitter.name, path, emitter.label, emitter.kind)
 
-    if code_dir.is_dir():
+    # Task files the student asked for replace the raw solver files, under
+    # the same keys (`emit/files.py`).
+    task_files = sorted((report_dir / "tasks").glob("*.py")) if report_dir.is_dir() else []
+    if task_files:
+        for path in task_files:
+            task_id = path.stem.rsplit("_", 1)[-1]
+            add(f"code:{task_id}", path, labels.get(task_id, task_id), "code")
+    elif code_dir.is_dir():
         for path in sorted(code_dir.glob("*.py")):
             add(f"code:{path.stem}", path, labels.get(path.stem, path.stem), "code")
 

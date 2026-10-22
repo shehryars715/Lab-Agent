@@ -35,6 +35,7 @@ before the layouts existed, so the existing tests are unaffected.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -79,6 +80,10 @@ class CoverInfo:
     # One content-aware line under the title, e.g. "Neural networks from
     # scratch, no framework." Empty renders nothing.
     tagline: str = ""
+    # The student's own title, replacing "Lab NN: Title" when set.
+    title: str = ""
+    # Rows the student added that the cover has no field for ("Submitted to").
+    extra: list[tuple[str, str]] = field(default_factory=list)
 
     def rows(self) -> list[tuple[str, str]]:
         """Label/value pairs, skipping anything we do not actually know."""
@@ -92,10 +97,13 @@ class CoverInfo:
             ("Instructor", self.instructor),
             ("Lab Engineer", self.lab_engineer),
             ("Date", self.date),
+            *self.extra,
         ]
         return [(label, value.strip()) for label, value in candidates if value and value.strip()]
 
     def heading(self) -> str:
+        if self.title:
+            return self.title
         heading = f"Lab {self.lab_number}" if self.lab_number else "Lab Report"
         return f"{heading}: {self.lab_title}" if self.lab_title else heading
 
@@ -106,6 +114,7 @@ class CoverInfo:
 
     def course_rows(self) -> list[tuple[str, str]]:
         wanted = {"Course", "Lab Number", "Lab Title", "Instructor", "Lab Engineer", "Date"}
+        wanted |= {label for label, _ in self.extra}
         return [row for row in self.rows() if row[0] in wanted]
 
 
@@ -224,7 +233,7 @@ def _layout_rule(doc, info: CoverInfo) -> list:
         created.append(_para(doc, eyebrow, 9.5, bold=True, accent=True, before=0, after=6))
 
     created.append(
-        _para(doc, info.lab_title or info.heading(), 24, bold=True, before=0, after=8)
+        _para(doc, info.title or info.lab_title or info.heading(), 24, bold=True, before=0, after=8)
     )
 
     if info.tagline:
@@ -356,23 +365,41 @@ def build_cover(doc, info: CoverInfo) -> None:
         body.insert(position, element)
 
 
+#: Cover rows a student may set by name -> the CoverInfo attribute behind each.
+_ATTRS = {
+    "Course": "course",
+    "Lab Number": "lab_number",
+    "Lab Title": "lab_title",
+    "Instructor": "instructor",
+    "Lab Engineer": "lab_engineer",
+    "Date": "date",
+    "Department": "department",
+}
+
+
 def cover_from(
     spec,
     profile,
     facts,
     layout: str = "classic",
     tagline: str = "",
+    title: str = "",
+    fields: dict[str, str] | None = None,
 ) -> CoverInfo:
-    """Assemble a CoverInfo from the three things that know something about it.
+    """Assemble a CoverInfo from the three things that know something about it,
+    then the student's own words on top.
 
     Precedence is deliberate: the student's own profile wins for section (they
     may have moved), and the manual wins for everything it states, because it is
-    the authoritative document for the course it belongs to.
+    the authoritative document for the course it belongs to -- until the
+    student says otherwise (`fields`, from `present.CoverSpec`): "the
+    instructor is Dr. Ali" beats a misread front page, "" takes a row off, and
+    a label the cover has no field for becomes a row of its own.
 
     `layout` and `tagline` default to the previous behaviour, so existing
     callers -- the tests -- are unaffected by the new designs.
     """
-    return CoverInfo(
+    info = CoverInfo(
         lab_number=getattr(spec, "lab_number", "") or "",
         lab_title=getattr(spec, "title", "") or "",
         course=(getattr(facts, "course", None) or getattr(spec, "course", None) or ""),
@@ -385,4 +412,15 @@ def cover_from(
         department=getattr(facts, "department", None) or "",
         layout=layout or "classic",
         tagline=tagline or "",
+        title=title or "",
     )
+    for label, value in (fields or {}).items():
+        value = (value or "").strip()
+        attr = _ATTRS.get(label)
+        if attr == "lab_number":
+            value = re.sub(r"(?i)^lab\s*(?:no\.?\s*)?", "", value).strip()
+        if attr is not None:
+            setattr(info, attr, value)
+        elif value:
+            info.extra.append((label, value))
+    return info

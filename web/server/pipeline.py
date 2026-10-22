@@ -14,7 +14,8 @@ before it existed.
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass, replace
+import shutil
+from dataclasses import asdict, dataclass, fields, replace
 from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
@@ -24,17 +25,18 @@ from labsagent import events as ev
 from labsagent.agent.build import build_explainer, build_model
 from labsagent.blocks import blocks_for
 from labsagent.capture.rendered import RenderedBackend
-from labsagent.data import Acquisition, candidate_tokens, provenance_block, split_refs
+from labsagent.data import Acquisition, Dataset, candidate_tokens, provenance_block, split_refs
 from labsagent.data.sources import acquire, classify
 from labsagent.config import PROJECT_ROOT, Settings, load_settings
-from labsagent.ingest.cover import extract_cover_facts
+from labsagent.ingest.cover import CoverFacts, extract_cover_facts
 from labsagent.ingest.readers import read_document, read_pasted
 from labsagent.emit import DEFAULT_ARTIFACTS, REGISTRY, EmitContext, emit_all
 from labsagent.ingest.labspec import extract_labspec
 from labsagent.intent import Intent, scope
 from labsagent.models import LabSpec, TaskOutcome
 from labsagent.orchestrator import run_lab
-from labsagent.present import AnswerPlan
+from labsagent.present import CoverSpec, LookPatch, Presentation, receipt, split_identity
+from labsagent.present import apply as apply_look
 from labsagent.prerequisites import (
     KEY_PREFIX,
     OMITTED,
@@ -46,12 +48,14 @@ from labsagent.prerequisites import (
 )
 from labsagent.profile import ASK_ORDER, StudentProfile
 from labsagent.report.cover import cover_from
+from labsagent.report.title_page import TitlePage, read_title_page
 from labsagent.runstore import RunStore
 from labsagent.usage import RunUsage
 
 from .briefing import read_briefing
+from .edit import replay_edits, run_edit
 from .jobs import Job
-from .revise import answer_question, read_revision
+from .revise import answer_question, describe_look, read_revision
 from . import ownership
 from .slots import SOLVE_SLOTS
 from .trace import tracing_tools
@@ -699,21 +703,140 @@ class RunContext:
     spec: LabSpec
     facts: Any
     profile: StudentProfile
-    plan: Any
-    manual_path: Path
+    manual_path: Path | None
     settings: Settings
+    #: EVERY LOOK DECISION, in one object (`present.Presentation`): the
+    #: cover, the layout, what each answer holds, labels, the files to make.
+    #: A follow-up changes only this, through `present.apply`, and it is saved
+    #: in the manifest after every change.
+    presentation: Presentation = dataclass_field(default_factory=Presentation)
     #: Only a .docx upload produces these; the DOCX emitter is the sole reader.
     anchors: dict[str, int] = dataclass_field(default_factory=dict)
-    #: What the student asked for, so a revision emits the same set of files.
+    #: What the student asked for. Scope and notes only: the files to make
+    #: live on the presentation.
     intent: Intent = dataclass_field(default_factory=Intent)
     #: Already-resolved data files. Held so a revision re-solves against the
     #: same CSV instead of downloading it again -- and gets the same answer.
     datasets: list = dataclass_field(default_factory=list)
-    #: task id -> what its answer includes and the manual's boxes for it.
-    #: A follow-up that says "add screenshots" changes only this.
-    plans: dict = dataclass_field(default_factory=dict)
     #: The screenshot look chosen for this lab, so a revision draws the same.
     screenshots: Any = None
+    #: Whether the manual has a title page of its own (anchored .docx only).
+    title_page: TitlePage = dataclass_field(default_factory=TitlePage)
+
+    def save_to(self, manifest) -> None:
+        """Write what a rebuild needs into the manifest, so a follow-up still
+        works after the process that ran the lab is gone.
+
+        STATE THAT MUST OUTLIVE A PROCESS LIVES ON DISK. This context used to
+        exist only on the in-memory Job: every restart or redeploy turned every
+        finished lab read-only ("can't take changes any more"), and a lab
+        opened from history could never take one.
+        """
+        manifest.presentation = self.presentation.to_dict()
+        # The manifest always had an `anchors` field "so a revision can still
+        # rebuild the Word report", and nothing ever wrote it: invisible while
+        # revisions lived in memory, and a reopened lab came back as a fresh
+        # document instead of the annotated manual. Found by the live check.
+        manifest.anchors = dict(self.anchors)
+        manual = ""
+        if self.manual_path is not None:
+            try:
+                manual = Path(self.manual_path).relative_to(self.store.dir).as_posix()
+            except ValueError:
+                manual = Path(self.manual_path).as_posix()
+        screenshots = self.screenshots
+        manifest.context = {
+            "manual": manual,
+            "facts": {
+                f.name: getattr(self.facts, f.name, None)
+                for f in fields(CoverFacts)
+                if f.name != "sources"
+            },
+            "screenshots": {
+                "look": getattr(screenshots, "look", "terminal"),
+                "folder": _prompt_folder(screenshots),
+            },
+            "title_page": {
+                "found": self.title_page.found,
+                "blanks": list(self.title_page.blanks),
+            },
+            # Who the files were made for. A name typed with this run wins
+            # for this run, so a rebuild from history must not fall back to
+            # the account's details and rename every file.
+            "profile": {k: v for k, v in asdict(self.profile).items() if v},
+        }
+
+    @classmethod
+    def from_disk(cls, store: RunStore, settings: Settings, profile: StudentProfile) -> "RunContext":
+        """Rebuild a finished run's context from its folder alone."""
+        manifest = store.load()
+        saved = manifest.context or {}
+        manual = saved.get("manual") or ""
+        manual_path = None
+        if manual:
+            candidate = Path(manual)
+            candidate = candidate if candidate.is_absolute() else store.dir / candidate
+            manual_path = candidate if candidate.exists() else None
+        facts = CoverFacts(
+            **{
+                k: v
+                for k, v in (saved.get("facts") or {}).items()
+                if k in {f.name for f in fields(CoverFacts)} and k != "sources"
+            }
+        )
+        shots = saved.get("screenshots") or {}
+        page = saved.get("title_page") or {}
+        presentation = Presentation.from_dict(manifest.presentation)
+        if not manifest.presentation:
+            # A run from before the report spec: its files were made with the
+            # defaults, and whatever was produced is the set it keeps making.
+            made = {
+                p.suffix.lstrip(".") for p in store.report_dir.glob("*") if p.is_file()
+            }
+            presentation = replace(
+                presentation,
+                formats=tuple(f for f in DEFAULT_ARTIFACTS if f in made) or DEFAULT_ARTIFACTS,
+            )
+        # The run's own identity wins; the account fills what it lacks.
+        profile = profile_from({**asdict(profile), **(saved.get("profile") or {})})
+        return cls(
+            store=store,
+            spec=manifest.spec,
+            facts=facts,
+            profile=profile,
+            manual_path=manual_path,
+            settings=settings,
+            presentation=presentation,
+            anchors=dict(manifest.anchors) if manual_path is not None else {},
+            datasets=[Dataset.from_dict(d) for d in manifest.datasets if d.get("path")],
+            screenshots=RenderedBackend(
+                look=shots.get("look") or "terminal", folder=shots.get("folder") or ""
+            ),
+            title_page=TitlePage(
+                found=bool(page.get("found")), blanks=tuple(page.get("blanks") or ())
+            ),
+        )
+
+
+def _prompt_folder(screenshots) -> str:
+    """The lab folder a terminal picture's prompt shows ("Lab 03")."""
+    prompt = getattr(screenshots, "prompt", "") or ""
+    match = re.search(r"Desktop\\(.+)>$", prompt)
+    return match.group(1) if match else ""
+
+
+def keep_manual(store: RunStore, manual_path: Path | None) -> Path | None:
+    """Copy the uploaded manual into the run's own folder.
+
+    Uploads are deleted after the retention window and live outside the run,
+    so a Word report rebuilt from history next month needs its own copy.
+    """
+    if manual_path is None or not Path(manual_path).exists():
+        return manual_path
+    target = store.dir / "input" / Path(manual_path).name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(manual_path, target)
+    return target
 
 
 _NOTEBOOK_TOOL = re.compile(r"\b(colab|jupyter)\b", re.I)
@@ -737,7 +860,7 @@ def screenshot_backend(spec, manual, kind: str, manual_path) -> RenderedBackend:
     return RenderedBackend(look="notebook" if notebook else "terminal", folder=folder)
 
 
-def _only_when_wanted(explainer, plans: dict):
+def _only_when_wanted(explainer, presentation: Presentation):
     """The writer, called only for the words the report will actually show.
 
     An explanation nobody asked for is no longer printed, so it is no longer
@@ -747,7 +870,7 @@ def _only_when_wanted(explainer, plans: dict):
     """
 
     def explain(task, code_text, transcript):
-        wanted = (plans.get(task.id) or AnswerPlan()).include.explanation
+        wanted = presentation.include_for(task.id).explanation
         if wanted or task.written_questions or not getattr(task, "needs_code", True):
             return explainer(task, code_text, transcript)
         return None
@@ -769,7 +892,13 @@ def _explain_missing(context, outcomes, usage: RunUsage) -> None:
 
 
 def _emit(
-    job: Job, context: RunContext, outcomes: list[TaskOutcome], usage: RunUsage
+    job: Job,
+    context: RunContext,
+    outcomes: list[TaskOutcome],
+    usage: RunUsage,
+    *,
+    edit_request: str = "",
+    settings: Settings | None = None,
 ) -> list[str]:
     """Produce whatever was asked for, and register each file as it lands.
 
@@ -785,10 +914,18 @@ def _emit(
     `manifest.json` on disk held all of it. Now one format failing costs you
     that format and nothing else, and the chat says which one and why.
 
-    Returns the emitter names that failed, so the caller can mention them.
+    THE ORDER, AND WHY (2026-10-22). Every format but the zip is built first;
+    then the student's saved edits are replayed onto the fresh files
+    (`edit.replay_edits` -- without that, any rebuild silently undid them);
+    then a new edit, if this message asked for one the report spec cannot
+    carry (`edit.run_edit`); and the zip last, so it packages the edited files.
+
+    Returns sentences for the chat about the edits: what changed, what could
+    not be done, an earlier edit that no longer fits.
     """
     store, spec, profile = context.store, context.spec, context.profile
-    wanted = list(context.intent.artifacts or DEFAULT_ARTIFACTS)
+    pres = context.presentation
+    wanted = list(pres.formats or DEFAULT_ARTIFACTS)
 
     job.phase("emitting", "Producing your files")
 
@@ -804,6 +941,10 @@ def _emit(
         first = outcomes[0]
         first.blocks = [note, *blocks_for(first)]
 
+    # A COVER OF OURS ONLY WHERE ONE BELONGS: on unless the student said no,
+    # or the manual already opens with a title page of its own -- whose blanks
+    # then take the student's details instead.
+    shown = pres.cover.shown(context.title_page.found)
     ctx = EmitContext(
         spec=spec,
         outcomes=outcomes,
@@ -813,31 +954,74 @@ def _emit(
             spec,
             profile,
             context.facts,
-            layout=context.plan.layout,
-            tagline=context.plan.tagline,
-        ),
+            layout=pres.cover.layout,
+            tagline=pres.cover.tagline,
+            title=pres.cover.title,
+            fields=pres.cover.fields,
+        )
+        if shown
+        else None,
         manual_path=context.manual_path,
         anchors=context.anchors,
-        style=getattr(context.plan, "style", "classic") or "classic",
-        tagline=getattr(context.plan, "tagline", "") or "",
-        plans=context.plans,
+        presentation=pres,
+        identity={} if shown else {k: v for k, v in asdict(profile).items() if v},
     )
 
     failed: list[tuple[str, str]] = []
 
+    titles = {o.task.id: o.task.title or o.task.id for o in outcomes}
+
     def landed(emitter, path: Path) -> None:
-        job.register(emitter.name, path, label=emitter.label, kind=emitter.kind)
+        # One key per file for an emitter that writes several (one file per
+        # task); every other emitter is its own key, as before.
+        key_for = getattr(emitter, "key_for", None)
+        if key_for is None:
+            job.register(emitter.name, path, label=emitter.label, kind=emitter.kind)
+            return
+        key = key_for(path)
+        label = titles.get(key.split(":", 1)[-1], emitter.label)
+        job.register(key, path, label=label, kind=emitter.kind)
 
     def broke(name: str, exc: Exception) -> None:
         reason = f"{type(exc).__name__}: {exc}"[:200]
         failed.append((name, reason))
         job.publish({"type": "emit_failed", "format": name, "reason": reason})
 
-    emit_all(ctx, wanted, on_file=landed, on_error=broke)
+    emit_all(ctx, [n for n in wanted if n != "zip"], on_file=landed, on_error=broke)
+
+    notes: list[str] = []
+    settings = settings or context.settings
+    if pres.edits:
+        edits, replayed, touched = replay_edits(context, ctx.produced, outcomes, settings)
+        context.presentation = replace(context.presentation, edits=edits)
+        notes += replayed
+        _refresh(job, touched)
+    if edit_request.strip():
+        # ONLY THE MODEL LOOP WAITS FOR A SLOT, like the solve (slots.py).
+        with SOLVE_SLOTS.hold(on_wait=_queued(job)):
+            job.phase("emitting", "Changing how the files look")
+            done = run_edit(
+                context,
+                edit_request.strip(),
+                ctx.produced,
+                outcomes,
+                usage,
+                settings,
+                pdf_too="pdf" in wanted,
+            )
+        if done.edit is not None:
+            context.presentation = replace(
+                context.presentation, edits=(*context.presentation.edits, done.edit)
+            )
+            _refresh(job, [done.target])
+        notes.append(done.note)
+    if "zip" in wanted:
+        emit_all(ctx, ["zip"], on_file=landed, on_error=broke)
 
     # Code files are registered last so they appear after the headline
-    # downloads in the UI, in task order.
-    for outcome in outcomes:
+    # downloads in the UI, in task order -- unless the student asked for the
+    # task files themselves, which are then the code downloads.
+    for outcome in [] if "files" in wanted else outcomes:
         if outcome.code_path and Path(outcome.code_path).exists():
             job.register(
                 f"code:{outcome.task.id}",
@@ -862,7 +1046,58 @@ def _emit(
                 + " Everything else is above.",
             }
         )
-    return [name for name, _ in failed]
+    return notes
+
+
+def _refresh(job: Job, paths) -> None:
+    """Re-announce files an edit changed in place, so the size shown is right."""
+    for path in paths:
+        if path is None:
+            continue
+        for key, known in list(job.artifacts.items()):
+            if Path(known) == Path(path) and key in REGISTRY:
+                emitter = REGISTRY[key]
+                job.register(key, path, label=emitter.label, kind=emitter.kind)
+
+
+def receipt_text(lead: str, changed, unsupported=(), notes=()) -> str:
+    """One chat line: what changed, what no file can do, and what happened to
+    any edit the editing agent was asked for."""
+    parts = [lead, *changed] if changed else []
+    parts += [f"I can't {str(u).rstrip('.')}." for u in unsupported]
+    parts += [str(n) for n in notes if n]
+    return " ".join(parts)
+
+
+_IDENTITY_NAMES = {"name": "Name", "cms_id": "ID", "section": "Section", "program": "Program"}
+
+
+def identity_receipt(old: StudentProfile, new: StudentProfile) -> list[str]:
+    """What changed about who the student is, in plain words."""
+    out = []
+    for key, label in _IDENTITY_NAMES.items():
+        before, after = getattr(old, key, ""), getattr(new, key, "")
+        if after and after != before:
+            out.append(f"{label}: {after}.")
+    return out
+
+
+def title_page_note(context: RunContext) -> str:
+    """Say why there is no cover of ours, once, on the first run."""
+    page = context.title_page
+    if not page.found or context.presentation.cover.show is not None:
+        return ""
+    profile = context.profile
+    have = {"name": profile.name, "cms_id": profile.cms_id, "section": profile.section}
+    filled = [b for b in page.blanks if have.get(b)]
+    names = {"name": "name", "cms_id": "ID", "section": "section"}
+    head = "Your manual has its own title page, so I didn't add a second cover"
+    if filled:
+        written = " and ".join(names[b] for b in filled)
+        return f"{head}; I wrote your {written} into its blanks. Ask for a cover if you want one."
+    if page.blanks:
+        return f"{head}. Add your details below and I'll write them into its blanks."
+    return f"{head}. Ask for a cover if you want your details on a page of their own."
 
 
 def _queued(job: Job):
@@ -928,6 +1163,8 @@ def run_job(
             return
 
         spec, repairs, intent = reading.spec, reading.repairs, reading.intent
+        # Only an annotated .docx can carry the manual's own title page.
+        title_page = read_title_page(manual_path) if reading.anchors else TitlePage()
 
         # Narrow to what was asked for. Prerequisites come along, because an
         # artifact that cannot run is not a deliverable -- and they are named,
@@ -1090,7 +1327,22 @@ def run_job(
         # shape the code; this is the wire that finally makes that true.
         intent = intent.with_notes(answered_notes(questions, answers))
 
-        intent = replace(intent, artifacts=[a for a in proposed if a in REGISTRY])
+        # THE REPORT SPEC: the briefing's taste first, then the student's own
+        # words on top -- they win (present.apply). Which parts each answer
+        # holds and which files to make were read by ingest, from the same
+        # message, so the briefing's copy of those is not applied twice.
+        taste = Presentation(
+            cover=CoverSpec(layout=plan.layout, tagline=plan.tagline),
+            style=plan.style,
+            tasks=dict(reading.plans),
+            formats=tuple(a for a in proposed if a in REGISTRY),
+        )
+        asked, said_identity = split_identity(plan.look)
+        if asked is not None:
+            asked = asked.model_copy(update={"show": None, "hide": None, "formats": None})
+        presentation = apply_look(taste, asked, [t.id for t in spec.tasks])
+        if said_identity:
+            profile = profile_from({**asdict(profile), **said_identity})
 
         # ONE application, not two. This ran at ingest AND again here, on the
         # accumulating spec, so every task statement carried the narration
@@ -1106,6 +1358,7 @@ def run_job(
         store = RunStore.create(spec.lab_number, root=RUNS_ROOT, suffix=job.id)
         # History finds a run by its folder; record whose folder this is.
         ownership.attach_run_dir(job, store.run_id)
+        manual_path = keep_manual(store, manual_path)
         acquired = _acquire(
             job,
             uploads=dataset_paths or [],
@@ -1186,7 +1439,7 @@ def run_job(
                     emitter=emitter,
                     usage=usage,
                     model=build_model(settings),
-                    explainer=_only_when_wanted(build_explainer(settings, usage), reading.plans),
+                    explainer=_only_when_wanted(build_explainer(settings, usage), presentation),
                     datasets=datasets,
                     data_failures=data_failures,
                 )
@@ -1200,17 +1453,30 @@ def run_job(
             spec=spec,
             facts=facts,
             profile=profile,
-            plan=plan,
             manual_path=manual_path,
             settings=settings,
+            presentation=presentation,
             anchors=reading.anchors,
             intent=intent,
             datasets=datasets,
-            plans=dict(reading.plans),
             screenshots=screenshots,
+            title_page=title_page,
         )
 
-        _emit(job, job.context, manifest.outcomes, usage)
+        edited = _emit(job, job.context, manifest.outcomes, usage, edit_request=plan.edit_request)
+        # SAY WHAT WAS DONE WITH WHAT THEY ASKED: the look they asked for, as
+        # a receipt from the diff, what no file could do, and the edit.
+        said = receipt_text(
+            "As you asked:",
+            receipt(taste, presentation, [t.id for t in spec.tasks], title_page=title_page.found),
+            plan.unsupported,
+            edited,
+        )
+        if said:
+            job.publish({"type": "narration", "text": said})
+        page_note = title_page_note(job.context)
+        if page_note:
+            job.publish({"type": "narration", "text": page_note})
         needs = closing_needs(manifest.outcomes)
         if needs:
             job.publish({"type": "narration", "text": needs})
@@ -1225,6 +1491,7 @@ def run_job(
         # explain), rounded up once, recorded with the rate it was charged at.
         manifest.credits = credits.charge(usage.total.cost_usd)
         manifest.usd_per_credit = credits.USD_PER_CREDIT
+        job.context.save_to(manifest)
         store.save(manifest)
 
         passed = sum(1 for o in manifest.outcomes if o.status == "passed")
@@ -1284,7 +1551,9 @@ def revise_instruction(prior: str, change: str, code: str) -> str:
     return out
 
 
-def _record_followup(manifest, feedback: str, followup, usage: RunUsage, prior_cost: float):
+def _record_followup(
+    manifest, feedback: str, followup, usage: RunUsage, prior_cost: float, changed=()
+):
     """Add this follow-up to the run's record instead of overwriting it."""
     charged = credits.charge(usage.total.cost_usd)
     manifest.followups.append(
@@ -1293,8 +1562,9 @@ def _record_followup(manifest, feedback: str, followup, usage: RunUsage, prior_c
             "kind": followup.kind,
             "resolved": list(followup.resolve_ids),
             "rewritten": list(followup.rewrite_ids),
-            "artifacts": list(followup.artifacts),
-            "style": followup.style,
+            "changed": list(changed),
+            "edit_request": followup.edit_request,
+            "unsupported": list(followup.unsupported),
             "usage": usage.total.as_dict(),
             "cost_usd": usage.total.cost_usd,
             "credits": charged,
@@ -1373,8 +1643,11 @@ def revise_job(
             feedback,
             outcomes,
             build_model(settings, phase="ingest"),
-            formats=list(context.intent.artifacts or DEFAULT_ARTIFACTS),
-            style=getattr(context.plan, "style", "classic"),
+            look=describe_look(
+                context.presentation,
+                title_page=context.title_page.found,
+                default_formats=DEFAULT_ARTIFACTS,
+            ),
         )
         usage.phase("revise").merge(rev_usage)
 
@@ -1397,30 +1670,37 @@ def revise_job(
         # -- a change: say what, in plain words ------------------------------
         skip = ["read", "brief"] if followup.resolve_ids else ["read", "brief", "solve"]
         job.publish({"type": "followup", "action": "change", "skip": skip})
-        if followup.reply:
+        # Announce only work that takes a while; what changed in the look is
+        # said afterwards, from the diff, not from this promise.
+        if followup.reply and (followup.model_work or followup.edit_request):
             job.publish({"type": "narration", "text": followup.reply})
 
-        # Format, layout and identity cost nothing but a rebuild.
-        if followup.artifacts:
-            context.intent = replace(context.intent, artifacts=followup.artifacts)
-        if followup.style:
-            context.plan.style = followup.style
+        # THE LOOK, the files and who the student is cost nothing but a
+        # rebuild. One patch, applied by the one function that changes the
+        # spec, and a receipt computed from before and after.
+        task_ids = [t.id for t in manifest.spec.tasks]
+        before = context.presentation
+        context.presentation = apply_look(before, followup.look, task_ids)
+        changed = receipt(
+            before,
+            context.presentation,
+            task_ids,
+            title_page=context.title_page.found,
+            default_formats=DEFAULT_ARTIFACTS,
+        )
         if followup.identity:
-            context.profile = profile_from(
-                {**asdict(context.profile), **followup.identity}
-            )
-        # WHAT THE ANSWERS CONTAIN is presentation: a rebuild, and a writer
-        # call only for explanations that were never written.
-        if followup.show or followup.hide:
-            context.plans = {
-                t.id: (context.plans.get(t.id) or AnswerPlan()).changed(
-                    followup.show, followup.hide
-                )
-                for t in manifest.spec.tasks
-            }
-            if "explanation" in followup.show:
-                job.phase("solving", "Writing the explanations")
-                _explain_missing(context, outcomes, usage)
+            old = context.profile
+            context.profile = profile_from({**asdict(old), **followup.identity})
+            changed += identity_receipt(old, context.profile)
+        # A writer call only for explanations that were never written.
+        explain_now = [
+            t for t in task_ids
+            if context.presentation.include_for(t).explanation
+            and not before.include_for(t).explanation
+        ]
+        if explain_now:
+            job.phase("solving", "Writing the explanations")
+            _explain_missing(context, [o for o in outcomes if o.task.id in explain_now], usage)
 
         # Only the tasks whose CODE must change reach the solver.
         if followup.resolve_ids:
@@ -1481,7 +1761,7 @@ def revise_job(
                         model=build_model(settings),
                         resume=True,
                         explainer=_only_when_wanted(
-                            build_explainer(settings, usage), context.plans
+                            build_explainer(settings, usage), context.presentation
                         ),
                         # The same files, not a fresh download: a live URL is not
                         # guaranteed to serve the same bytes twice.
@@ -1498,7 +1778,17 @@ def revise_job(
 
         # EVERY current format is rebuilt after ANY change. The old path could
         # rebuild only the notebook and leave a stale Word report beside it.
-        _emit(job, context, manifest.outcomes, usage)
+        edited = _emit(
+            job,
+            context,
+            manifest.outcomes,
+            usage,
+            edit_request=followup.edit_request,
+            settings=settings,
+        )
+        said = receipt_text("Done:", changed, followup.unsupported, edited)
+        if said:
+            job.publish({"type": "narration", "text": said})
         needs = closing_needs(manifest.outcomes)
         if needs:
             job.publish({"type": "narration", "text": needs})
@@ -1507,7 +1797,8 @@ def revise_job(
             job.publish({"type": "narration", "text": stopped})
 
         manifest.usage = prior_usage  # the first pass's breakdown stays
-        _record_followup(manifest, feedback, followup, usage, prior_cost)
+        _record_followup(manifest, feedback, followup, usage, prior_cost, changed)
+        context.save_to(manifest)
         store.save(manifest)
 
         passed = sum(1 for o in manifest.outcomes if o.status == "passed")
@@ -1530,6 +1821,49 @@ def revise_job(
         job.finish(error=f"{type(exc).__name__}: {exc}"[:500])
 
 
+def reopen_job(job: Job, run_dir: Path, settings: Settings, profile_seed: dict[str, str]) -> None:
+    """A finished lab from history, ready to take changes again. No model call.
+
+    The context is rebuilt from the run folder (`RunContext.from_disk`), the
+    files it already made are registered on this job, and the job finishes
+    at once -- so it looks exactly like a lab that just finished, and the
+    ordinary follow-up and identity routes work on it unchanged.
+    """
+    from . import history  # history imports this module; import late
+
+    store = RunStore.open(run_dir)
+    job.context = RunContext.from_disk(store, settings, profile_from(profile_seed))
+    manifest = store.load()
+    spec = manifest.spec
+    job.publish(
+        {
+            "type": "spec",
+            "lab_number": spec.lab_number,
+            "title": spec.title,
+            "course": spec.course,
+            "task_count": len(spec.tasks),
+            "tasks": [{"id": t.id, "title": t.title} for t in spec.tasks],
+            "reopened": True,
+        }
+    )
+    for artifact in history.artifacts_for(store.dir):
+        job.register(
+            artifact["key"], artifact["path"], label=artifact["label"], kind=artifact["kind"]
+        )
+    passed = sum(1 for o in manifest.outcomes if o.status == "passed")
+    job.finish(
+        summary={
+            "passed": passed,
+            "failed": len(manifest.outcomes) - passed,
+            "total": len(manifest.outcomes),
+            "credits": manifest.credits,
+            "run_id": store.run_id,
+            "lab_number": spec.lab_number,
+            "reopened": True,
+        }
+    )
+
+
 def repackage_job(job: Job, identity: dict[str, str]) -> None:
     """Put the student's name on the files: a rebuild, and no model call at all.
 
@@ -1544,7 +1878,11 @@ def repackage_job(job: Job, identity: dict[str, str]) -> None:
     try:
         context.profile = profile_from({**asdict(context.profile), **identity})
         manifest = context.store.load()
-        _emit(job, context, manifest.outcomes, RunUsage(model=context.settings.model_name))
+        edited = _emit(job, context, manifest.outcomes, RunUsage(model=context.settings.model_name))
+        if edited:
+            job.publish({"type": "narration", "text": " ".join(edited)})
+        context.save_to(manifest)
+        context.store.save(manifest)
         job.finish(summary={"identity_saved": True, "credits": manifest.credits})
     except Exception as exc:  # noqa: BLE001
         import traceback

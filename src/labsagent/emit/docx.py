@@ -24,18 +24,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import docx as pydocx
+from docx.enum.text import WD_BREAK
 from docx.shared import Inches, Pt
 
 from labsagent.blocks import has_screenshot_twin
-from labsagent.present import arrange, vocabulary
+from labsagent.present import arrange
 from labsagent.emit import EmitContext, register
 from labsagent.ingest.readers import produces_anchors
 from labsagent.report.cover import build_cover
 from labsagent.report.docx_builder import (
+    BODY_PT,
     CODE_FILL,
-    CODE_LABEL,
+    CODE_PT,
     IMAGE_WIDTH_IN,
-    OUTPUT_LABEL,
     annotate_manual,
 )
 from labsagent.report.docx_utils import shade, style_code_run, tighten
@@ -48,51 +49,57 @@ def _label(doc, text: str):
     return para
 
 
-def _code(doc, source: str) -> None:
+def _code(doc, source: str, size_pt: float = CODE_PT) -> None:
     for line in (source.rstrip("\n").split("\n") or [""]):
         para = doc.add_paragraph()
         run = para.add_run(line if line.strip() else " ")
-        style_code_run(run)
+        style_code_run(run, size_pt=size_pt)
         shade(para, CODE_FILL)
         tighten(para)
         para.paragraph_format.left_indent = Inches(0.25)
 
 
-def _prose(doc, text: str) -> None:
+def _prose(doc, text: str, size_pt: float = BODY_PT) -> None:
     para = doc.add_paragraph()
-    para.add_run(text).font.size = Pt(10)
+    para.add_run(text).font.size = Pt(size_pt)
     tighten(para, before=2, after=8)
 
 
 def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
     """A report for a run that had no source document to annotate."""
     doc = pydocx.Document()
+    pres = ctx.presentation
+    body_pt, code_pt = pres.body_pt or BODY_PT, pres.code_pt or CODE_PT
 
-    words = vocabulary(ctx.style)
-    for outcome in ctx.outcomes:
+    for position, outcome in enumerate(ctx.outcomes):
         task = outcome.task
+        words = ctx.words_for(task.id)
+        include = ctx.plan_for(task.id).include
+        if position and pres.page_breaks:
+            doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
         doc.add_heading(task.title or task.id, level=1)
-        if task.statement.strip():
-            _prose(doc, task.statement.strip())
+        if include.statement and task.statement.strip():
+            _prose(doc, task.statement.strip(), body_pt)
 
         wrote_output_label = False
         answers_headed = False
-        blocks = arrange(outcome, ctx.style, ctx.plan_for(task.id).include)
+        blocks = arrange(outcome, ctx.style_for(task.id), include)
         for index, block in enumerate(blocks):
             if block.kind == "code":
                 if block.title:
                     doc.add_heading(block.title, level=3)
-                else:
-                    _label(doc, words.code if ctx.style != "classic" else CODE_LABEL)
-                _code(doc, block.text)
+                elif words.code:
+                    _label(doc, words.code)
+                _code(doc, block.text, code_pt)
                 wrote_output_label = False
             elif block.kind == "error":
-                _label(doc, "Status:")
-                _prose(doc, block.text)
+                if words.status:
+                    _label(doc, words.status)
+                _prose(doc, block.text, body_pt)
             elif block.kind == "image" and block.path is not None:
-                if not wrote_output_label:
-                    _label(doc, words.output if ctx.style != "classic" else OUTPUT_LABEL)
-                    wrote_output_label = True
+                if not wrote_output_label and words.output:
+                    _label(doc, words.output)
+                wrote_output_label = True
                 if Path(block.path).exists():
                     para = doc.add_paragraph()
                     para.add_run().add_picture(
@@ -105,11 +112,12 @@ def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
                 # section layout shows each section's picture. (Classic used
                 # to hide the text whenever ANY figure existed, which lost the
                 # output of a run whose screenshot was missing.)
-                _label(doc, words.output if ctx.style != "classic" else OUTPUT_LABEL)
+                if not wrote_output_label and words.output:
+                    _label(doc, words.output)
                 wrote_output_label = True
                 for line in block.text.splitlines():
                     para = doc.add_paragraph()
-                    style_code_run(para.add_run(line or " "))
+                    style_code_run(para.add_run(line or " "), size_pt=code_pt)
                     tighten(para)
             elif block.kind == "prose":
                 if block.role == "answer" and words.answers and not answers_headed:
@@ -117,7 +125,7 @@ def build_fresh(ctx: EmitContext, out_path: Path) -> Path:
                     answers_headed = True
                 if block.title:
                     _label(doc, block.title)
-                _prose(doc, block.text)
+                _prose(doc, block.text, body_pt)
 
     if ctx.cover is not None:
         build_cover(doc, ctx.cover)
@@ -134,7 +142,7 @@ class DocxEmitter:
     extensions = (".docx",)
 
     def emit(self, ctx: EmitContext) -> list[Path]:
-        out_path = ctx.out_dir / f"Lab{ctx.spec.lab_number}_Report.docx"
+        out_path = ctx.out_dir / f"{ctx.report_name()}.docx"
         # All three conditions matter: a source document, anchors into it,
         # and a source that can actually carry anchors.
         anchored = (
@@ -150,8 +158,8 @@ class DocxEmitter:
                     ctx.outcomes,
                     cover=ctx.cover,
                     anchors=ctx.anchors,
-                    style=ctx.style,
-                    plans=ctx.plans,
+                    presentation=ctx.presentation,
+                    identity=ctx.identity,
                 )
             ]
         return [build_fresh(ctx, out_path)]

@@ -25,14 +25,16 @@ import shutil
 from pathlib import Path
 
 import docx
+from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
 
 from labsagent.blocks import LEAD, Block, has_screenshot_twin
 from labsagent.models import TaskOutcome
-from labsagent.present import AnswerPlan, Vocabulary, arrange, vocabulary
+from labsagent.present import Presentation, Vocabulary, arrange
 from labsagent.report.cover import CoverInfo, build_cover
+from labsagent.report.title_page import fill_identity
 from labsagent.report.docx_utils import (
     enclosing_table,
     flatten_paragraphs,
@@ -47,6 +49,8 @@ CODE_FILL = "F2F2F2"
 CODE_LABEL = "Code:"
 OUTPUT_LABEL = "Output:"
 IMAGE_WIDTH_IN = 6.0
+BODY_PT = 10.0
+CODE_PT = 9.0
 
 
 def _label(cursor: Paragraph, text: str) -> Paragraph:
@@ -57,14 +61,14 @@ def _label(cursor: Paragraph, text: str) -> Paragraph:
     return para
 
 
-def _code_block(cursor: Paragraph, source: str) -> Paragraph:
+def _code_block(cursor: Paragraph, source: str, size_pt: float = CODE_PT) -> Paragraph:
     """One shaded paragraph per line, so the block page-breaks naturally."""
     lines = source.rstrip("\n").split("\n") or [""]
     for line in lines:
         cursor = insert_paragraph_after(cursor)
         # A space keeps empty lines from collapsing the shaded band.
         run = cursor.add_run(line if line.strip() else " ")
-        style_code_run(run)
+        style_code_run(run, size_pt=size_pt)
         shade(cursor, CODE_FILL)
         tighten(cursor)
         cursor.paragraph_format.left_indent = Inches(0.25)
@@ -78,10 +82,10 @@ def _image(cursor: Paragraph, image_path: Path, width_in: float = IMAGE_WIDTH_IN
     return cursor
 
 
-def _explanation(cursor: Paragraph, text: str) -> Paragraph:
+def _explanation(cursor: Paragraph, text: str, size_pt: float = BODY_PT) -> Paragraph:
     cursor = insert_paragraph_after(cursor)
     run = cursor.add_run(text)
-    run.font.size = Pt(10)
+    run.font.size = Pt(size_pt)
     tighten(cursor, before=2, after=8)
     return cursor
 
@@ -93,27 +97,31 @@ def _render(
     *,
     labels: bool = True,
     width_in: float = IMAGE_WIDTH_IN,
+    body_pt: float = BODY_PT,
+    code_pt: float = CODE_PT,
 ) -> Paragraph:
     """Insert `blocks` after `cursor`, in order; return the last paragraph.
 
     The cursor advances to each new paragraph -- inserting repeatedly after the
     same one reverses the order. `labels=False` is for a box whose own label
-    already says what it holds: a "Code" cell does not need "Code:" again.
+    already says what it holds: a "Code" cell does not need "Code:" again. An
+    empty label (the student asked for none) is never written.
     """
     labelled_output = False
     answers_headed = False
     for index, block in enumerate(blocks):
         if block.kind == "code":
-            if labels or block.title:
-                cursor = _label(cursor, block.title or words.code)
-            cursor = _code_block(cursor, block.text)
+            heading = block.title or (words.code if labels else "")
+            if heading:
+                cursor = _label(cursor, heading)
+            cursor = _code_block(cursor, block.text, code_pt)
             labelled_output = False
         elif block.kind == "error":
-            if labels:
-                cursor = _label(cursor, "Status:")
-            cursor = _explanation(cursor, block.text)
+            if labels and words.status:
+                cursor = _label(cursor, words.status)
+            cursor = _explanation(cursor, block.text, body_pt)
         elif block.kind == "image" and block.path is not None and Path(block.path).exists():
-            if labels and not labelled_output:
+            if labels and not labelled_output and words.output:
                 cursor = _label(cursor, words.output)
             labelled_output = True
             cursor = _image(cursor, Path(block.path), width_in)
@@ -125,17 +133,17 @@ def _render(
             # follows, decided per output, never by a layout choice.
             and not has_screenshot_twin(blocks, index)
         ):
-            if labels and not labelled_output:
+            if labels and not labelled_output and words.output:
                 cursor = _label(cursor, words.output)
             labelled_output = True
-            cursor = _code_block(cursor, block.text)
+            cursor = _code_block(cursor, block.text, code_pt)
         elif block.kind == "prose":
             if block.role == "answer" and words.answers and not answers_headed:
                 cursor = _label(cursor, words.answers)
                 answers_headed = True
             if block.title:
                 cursor = _label(cursor, block.title)
-            cursor = _explanation(cursor, block.text)
+            cursor = _explanation(cursor, block.text, body_pt)
     return cursor
 
 
@@ -191,12 +199,15 @@ def _after_box(paragraph: Paragraph, doc) -> Paragraph:
     return insert_paragraph_after_table(table, doc) if table is not None else paragraph
 
 
-def _fill_boxes(doc, boxes: list[tuple], blocks: list[Block], words: Vocabulary) -> None:
+def _fill_boxes(
+    doc, boxes: list[tuple], blocks: list[Block], words: Vocabulary, sizes: dict
+) -> Paragraph:
     """Each part into the box meant for it; what has no box follows the last.
 
     A box for a part ("code", "output", "answer") takes that part only, with no
     label of ours. An "any" box takes everything no specific box claimed, in
     order, with labels -- a single "Solution" box needs to say which is which.
+    Returns the last paragraph written, inside a box or after it.
     """
     groups: dict[str, list[Block]] = {"code": [], "output": [], "answer": []}
     for block in blocks:
@@ -219,7 +230,9 @@ def _fill_boxes(doc, boxes: list[tuple], blocks: list[Block], words: Vocabulary)
         group, labels = plan.get(slot.idx, ([], False))
         if not group:
             continue
-        end = _render(paragraph, group, words, labels=labels, width_in=_box_width(paragraph))
+        end = _render(
+            paragraph, group, words, labels=labels, width_in=_box_width(paragraph), **sizes
+        )
         if end is not paragraph and _replaceable(paragraph):
             # The box's own first line was empty or "write your code here":
             # the answer replaces it rather than sitting under a blank line.
@@ -230,7 +243,20 @@ def _fill_boxes(doc, boxes: list[tuple], blocks: list[Block], words: Vocabulary)
             last = end
 
     if rest:
-        _render(_after_box(last, doc), rest, words)
+        return _render(_after_box(last, doc), rest, words, **sizes)
+    return last
+
+
+def _page_break_after(paragraph: Paragraph, doc) -> None:
+    """Start the next task on a new page. Never inside a table cell."""
+    table = enclosing_table(paragraph)
+    para = (
+        insert_paragraph_after_table(table, doc)
+        if table is not None
+        else insert_paragraph_after(paragraph)
+    )
+    para.add_run().add_break(WD_BREAK.PAGE)
+    tighten(para)
 
 
 def annotate_manual(
@@ -239,8 +265,8 @@ def annotate_manual(
     outcomes: list[TaskOutcome],
     cover: CoverInfo | None = None,
     anchors: dict[str, int] | None = None,
-    style: str = "classic",
-    plans: dict[str, AnswerPlan] | None = None,
+    presentation: Presentation | None = None,
+    identity: dict[str, str] | None = None,
 ) -> Path:
     """Copy the manual and put each task's answer where its plan says.
 
@@ -248,26 +274,31 @@ def annotate_manual(
     Paragraph objects. Order matters: prepending shifts every integer index in
     the document, but object references survive it -- the same reason anchors
     are resolved before any mutation at all.
+
+    With no cover of ours, `identity` goes into the blanks of the manual's own
+    title page, if it has one ("Name: ______"). Filling a blank adds runs, not
+    paragraphs, so the resolved anchors are unaffected.
     """
     manual_path, out_path = Path(manual_path), Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(manual_path, out_path)
 
+    pres = presentation or Presentation()
     doc = docx.Document(str(out_path))
     paragraphs = flatten_paragraphs(doc)
-    words = vocabulary(style)
+    sizes = {"body_pt": pres.body_pt or BODY_PT, "code_pt": pres.code_pt or CODE_PT}
 
     # Resolve every anchor and box to a Paragraph OBJECT before mutating
     # anything. Integer indices shift the moment the first insert lands; object
     # references stay valid across sibling inserts.
-    resolved: list[tuple[Paragraph | None, list[tuple], TaskOutcome, AnswerPlan]] = []
+    resolved: list[tuple[Paragraph | None, list[tuple], TaskOutcome]] = []
     for outcome in outcomes:
-        plan = (plans or {}).get(outcome.task.id) or AnswerPlan()
+        plan = pres.look_for(outcome.task.id)
         boxes = [
             (slot, paragraphs[slot.idx]) for slot in plan.slots if 0 <= slot.idx < len(paragraphs)
         ]
         if boxes:
-            resolved.append((None, boxes, outcome, plan))
+            resolved.append((None, boxes, outcome))
             continue
 
         idx = (anchors or {}).get(outcome.task.id, -1)
@@ -285,17 +316,23 @@ def annotate_manual(
         if tbl is not None:
             anchor = insert_paragraph_after_table(tbl, doc)
 
-        resolved.append((anchor, [], outcome, plan))
+        resolved.append((anchor, [], outcome))
 
     if cover is not None:
         build_cover(doc, cover)
+    elif identity:
+        fill_identity(doc, identity)
 
-    for anchor, boxes, outcome, plan in resolved:
-        blocks = arrange(outcome, style, plan.include)
+    for position, (anchor, boxes, outcome) in enumerate(resolved):
+        tid = outcome.task.id
+        words = pres.words_for(tid)
+        blocks = arrange(outcome, pres.style_for(tid), pres.include_for(tid))
         if boxes:
-            _fill_boxes(doc, boxes, blocks, words)
+            end = _fill_boxes(doc, boxes, blocks, words, sizes)
         else:
-            _render(anchor, blocks, words)
+            end = _render(anchor, blocks, words, **sizes)
+        if pres.page_breaks and position < len(resolved) - 1:
+            _page_break_after(end, doc)
 
     doc.save(str(out_path))
     return out_path

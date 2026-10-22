@@ -16,6 +16,7 @@ from pathlib import Path
 
 from labsagent.blocks import all_shots
 from labsagent.emit import EmitContext, register
+from labsagent.emit.files import SUBDIR
 
 
 class ArchiveEmitter:
@@ -29,18 +30,25 @@ class ArchiveEmitter:
         zip_path.parent.mkdir(parents=True, exist_ok=True)
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Task files the student asked for ARE the code folder; the raw
+            # solver files would only be a second, header-less copy of each.
+            task_files = [Path(p) for p in ctx.produced if Path(p).parent.name == SUBDIR]
             for path in ctx.produced:
                 path = Path(path)
-                if path.exists() and path != zip_path:
+                if path.exists() and path != zip_path and path not in task_files:
                     zf.write(path, arcname=path.name)
+            for path in task_files:
+                if path.exists():
+                    zf.write(path, arcname=f"code/{path.name}")
 
-            for outcome in ctx.outcomes:
+            for outcome in [] if task_files else ctx.outcomes:
                 code_path = outcome.code_path
                 if code_path and Path(code_path).exists():
                     zf.write(code_path, arcname=f"code/{Path(code_path).name}")
                 elif outcome.code_text:
                     zf.writestr(f"code/{outcome.task.id}.py", outcome.code_text)
 
+            for outcome in ctx.outcomes:
                 # The zip carries the pictures the report carries: figures
                 # unless left out, terminal screenshots only when asked for.
                 include = ctx.plan_for(outcome.task.id).include

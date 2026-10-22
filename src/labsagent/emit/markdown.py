@@ -27,7 +27,9 @@ def _rel(path: Path, start: Path) -> str:
 
 
 def render(ctx: EmitContext) -> str:
-    out: list[str] = [f"# {ctx.spec.title}", ""]
+    out: list[str] = [f"# {ctx.presentation.cover.title or ctx.spec.title}", ""]
+    if ctx.tagline:
+        out += [f"*{ctx.tagline}*", ""]
     if ctx.spec.course:
         out += [f"**Course:** {ctx.spec.course}", ""]
     for key, value in ctx.profile.as_display().items():
@@ -37,9 +39,12 @@ def render(ctx: EmitContext) -> str:
 
     for outcome in ctx.outcomes:
         task = outcome.task
-        out += [f"## {task.title or task.id}", "", task.statement.strip(), ""]
+        include = ctx.plan_for(task.id).include
+        out += [f"## {task.title or task.id}", ""]
+        if include.statement and task.statement.strip():
+            out += [task.statement.strip(), ""]
 
-        for block in arrange(outcome, ctx.style, ctx.plan_for(task.id).include):
+        for block in arrange(outcome, ctx.style_for(task.id), include):
             if block.kind == "code":
                 out += [f"```{block.lang}", block.text.rstrip(), "```", ""]
             elif block.kind == "output":

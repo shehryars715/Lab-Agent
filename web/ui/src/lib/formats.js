@@ -10,8 +10,12 @@
 export const FORMATS = [
   { key: 'docx', label: 'Word report', ext: '.docx', phrase: 'a Word report' },
   { key: 'ipynb', label: 'Notebook', ext: '.ipynb', phrase: 'a Jupyter notebook' },
-  { key: 'py', label: 'Python files', ext: '.py', phrase: 'the Python files' },
+  { key: 'py', label: 'Python script', ext: '.py', phrase: 'one Python script' },
   { key: 'md', label: 'Markdown', ext: '.md', phrase: 'a Markdown copy' },
+  { key: 'pdf', label: 'PDF', ext: '.pdf', phrase: 'a PDF' },
+  { key: 'html', label: 'Web page', ext: '.html', phrase: 'a web page' },
+  { key: 'txt', label: 'Plain text', ext: '.txt', phrase: 'a plain-text copy' },
+  { key: 'files', label: 'Task files', ext: '.py', phrase: 'one code file per task' },
   { key: 'zip', label: 'Zip', ext: '.zip', phrase: 'a zip of everything' },
 ]
 

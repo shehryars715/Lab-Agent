@@ -16,7 +16,7 @@ from labsagent.capture.shim import split_cells  # noqa: E402
 from labsagent.models import LabSpec, Task, TaskOutcome, Transcript  # noqa: E402
 from labsagent.orchestrator import build_task_prompt  # noqa: E402
 from labsagent.package.notebook import build_notebook  # noqa: E402
-from labsagent.present import arrange  # noqa: E402
+from labsagent.present import LookPatch, Presentation, apply, arrange  # noqa: E402
 from labsagent.prose import looks_like_prose, prose_lines  # noqa: E402
 from labsagent.runner import run_sections  # noqa: E402
 from labsagent.sandbox.local import LocalSandbox  # noqa: E402
@@ -112,7 +112,11 @@ def test_sections_become_separate_cells_with_their_own_output():
             {"title": "Train", "code": "print(x + 1)", "output": "2", "figures": []},
         ]
     )
-    nb = build_notebook(LabSpec(lab_number="10", title="NN", tasks=[]), [outcome], style="walkthrough")
+    nb = build_notebook(
+        LabSpec(lab_number="10", title="NN", tasks=[]),
+        [outcome],
+        presentation=Presentation.of(style="walkthrough"),
+    )
     code = [c for c in nb.cells if c.cell_type == "code"]
     assert [c.outputs[0]["text"].strip() for c in code] == ["1", "2"]
     assert any(c.source == "### Train" for c in nb.cells)
@@ -151,14 +155,15 @@ def test_routing_drops_unknown_ids_and_never_resolves_and_rewrites_one_task():
         kind="change",
         resolve=TaskChange(task_ids=["task1", "task9"], instruction="use a while loop"),
         rewrite=TaskChange(task_ids=["task1", "task2"], instruction="shorter"),
-        artifacts=["docx", "pdf", ".py"],
-        style="nonsense",
+        look=LookPatch(formats=["docx", "pdf", ".py", "exe"], style="nonsense"),
     )
     followup = to_followup(plan, ["task1", "task2"])
     assert followup.resolve_ids == ["task1"]
     assert followup.rewrite_ids == ["task2"]
-    assert followup.artifacts == ["docx", "py"]
-    assert followup.style == ""
+    # The patch is validated where it is applied: unknown values do nothing.
+    applied = apply(Presentation(), followup.look, ["task1", "task2"])
+    assert applied.formats == ("docx", "pdf", "py")
+    assert applied.style == "classic"
 
 
 def test_revision_instructions_accumulate_and_carry_the_earlier_code():

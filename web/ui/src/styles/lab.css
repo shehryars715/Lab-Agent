@@ -645,6 +645,21 @@
   gap: var(--space-2);
 }
 
+/* Above the follow-up composer on a lab read back from disk: why the
+   lab is on disk, said once, quietly -- it still takes changes. */
+.disk-note-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.disk-note-line svg {
+  flex: none;
+}
+
 .disk-skeleton {
   display: flex;
   flex-direction: column;

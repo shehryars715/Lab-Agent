@@ -136,6 +136,10 @@ SCENARIOS = [
              "Only task 1, as a .py. Use a while loop and do not use f-strings.",
              expect_artifacts={"py"}, expect_tasks=1,
              note="the other half of bug 2: notes must survive the split"),
+    Scenario("18", "the formats added in the flexibility pass", "lab03_manual.docx",
+             "Only task 1. Give me a PDF, a web page and a plain-text copy.",
+             expect_artifacts={"pdf", "html", "txt"}, expect_tasks=1,
+             note="2026-10-22: pdf/html/txt built from the same blocks"),
 ]
 
 

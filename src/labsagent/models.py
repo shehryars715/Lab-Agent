@@ -210,3 +210,11 @@ class RunManifest:
     #: The rate those credits were charged at, so re-pegging `USD_PER_CREDIT`
     #: never rewrites what an old run cost.
     usd_per_credit: float = 0.0
+    #: How the files look (`present.Presentation.to_dict()`): the cover, the
+    #: layout, what each answer holds, labels, formats, saved edits. Saved
+    #: after every change so a follow-up still works after a restart.
+    presentation: dict = field(default_factory=dict)
+    #: What a rebuild needs that the spec does not hold: the run's own copy of
+    #: the manual, the cover facts read from it, the screenshot look, whether
+    #: the manual has a title page. The web layer writes and reads it.
+    context: dict = field(default_factory=dict)

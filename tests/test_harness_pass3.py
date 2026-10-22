@@ -41,7 +41,7 @@ from labsagent.prerequisites import (  # noqa: E402
     solver_lines,
     writer_lines,
 )
-from labsagent.present import AnswerPlan, Include, arrange  # noqa: E402
+from labsagent.present import AnswerPlan, Include, Presentation, arrange  # noqa: E402
 from labsagent.profile import StudentProfile  # noqa: E402
 from labsagent.report.docx_builder import annotate_manual  # noqa: E402
 from labsagent.runstore import RunStore, _task_from_dict, _task_to_dict  # noqa: E402
@@ -565,7 +565,7 @@ def _image_count(path: Path) -> int:
 def _ctx(tmp_path, outcome, style) -> EmitContext:
     return EmitContext(
         spec=LabSpec("03", "L", tasks=[outcome.task]), outcomes=[outcome],
-        out_dir=tmp_path, profile=StudentProfile(), style=style,
+        out_dir=tmp_path, profile=StudentProfile(), presentation=Presentation.of(style=style),
     )
 
 
@@ -581,14 +581,15 @@ def test_a_section_layout_shows_terminal_pictures_not_text(tmp_path):
     assert outputs and all(has_screenshot_twin(blocks, i) for i in outputs)
 
     fresh = build_fresh(
-        replace(_ctx(tmp_path, outcome, "findings"), plans=SHOTS), tmp_path / "fresh.docx"
+        replace(_ctx(tmp_path, outcome, "findings"), presentation=Presentation.of("findings", SHOTS)),
+        tmp_path / "fresh.docx"
     )
     assert "rows: 5" not in _body_text(fresh) and _image_count(fresh) == 2
 
     manual = _manual(tmp_path, "Task 1: load the data.")
     anchored = annotate_manual(
         manual, tmp_path / "anchored.docx", [outcome], anchors={"task1": 0},
-        style="findings", plans=SHOTS,
+        presentation=Presentation.of("findings", SHOTS),
     )
     assert "customer: 7" not in _body_text(anchored) and _image_count(anchored) == 2
 
@@ -614,7 +615,9 @@ def test_the_zip_carries_the_section_pictures(tmp_path):
     outcome = _sectioned(tmp_path, with_shots=True)
     out = tmp_path / "zip"
     out.mkdir()
-    ctx = replace(_ctx(out, outcome, "findings"), produced=[], plans=SHOTS)
+    ctx = replace(
+        _ctx(out, outcome, "findings"), produced=[], presentation=Presentation.of("findings", SHOTS)
+    )
     (path,) = ArchiveEmitter().emit(ctx)
     names = zipfile.ZipFile(path).namelist()
     assert "screenshots/task1_s02_output.png" in names and "screenshots/whole.png" in names

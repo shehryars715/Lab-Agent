@@ -109,7 +109,7 @@ test('titles: file name first, then the message, never empty', () => {
 test('format chips write one plain sentence and nothing when none are picked', () => {
   assert.equal(formatSentence([]), '')
   assert.equal(formatSentence(['ipynb', 'docx']), 'Deliver a Word report and a Jupyter notebook.')
-  assert.equal(composeInstructions('  only task 2 ', ['py']), 'only task 2\n\nDeliver the Python files.')
+  assert.equal(composeInstructions('  only task 2 ', ['py']), 'only task 2\n\nDeliver one Python script.')
   assert.equal(composeInstructions('', []), '')
   assert.deepEqual(parseFormatList('docx, .ipynb zip'), ['docx', 'ipynb', 'zip'])
 })

@@ -154,6 +154,15 @@ export async function createRun({ file, data, instructions, seed }) {
   return res.json()
 }
 
+/** A lab from history, able to take changes again. Returns the job it is
+ *  now on, and the last event already in that job's log -- the boundary the
+ *  change you send next is drawn after. */
+export async function reopenRun(runId) {
+  const res = await fetch(`/api/history/${encodeURIComponent(runId)}/reopen`, { method: 'POST' })
+  if (!res.ok) throw new Error(await readError(res))
+  return res.json()
+}
+
 export async function reviseRun(jobId, feedback) {
   const res = await fetch(`/api/runs/${jobId}/revise`, {
     method: 'POST',

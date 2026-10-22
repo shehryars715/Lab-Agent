@@ -186,6 +186,8 @@ def manifest_to_dict(manifest: RunManifest) -> dict[str, Any]:
         "followups": [dict(f) for f in manifest.followups],
         "credits": manifest.credits,
         "usd_per_credit": manifest.usd_per_credit,
+        "presentation": dict(manifest.presentation),
+        "context": dict(manifest.context),
     }
 
 
@@ -215,6 +217,9 @@ def manifest_from_dict(data: dict[str, Any]) -> RunManifest:
             else credits.charge(data.get("cost_usd", 0.0))
         ),
         usd_per_credit=credits.USD_PER_CREDIT,
+        # Runs from before the report spec load with none: the defaults.
+        presentation=dict(data.get("presentation") or {}),
+        context=dict(data.get("context") or {}),
     )
 
 

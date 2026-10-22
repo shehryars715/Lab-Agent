@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
 from labsagent.models import LabSpec, TaskOutcome
+from labsagent.present import Presentation
 from labsagent.profile import StudentProfile
 
 
@@ -53,23 +54,35 @@ class EmitContext:
     manual_path: Path | None = None
     anchors: dict[str, int] = field(default_factory=dict)
     produced: list[Path] = field(default_factory=list)
-    #: How each task is laid out -- see `labsagent.present`. `classic` is the
-    #: old fixed order, and the default for every caller that does not choose.
-    style: str = "classic"
-    #: One line about this lab, for headers that have room for it.
-    tagline: str = ""
-    #: task id -> what its answer includes and the manual's boxes for it
-    #: (`present.AnswerPlan`). A task with no entry gets the defaults.
-    plans: dict = field(default_factory=dict)
+    #: Every look decision -- layout, what each answer holds, labels, fonts,
+    #: the cover's own spec, the file name (`labsagent.present.Presentation`).
+    #: One object, so an emitter never has to know where a choice came from.
+    presentation: Presentation = field(default_factory=Presentation)
+    #: Only for the annotated Word report on a manual with its own title page
+    #: and no cover of ours: the student's details for the manual's blanks.
+    identity: dict[str, str] = field(default_factory=dict)
 
     def plan_for(self, task_id: str):
-        from labsagent.present import AnswerPlan
+        return self.presentation.look_for(task_id)
 
-        return self.plans.get(task_id) or AnswerPlan()
+    def style_for(self, task_id: str) -> str:
+        return self.presentation.style_for(task_id)
+
+    def words_for(self, task_id: str):
+        return self.presentation.words_for(task_id)
+
+    @property
+    def tagline(self) -> str:
+        return self.presentation.cover.tagline
 
     def stem(self) -> str:
-        """`Lab03_22F-1234` -- the shared basename for everything but the report."""
-        return f"Lab{self.spec.lab_number}_{self.profile.slug()}"
+        """`Lab03_22F-1234` -- the shared basename for everything but the
+        report, unless the student named the files themselves."""
+        return self.presentation.stem or f"Lab{self.spec.lab_number}_{self.profile.slug()}"
+
+    def report_name(self) -> str:
+        """The Word report's basename (and the PDF's): `Lab03_Report`."""
+        return self.presentation.stem or f"Lab{self.spec.lab_number}_Report"
 
 
 @runtime_checkable
@@ -143,4 +156,14 @@ def emit_all(
 # Registration happens on import, so the registry is populated by the act of
 # importing this package. Kept at the bottom: each module imports `register`
 # and `EmitContext` from here, and they must exist first.
-from labsagent.emit import archive, docx, markdown, notebook, script  # noqa: E402,F401
+from labsagent.emit import (  # noqa: E402,F401
+    archive,
+    docx,
+    files,
+    html,
+    markdown,
+    notebook,
+    pdf,
+    script,
+    text,
+)

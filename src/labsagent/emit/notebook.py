@@ -30,9 +30,7 @@ class NotebookEmitter:
             ctx.spec,
             ctx.outcomes,
             student=ctx.profile.as_display(),
-            style=ctx.style,
-            tagline=ctx.tagline,
-            plans=ctx.plans,
+            presentation=ctx.presentation,
         )
         return [path]
 

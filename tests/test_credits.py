@@ -102,7 +102,7 @@ class _Usage:
 
 
 class _Followup:
-    kind, resolve_ids, rewrite_ids, artifacts, style = "resolve", [], [], [], "classic"
+    kind, resolve_ids, rewrite_ids, edit_request, unsupported = "resolve", [], [], "", []
 
 
 def test_each_followup_is_its_own_charge():

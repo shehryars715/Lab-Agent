@@ -100,6 +100,14 @@ class Settings(BaseSettings):
     basic_max_turns: int = 12
     basic_reasoning_effort: str | None = "none"
 
+    # THE EDITING AGENT (web/server/edit.py): a look wish the report spec has
+    # no field for ("blue headings", "a table of contents") is done by a small
+    # agent that writes one python-docx script. Write, run, record is three
+    # turns; 16 leaves room to fix a mistake, not to wander. About three
+    # credits at most, inside the follow-up's own credit hold.
+    edit_max_turns: int = 16
+    max_cost_per_edit_usd: float = 0.01
+
     # A task's data products are copied into the workspaces of the tasks that
     # reference it. Capped because the point is to stop later tasks hunting for
     # a file, not to duplicate a 40 MB intermediate into every directory -- one

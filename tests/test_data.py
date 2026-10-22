@@ -408,7 +408,7 @@ def test_the_notebook_does_not_duplicate_the_explanation(csv: Path, tmp_path: Pa
     from labsagent.emit import EmitContext
     from labsagent.emit.notebook import NotebookEmitter
     from labsagent.models import LabSpec, Task, TaskOutcome
-    from labsagent.present import AnswerPlan, Include
+    from labsagent.present import AnswerPlan, Include, Presentation
 
     outcome = TaskOutcome(
         task=Task(id="task1", title="C", statement="S"),
@@ -422,7 +422,9 @@ def test_the_notebook_does_not_duplicate_the_explanation(csv: Path, tmp_path: Pa
         out_dir=tmp_path,
         # Explanations are left out unless asked for (2026-10-02); this test is
         # about one that IS asked for not being printed twice.
-        plans={"task1": AnswerPlan(include=Include(explanation=True))},
+        presentation=Presentation.of(
+            plans={"task1": AnswerPlan(include=Include(explanation=True))}
+        ),
     )
     (written,) = NotebookEmitter().emit(ctx)
     source = json.dumps(json.loads(written.read_text(encoding="utf-8")))

@@ -38,7 +38,7 @@ from .jobs import HEARTBEAT_S, JobRegistry
 from labsagent.data import DATA_SUFFIXES
 from labsagent.ingest.readers import ACCEPTED_SUFFIXES
 
-from .pipeline import UPLOADS_ROOT, repackage_job, revise_job, run_job
+from .pipeline import UPLOADS_ROOT, reopen_job, repackage_job, revise_job, run_job
 from .slots import SOLVE_SLOTS
 
 # The upload ceiling. A lab manual is tens of kilobytes; this exists to turn a
@@ -581,6 +581,35 @@ def history_detail(run_id: str, request: Request) -> dict:
             for a in history.artifacts_for(directory)
         ],
     }
+
+
+@app.post("/api/history/{run_id}/reopen", status_code=201)
+def reopen_run(run_id: str, request: Request) -> dict:
+    """A lab from history, able to take changes again.
+
+    Changes used to need the run's in-memory job, so every restart or redeploy
+    turned every finished lab read-only, and a lab opened from history could
+    never take one. Everything a change needs is in the run folder now; this
+    puts it back on a job and returns that job's id, and the ordinary
+    `/api/runs/{job_id}/revise` and `/identity` routes do the rest.
+    """
+    directory = ownership.require_run(run_id, request.state.user_id)
+    existing = registry.for_run(directory.name, request.state.user_id)
+    if existing is not None:
+        if not existing.is_terminal():
+            raise HTTPException(409, "this run is still working")
+        return {"job_id": existing.id, "after_seq": existing.last_seq}
+    job = registry.create()
+    job.owner = request.state.user_id
+    try:
+        reopen_job(job, directory, load_settings(), profiles.get(request.state.user_id))
+    except (FileNotFoundError, KeyError, ValueError, OSError) as exc:
+        raise HTTPException(
+            409, "This lab's record is incomplete, so it can't take changes. Start it again."
+        ) from exc
+    # Where the browser should draw the boundary before the change it sends
+    # next: everything up to here is the lab as it was.
+    return {"job_id": job.id, "after_seq": job.last_seq}
 
 
 @app.get("/api/history/{run_id}/download/{key}")

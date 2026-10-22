@@ -139,8 +139,12 @@ def build_explainer(settings: Settings, usage=None, model=None) -> Explainer:
     )
 
 
-def build_solver(sandbox: Sandbox, settings: Settings, model=None):
-    """Return (agent, recorder). One agent per task -- fresh context each time."""
+def build_solver(sandbox: Sandbox, settings: Settings, model=None, system_prompt: str = SOLVER_PROMPT):
+    """Return (agent, recorder). One agent per task -- fresh context each time.
+
+    The editing agent is the same assembly with its own prompt: the same two
+    file tools, the same confined backend, the same run-and-record tools.
+    """
     recorder = TaskRecorder()
     # root_dir alone is not a boundary: it honours absolute paths. See confined.py.
     backend = ConfinedBackend(
@@ -160,7 +164,7 @@ def build_solver(sandbox: Sandbox, settings: Settings, model=None):
     agent = create_deep_agent(
         model=model if model is not None else build_model(settings),
         tools=build_tools(sandbox, recorder, settings.timeout_s),
-        system_prompt=SOLVER_PROMPT,
+        system_prompt=system_prompt,
         backend=backend,
         **extra,
     )

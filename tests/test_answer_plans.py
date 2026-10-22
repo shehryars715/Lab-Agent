@@ -19,7 +19,7 @@ from labsagent.ingest.docx_reader import read_manual
 from labsagent.ingest.labspec import ExtractedSlot, ExtractedTask, _parts, _slots_for
 from labsagent.intent import detect_parts
 from labsagent.models import Task, TaskOutcome
-from labsagent.present import AnswerPlan, Include, Slot, select
+from labsagent.present import AnswerPlan, Include, LookPatch, Presentation, Slot, select
 from labsagent.report.docx_builder import annotate_manual
 from labsagent.report.docx_utils import flatten_paragraphs
 
@@ -154,7 +154,10 @@ def test_a_box_named_by_its_label_moves_to_the_empty_cell(tmp_path: Path):
 def test_each_part_lands_in_its_own_box_and_extras_follow_the_table(tmp_path: Path):
     manual = _boxed_manual(tmp_path / "m.docx")
     plans = {"task1": AnswerPlan(slots=(Slot(2, "code"), Slot(4, "output")))}
-    out = annotate_manual(manual, tmp_path / "r.docx", [_outcome()], anchors={"task1": 0}, plans=plans)
+    out = annotate_manual(
+        manual, tmp_path / "r.docx", [_outcome()], anchors={"task1": 0},
+        presentation=Presentation.of(plans=plans),
+    )
 
     document = docx.Document(str(out))
     table = document.tables[0]
@@ -173,7 +176,8 @@ def test_a_placeholder_is_replaced_not_answered_underneath(tmp_path: Path):
     manual = _boxed_manual(tmp_path / "m.docx")
     plans = {"task2": AnswerPlan(slots=(Slot(6, "code"),))}
     out = annotate_manual(
-        manual, tmp_path / "r.docx", [_outcome("task2")], anchors={"task2": 5}, plans=plans
+        manual, tmp_path / "r.docx", [_outcome("task2")], anchors={"task2": 5},
+        presentation=Presentation.of(plans=plans),
     )
     texts = [p.text for p in docx.Document(str(out)).paragraphs]
     assert "Write your code here" not in texts and "print(5 + 3)" in texts
@@ -199,7 +203,9 @@ def test_the_writer_runs_only_when_its_words_are_wanted():
         calls.append(task.id)
         return "words"
 
-    gate = _only_when_wanted(writer, {"task3": AnswerPlan(include=Include(explanation=True))})
+    gate = _only_when_wanted(
+        writer, Presentation.of(plans={"task3": AnswerPlan(include=Include(explanation=True))})
+    )
     assert gate(Task(id="task1", title="a", statement="s"), "", None) is None
     gate(Task(id="task2", title="b", statement="s", written_questions=["Why?"]), "", None)
     gate(Task(id="task3", title="c", statement="s"), "", None)
@@ -211,7 +217,9 @@ def test_add_screenshots_is_a_change_not_a_vague_reply():
     from web.server.revise import FollowUpPlan, to_followup
 
     followup = to_followup(
-        FollowUpPlan(kind="change", show=["screenshots", "bogus"]), ["task1"], "add screenshots"
+        FollowUpPlan(kind="change", look=LookPatch(show=["screenshots", "bogus"])),
+        ["task1"],
+        "add screenshots",
     )
-    assert followup.kind == "change" and followup.show == ["screenshots"]
+    assert followup.kind == "change" and followup.look.show == ["screenshots", "bogus"]
     assert not followup.model_work, "a rebuild, never a re-solve"

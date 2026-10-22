@@ -47,7 +47,7 @@ from typing import Any
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from pydantic import BaseModel, Field
 
-from labsagent.present import STYLES
+from labsagent.present import FORMATS, STYLES, LookPatch
 from labsagent.report.cover import LAYOUTS
 from labsagent.usage import Usage
 
@@ -56,6 +56,9 @@ from labsagent.usage import Usage
 # question now has to name the task it blocks -- see `_to_plan`.
 MAX_QUESTIONS = 1
 BRIEFING_ATTEMPTS = 3
+#: A pasted lab arrives as the message itself; its first part is enough to
+#: find what the student said about the files.
+MAX_REQUEST_CHARS = 2000
 
 PROMPT = """You are about to solve a university programming lab. Before you start, \
 decide what you need to ask the student, and how the report's cover page should look.
@@ -70,6 +73,9 @@ TASKS
 
 ALREADY KNOWN (never ask for these)
 {known}
+
+THE STUDENT'S MESSAGE (may be empty; never ask about anything it already says)
+{request}
 
 PART ONE -- QUESTIONS. Almost always: none.
 
@@ -101,7 +107,8 @@ For a question you truly must ask, give:
 
 PART TWO -- COVER.
 
-Pick the cover layout that suits this lab best:
+If the student's message says anything about the cover, PART FIVE carries it
+and it wins. Otherwise, pick the cover layout that suits this lab best:
   classic  centred, formal, table of details. The safe default.
   rule     left-aligned and editorial; rules instead of boxes. Good for a lab
            with a real title worth setting large.
@@ -123,6 +130,10 @@ set:
   ipynb  a Jupyter/Colab notebook with the outputs already in it
   py     a plain Python script, just the code
   md     a markdown write-up
+  pdf    a PDF of the report
+  html   the report as one web page
+  txt    the report as plain text
+  files  one code file per task
   zip    an archive of the above
 
 Follow the manual's own submission instructions when it gives any -- "submit
@@ -143,6 +154,37 @@ Pick the `style` that suits THIS lab's content:
   compact      code and output with a one-line caption. Good for short
                input/output exercises.
 
+PART FIVE -- WHAT THE STUDENT ASKED ABOUT THE LOOK.
+
+Read only THE STUDENT'S MESSAGE for this part. Their words win over every
+choice above. Leave a field empty when the message says nothing about it -- an
+empty field changes nothing. When the message is the lab itself (pasted), only
+sentences addressed to you about the files count; the lab's own instructions
+about what a PROGRAM prints are not about the files.
+
+look:
+  cover:   show (true or false, only if they asked for a cover or for none),
+           layout (classic, rule, banner or split), title, tagline,
+           fields: lines on the cover by name, e.g. {{"Instructor": "...",
+             "Submitted to": "...", "Date": ""}} -- "" takes a line off; a name
+             the cover has no line for adds one,
+           clear: ["tagline"] to remove the line under the title
+  style:   the layout of every task, if they asked for one
+  tasks:   [{{"task_ids": ["task2"], "show": [], "hide": [], "style": ""}}] for a
+           change to particular tasks only
+  labels:  {{"code": "...", "output": ""}} -- rename a label; "" removes it
+  page_breaks: true if each task should start on a new page
+  body_pt / code_pt: a text or code size in points, if they asked
+  file_name: what to call the files, if they asked
+edit_request: anything ELSE they asked about how the files look that the
+  fields above cannot express -- colours, a named font, a table of contents, a
+  logo, borders, alignment -- as one direct instruction. "" if none.
+unsupported: anything they asked that no file can do ("submit it on LMS",
+  "email it to my teacher"), each as a short phrase with why. Empty if none.
+
+Which parts each answer contains (code, output, screenshots, explanations) and
+which files to produce are read elsewhere: do not repeat them in `look`.
+
 Return ONLY a JSON object matching this schema exactly:
 
 {schema}
@@ -161,7 +203,10 @@ SCHEMA_HINT = """{
   "cover": { "layout": "rule", "tagline": "Perceptron training, no framework." },
   "artifacts": ["docx", "zip"],
   "artifacts_reason": "The manual asks for a Word report.",
-  "style": "walkthrough"
+  "style": "walkthrough",
+  "look": {},
+  "edit_request": "",
+  "unsupported": []
 }"""
 
 _SLUG = re.compile(r"[^a-z0-9_]+")
@@ -189,6 +234,11 @@ class Briefing(BaseModel):
     artifacts: list[str] = Field(default_factory=list)
     artifacts_reason: str = ""
     style: str = ""
+    # What the STUDENT asked about the look. Loose like every reply field: a
+    # malformed patch costs the patch, never a retry.
+    look: LookPatch | None = None
+    edit_request: str | None = ""
+    unsupported: list[str] | None = None
 
 
 @dataclass
@@ -204,6 +254,13 @@ class Plan:
     artifacts_reason: str = ""
     #: How each task is laid out -- one of `labsagent.present.STYLES`.
     style: str = "classic"
+    #: The student's own words about the look, which win over the taste
+    #: fields above (`present.apply` does the winning).
+    look: LookPatch | None = None
+    #: A look wish no field can carry, for the editing agent.
+    edit_request: str = ""
+    #: What no file can do, said back to the student as such.
+    unsupported: list[str] = dataclass_field(default_factory=list)
 
     @property
     def asked(self) -> bool:
@@ -249,8 +306,6 @@ def _known_block(facts, profile, instructions: str, data: list[str] | None = Non
         lines.append(f"  Student ID: {profile.cms_id}")
     if profile.section:
         lines.append(f"  Student section: {profile.section}")
-    if instructions.strip():
-        lines.append(f"  The student has already added these instructions: {instructions.strip()}")
     # THE POINT OF LISTING DATA HERE. "data that is referenced but not supplied
     # (which CSV?)" is the first example of a good question in the prompt above,
     # and it was a good question precisely because nothing could answer it. Now
@@ -296,7 +351,7 @@ def _to_plan(briefing: Briefing, taken: set[str], task_ids=None) -> Plan:
 
     layout = (briefing.cover.layout or "").strip().lower()
     tagline = (briefing.cover.tagline or "").strip()
-    known = {"docx", "ipynb", "py", "md", "zip"}
+    known = set(FORMATS)
     style = (briefing.style or "").strip().lower()
     artifacts = [a.strip().lower().lstrip(".") for a in briefing.artifacts]
     return Plan(
@@ -306,6 +361,11 @@ def _to_plan(briefing: Briefing, taken: set[str], task_ids=None) -> Plan:
         artifacts=[a for a in artifacts if a in known],
         artifacts_reason=(briefing.artifacts_reason or "").strip()[:160],
         style=style if style in STYLES else "classic",
+        look=briefing.look,
+        edit_request=(briefing.edit_request or "").strip()[:600],
+        unsupported=[
+            str(u).strip()[:160] for u in (briefing.unsupported or []) if str(u or "").strip()
+        ][:3],
     )
 
 
@@ -325,6 +385,7 @@ def read_briefing(
         course=spec.course or "(not stated)",
         tasks=tasks,
         known=_known_block(facts, profile, instructions, data),
+        request=(instructions or "").strip()[:MAX_REQUEST_CHARS] or "(none)",
         max_questions=MAX_QUESTIONS,
         schema=SCHEMA_HINT,
     )

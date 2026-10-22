@@ -34,7 +34,7 @@ def _comment(text: str, width: int = 88) -> list[str]:
 
 
 def render(ctx: EmitContext) -> str:
-    lines: list[str] = [f'"""{ctx.spec.title}']
+    lines: list[str] = [f'"""{ctx.presentation.cover.title or ctx.spec.title}']
     if ctx.spec.course:
         lines.append(f"{ctx.spec.course}")
     for key, value in ctx.profile.as_display().items():
@@ -46,10 +46,12 @@ def render(ctx: EmitContext) -> str:
         lines.append("# " + "-" * 70)
         lines.append(f"# {task.title or task.id}")
         lines.append("# " + "-" * 70)
-        lines += _comment(task.statement)
+        include = ctx.plan_for(task.id).include
+        if include.statement:
+            lines += _comment(task.statement)
         lines.append("")
 
-        blocks = select(blocks_for(outcome), ctx.plan_for(task.id).include)
+        blocks = select(blocks_for(outcome), include)
         for block in blocks:
             if block.kind == "code":
                 lines.append(block.text.rstrip())

@@ -49,7 +49,12 @@ def ctx(tmp_path: Path) -> EmitContext:
 
 
 def test_every_format_is_registered():
-    assert set(REGISTRY) == {"docx", "ipynb", "py", "md", "zip"}
+    # `present.FORMATS` is what a request may name; the registry is what can
+    # make it. They must be the same list, or a request is silently dropped.
+    from labsagent.present import FORMATS
+
+    assert set(REGISTRY) == set(FORMATS)
+    assert set(REGISTRY) >= {"docx", "ipynb", "py", "md", "zip", "pdf", "html", "txt", "files"}
 
 
 def test_the_archive_runs_last_so_it_can_package_the_rest():
@@ -57,7 +62,7 @@ def test_the_archive_runs_last_so_it_can_package_the_rest():
 
 
 def test_unknown_formats_are_dropped_not_fatal():
-    assert order(["docx", "pdf", "docx"]) == ["docx"]
+    assert order(["docx", "exe", "docx"]) == ["docx"]
 
 
 def test_a_single_request_yields_a_single_file(ctx):

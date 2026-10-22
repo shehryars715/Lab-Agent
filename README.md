@@ -68,8 +68,14 @@ or email the same address.
 - **Asks only when it truly can't proceed** — e.g. the manual names a dataset but
   gives no link. Otherwise it never pauses.
 - **Produces what you asked for:** the manual annotated in place (`.docx`), an executed
-  notebook (`.ipynb`), a script (`.py`), a write-up (`.md`), or a `.zip` of them.
-  Screenshots are real terminal output, captured as the program ran.
+  notebook (`.ipynb`), a script (`.py`), a write-up (`.md`), a PDF, a web page, plain
+  text, one code file per task, or a `.zip` of them. Screenshots are real terminal
+  output, captured as the program ran.
+- **Changes whatever you ask, afterwards:** the cover (its design, any line on it, or no
+  cover at all), labels, what each answer shows, page breaks, sizes, file names — and
+  anything else about the look, like coloured headings or a table of contents, through a
+  small editing agent that never touches your code, output or answers. Each change is
+  confirmed in plain words, and old labs take changes too.
 
 Each account gets 50 credits a month; most labs use less than one, a long data lab a few. Open the app, attach the manual (and any data),
 say what you want — *"just the notebook for tasks 2 and 4"* — and ask for changes
@@ -138,7 +144,7 @@ upload + message
   → fetch the data (uploads, links, Kaggle), profile it
   → solve each task: an agent writes, runs and fixes one program
   → emit the formats you asked for, each built independently
-  → chat: follow-ups re-solve or rewrite only what they name
+  → chat: follow-ups re-solve or rewrite only what they name, or change the look
 ```
 
 Three ideas carry most of the design:

@@ -181,6 +181,10 @@ may be empty, is quoted below.
     "ipynb" a Jupyter/Colab notebook with outputs already in it
     "py"    a plain Python script
     "md"    a markdown write-up
+    "pdf"   a PDF of the report
+    "html"  the report as one web page
+    "txt"   the report as plain text
+    "files" one code file per task
     "zip"   an archive of everything
   Leave EMPTY only when they named no file type at all. If the document itself
   says what to submit -- "submit only the .ipynb on LMS" -- honour that.
@@ -204,7 +208,8 @@ may be empty, is quoted below.
   Empty if there is nothing.
 - show / hide: parts of every answer the student's message asks to ADD or to
   LEAVE OUT, from exactly: "code", "output", "screenshots", "figures",
-  "explanation". "Include screenshots of the output" -> show ["screenshots"];
+  "explanation", "statement" (the task's own text above its answer).
+  "Include screenshots of the output" -> show ["screenshots"];
   "no explanations, just the code" -> hide ["explanation"]. Empty when the
   message says nothing about what the answers contain. These are about the
   report, never the code, so they never go in notes.
@@ -798,6 +803,7 @@ _PART_NAMES = {
     "figure": "figures", "figures": "figures", "plot": "figures", "plots": "figures",
     "chart": "figures", "charts": "figures",
     "code": "code", "output": "output", "outputs": "output",
+    "statement": "statement", "statements": "statement", "task statement": "statement",
 }
 
 

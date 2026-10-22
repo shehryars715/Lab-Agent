@@ -85,6 +85,12 @@ class Job:
         with self._cv:
             self._emit_locked(payload)
 
+    @property
+    def last_seq(self) -> int:
+        """The sequence number of the newest event (0 before any)."""
+        with self._cv:
+            return len(self._log)
+
     def phase(self, key: str, label: str) -> None:
         """Announce a stage by name. The core has no notion of phases; this is
         the web layer's own vocabulary for the stepper in the UI."""
@@ -254,6 +260,17 @@ class JobRegistry:
     def active(self) -> list[Job]:
         with self._lock:
             return [j for j in self._jobs.values() if not j.is_terminal()]
+
+    def for_run(self, run_id: str, owner: str | None) -> Job | None:
+        """A job of this owner's already holding this run folder, if any --
+        so reopening a lab twice gives one job, not two writing one folder."""
+        with self._lock:
+            jobs = list(self._jobs.values())
+        for job in reversed(jobs):
+            store = getattr(getattr(job, "context", None), "store", None)
+            if store is not None and store.run_id == run_id and job.owner == owner:
+                return job
+        return None
 
     def active_for(self, owner: str) -> list[Job]:
         """This user's runs that are still working (or waiting on them)."""

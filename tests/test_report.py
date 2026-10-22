@@ -14,7 +14,7 @@ from docx.oxml.ns import qn
 
 from labsagent.capture.rendered import RenderedBackend
 from labsagent.models import Task, TaskOutcome, Transcript
-from labsagent.present import AnswerPlan, Include
+from labsagent.present import AnswerPlan, Include, Presentation
 from labsagent.report.docx_builder import annotate_manual
 from labsagent.report.docx_utils import flatten_paragraphs
 
@@ -67,7 +67,7 @@ def test_inserted_sequence_is_in_order(manual_path, tmp_path):
     everything = {"task1": AnswerPlan(include=Include(screenshots=True, explanation=True))}
     out = annotate_manual(
         manual_path, tmp_path / "r.docx", [_outcome(tmp_path)], anchors={"task1": 8},
-        plans=everything,
+        presentation=Presentation.of(plans=everything),
     )
     flat = flatten_paragraphs(docx.Document(str(out)))
 

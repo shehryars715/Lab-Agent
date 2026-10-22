@@ -6,6 +6,7 @@ import {
   historyDownloadUrl,
   loadHistoryRun,
   loadIdentity,
+  reopenRun,
   reviseRun,
   saveIdentity,
   setIdentity,
@@ -20,9 +21,9 @@ import StatusMark from '../components/StatusMark'
 import { useRunStream } from '../hooks/useRunStream'
 import { useStatusLine } from '../hooks/useStatusLine'
 import { formatLabel } from '../lib/formats'
-import { labTitle, updateLab } from '../lib/labs'
+import { createLab, getLab, labTitle, updateLab } from '../lib/labs'
 import { STAGES } from '../lib/stages'
-import { href } from '../lib/router'
+import { go, href } from '../lib/router'
 import { lastRun, readingOrder } from '../lib/thread'
 
 /** One lab. Which of four things it is depends on what still exists:
@@ -46,7 +47,7 @@ export default function Lab({ id, store, announce, onRetry, onEdit, onRemove }) 
         storeKey={id}
         store={store}
         lab={lab}
-        note="The server restarted, so this lab can’t take changes any more — but every file it made is safe on disk."
+        note="The server restarted. Every file is safe on disk, and changes still work."
         onRemove={onRemove}
         onEdit={onEdit}
       />
@@ -68,6 +69,34 @@ export default function Lab({ id, store, announce, onRetry, onEdit, onRemove }) 
 }
 
 // ----------------------------------------------------------------- live
+
+/** A change to a lab whose job the server no longer holds -- after a
+ *  restart, or a lab opened from history. Its run folder holds everything a
+ *  change needs, so the server reopens it onto a new job first. The change's
+ *  boundary is drawn after the reopened job's own events. Returns the id of
+ *  the lab that now holds the job. */
+async function reopenAndRevise({ runId, labId, title, text }) {
+  const { job_id: jobId, after_seq: afterSeq } = await reopenRun(runId)
+  await reviseRun(jobId, text)
+  const patch = {
+    jobId,
+    status: 'working',
+    revisions: [{ text, afterSeq: afterSeq ?? 0, at: Date.now() }],
+  }
+  if (labId && getLab(labId)) {
+    updateLab(labId, (l) => ({ ...l, ...patch }))
+    return labId
+  }
+  const id = createLab({ title, message: '', extra: { runId, ...patch } })
+  go(href.lab(id))
+  return id
+}
+
+function changeError(e) {
+  if (/still working/i.test(e.message)) return 'I’m still on the last one — send this once it finishes.'
+  if (/no such run/i.test(e.message)) return 'That lab’s folder is gone, so it can’t take changes. Start a new lab.'
+  return `That didn’t go through (${e.message}).`
+}
 
 function useAutoScroll(scrollerRef, deps) {
   const pinned = useRef(true)
@@ -221,11 +250,20 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
         await reviseRun(lab.jobId, text)
       } catch (e) {
         if (/still working/i.test(e.message)) return 'I’m still on the last one — send this once it finishes.'
+        if (/no such job/i.test(e.message) && lab.runId) {
+          // The server restarted: reopen the run folder and send it there.
+          try {
+            await reopenAndRevise({ runId: lab.runId, labId: lab.id, title: lab.title, text })
+            return null
+          } catch (again) {
+            return changeError(again)
+          }
+        }
         if (/no such job/i.test(e.message)) {
           updateLab(lab.id, { status: 'lost' })
-          return 'The server restarted, so this lab can’t take changes. Start a new lab with the same file.'
+          return 'The server restarted before this lab reached disk, so it can’t take changes. Start it again.'
         }
-        return `That didn’t go through (${e.message}).`
+        return changeError(e)
       }
       openedActive.current = true
       const boundary = beginRevision(text)
@@ -577,27 +615,30 @@ function DiskLab({ runId, storeKey, store, lab, note, onRemove, onEdit }) {
         </div>
       </div>
 
-      {/* Where the follow-up composer would be, say why it isn't. A revision
-          needs the job the server held in memory, and that is gone. */}
+      {/* A lab read back from disk still takes changes: the first one
+          reopens its run folder onto a live job (see reopenAndRevise). */}
       <div className="lab-composer">
-        <div className="disk-note">
-          <Folder />
-          <div>
-            <p>
-              {note ||
-                'Read back from disk, so this one can’t take changes — the run that made it has ended.'}
-            </p>
-            {lab && onEdit ? (
-              <button type="button" className="btn btn-secondary" onClick={() => onEdit(lab.id)}>
-                Start a new lab from this one
-              </button>
-            ) : (
-              <a className="btn btn-secondary" href={href.home}>
-                Start a new lab
-              </a>
-            )}
-          </div>
-        </div>
+        {note && (
+          <p className="disk-note-line">
+            <Folder /> {note}
+          </p>
+        )}
+        <Composer
+          variant="followup"
+          disabled={!run}
+          placeholder={
+            run ? 'Ask a question, or for a change — “use the banner cover”' : 'Opening the lab…'
+          }
+          note="Changes rebuild the files from what's on disk. Questions get an answer, not a re-run."
+          onSubmit={async ({ text }) => {
+            try {
+              await reopenAndRevise({ runId, labId: lab?.id, title, text })
+              return null
+            } catch (e) {
+              return changeError(e)
+            }
+          }}
+        />
       </div>
     </div>
   )
