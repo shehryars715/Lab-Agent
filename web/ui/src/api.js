@@ -173,6 +173,13 @@ export async function reviseRun(jobId, feedback) {
   return res.json()
 }
 
+/** Carry on a lab a server restart interrupted (the Resume button). */
+export async function resumeRun(jobId) {
+  const res = await fetch(`/api/runs/${jobId}/resume`, { method: 'POST' })
+  if (!res.ok) throw new Error(await readError(res))
+  return res.json()
+}
+
 /** Put the student's details on a finished run's files. A rebuild, no model call. */
 export async function setIdentity(jobId, identity) {
   const res = await fetch(`/api/runs/${jobId}/identity`, {
@@ -196,7 +203,9 @@ export async function submitAnswers(jobId, answers) {
 
 /** The polling route, used for labs that are running but not on screen.
  *  Returns null when the server no longer knows the job -- a restart, or the
- *  registry evicted it -- which the sidebar shows as "lost", not as an error. */
+ *  registry evicted it and its folder is gone -- which the sidebar shows as
+ *  "lost", not as an error. A restart alone no longer does this: the server
+ *  reads a job's chat back from disk (durable.py). */
 export async function getRunStatus(jobId) {
   const res = await fetch(`/api/runs/${encodeURIComponent(jobId)}`)
   if (res.status === 404) return null

@@ -26,10 +26,11 @@ every account, plus every hold still open, plus this one, would pass
 `daily_cap_usd`. Counting open holds is the point: without them, twenty runs
 starting at once would all see "under $2".
 
-A RESTART. Jobs live in memory, so a restart ends live runs. At startup the
-server releases every hold older than itself (`release_open_holds`): nobody
-pays for a run that died. Their worst-case cost still counts toward today's
-cap, because we no longer know what they spent.
+A RESTART. At startup the server releases every hold older than itself
+(`release_open_holds`): nobody pays for the part of a run that died with the
+process. Their worst-case cost still counts toward today's cap, because we no
+longer know what they spent. THEN the interrupted work starts again on a
+fresh hold (durable.py), which pays only for what is done from then on.
 
 Off unless Supabase is configured: single-user servers keep today's caps.
 """

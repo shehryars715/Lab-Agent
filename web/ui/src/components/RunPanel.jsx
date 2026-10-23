@@ -54,6 +54,7 @@ function headline(run, stages, waiting) {
     return s.failed === 0 ? 'Your draft is ready to check' : `${s.passed} of ${s.total} tasks solved`
   }
   if (waiting) return 'Your turn — a quick check'
+  if (run.paused) return 'Paused by a server restart'
   if (run.queued > 0 && !run.error) return `Queued · ${run.queued} ahead`
   const active = stages.find((st) => st.state === 'running')
   if (active?.key === 'solve' && run.progress.total) {
@@ -71,6 +72,7 @@ function subline(run, waiting) {
     return 'The failed ones are marked in the report, so you can see exactly where.'
   }
   if (waiting) return 'Nothing gets written until you answer.'
+  if (run.paused) return 'Press Resume below to carry on.'
   if (run.queued > 0 && !run.error) {
     return 'Waiting for a free slot. Another lab is solving; yours starts when it finishes.'
   }
@@ -107,7 +109,8 @@ export default function RunPanel({
   const run = entry.state
   const parked = waiting && !run.summary && !run.error && !entry.superseded
   const stages = stagesFor(run, question, { waiting: parked, revision })
-  const finished = Boolean(run.summary || run.error)
+  // Paused counts as settled: the clock stops, and nothing claims to be busy.
+  const finished = Boolean(run.summary || run.error || run.paused)
   const elapsed = useElapsed(timing?.start, finished ? timing?.end ?? run.finishedAt : null)
   const credits = run.summary ? run.summary.credits : run.credits
 

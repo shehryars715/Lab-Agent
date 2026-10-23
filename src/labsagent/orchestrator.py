@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -499,8 +500,13 @@ def solve_task(
     explainer: Explainer | None = None,
     datasets=(),
     data_failures=(),
+    settle: Callable[[TaskOutcome], None] | None = None,
 ) -> SolveResult:
-    """One task, bounded attempts, isolated workspace."""
+    """One task, bounded attempts, isolated workspace.
+
+    `settle` records the outcome (run_lab saves the manifest) and runs BEFORE
+    TaskFinished is announced -- see the note at the end.
+    """
     workspace = store.workspace / task.id
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -888,6 +894,13 @@ def solve_task(
     outcome.attempt_errors = attempt_errors
     outcome.stopped_reason = budget_stop or outcome.stopped_reason
     outcome.runs = sum(r.attempts for r in recorders)
+    # PERSIST, THEN ANNOUNCE (2026-10-23). TaskFinished used to go out first
+    # and the manifest was saved after it returned. A server killed in that
+    # gap -- a few milliseconds, but found twice in a row by the live restart
+    # check -- left a chat showing task 1 ticked and a manifest without it,
+    # so the restarted lab solved it again. The record first; then the claim.
+    if settle is not None:
+        settle(outcome)
     emitter.emit(
         ev.TaskFinished(
             task_id=task.id,
@@ -965,15 +978,28 @@ def run_lab(
                 "so I did not start it."
             )
             outcome = TaskOutcome(task=task, status="failed", error=blocker, blocker=blocker)
+            manifest.outcomes.append(outcome)
+            done[task.id] = outcome
+            store.save(manifest)  # persist, then announce
             emitter.emit(
                 ev.TaskFinished(
                     task_id=task.id, status="failed", attempts=0, blocker=blocker
                 )
             )
-            manifest.outcomes.append(outcome)
-            done[task.id] = outcome
-            store.save(manifest)
             continue
+
+        # Persist after EVERY task: a crash on task 4 must not lose tasks 1-3.
+        # And BEFORE the task is announced as finished (see solve_task).
+        def settle(outcome: TaskOutcome, task_id: str = task.id) -> None:
+            manifest.outcomes.append(outcome)
+            done[task_id] = outcome
+            # The per-phase split as well as the total: collapsing to the total
+            # threw away the solve/explain/ingest breakdown, which is the answer
+            # to "where did the money go".
+            manifest.token_usage = usage.total.as_dict()
+            manifest.usage = usage.as_dict()
+            manifest.cost_usd = usage.total.cost_usd
+            store.save(manifest)
 
         result = solve_task(
             task,
@@ -987,9 +1013,12 @@ def run_lab(
             explainer=explainer,
             datasets=datasets,
             data_failures=data_failures,
+            settle=settle,
         )
-        manifest.outcomes.append(result.outcome)
-        done[task.id] = result.outcome
+        if task.id not in done:
+            # Not settled on the way out (a stand-in solver, or a future early
+            # return): record it now rather than lose it.
+            settle(result.outcome)
 
         # THE RUN CEILING STOPS THE RUN, not just the task that crossed it.
         # Everything solved so far is kept and reported -- the failure policy
@@ -1004,20 +1033,8 @@ def run_lab(
                         error="run budget exhausted before this task was started",
                     )
                 )
-            manifest.token_usage = usage.total.as_dict()
-            manifest.usage = usage.as_dict()
-            manifest.cost_usd = usage.total.cost_usd
             store.save(manifest)
             break
-
-        # Persist after EVERY task: a crash on task 4 must not lose tasks 1-3.
-        manifest.token_usage = usage.total.as_dict()
-        # The per-phase split as well as the total: collapsing to the total threw
-        # away the solve/explain/ingest breakdown, which is the answer to "where
-        # did the money go".
-        manifest.usage = usage.as_dict()
-        manifest.cost_usd = usage.total.cost_usd
-        store.save(manifest)
 
     passed = sum(1 for o in manifest.outcomes if o.status == "passed")
     emitter.emit(

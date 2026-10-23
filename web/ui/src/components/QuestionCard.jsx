@@ -69,6 +69,17 @@ export default function QuestionCard({ entry, onSubmit, submitting, error }) {
   const stops = mustAnswer(questions)
   const outside = questions.some(isPrerequisite)
 
+  // A restart came before the answer. The question is asked again (a fresh
+  // card below), so this one only says why it went quiet.
+  if (entry.interrupted) {
+    return (
+      <section className="entry brief is-done">
+        <h2 className="brief-title">The server restarted before this was answered</h2>
+        <p className="brief-intro">I’ll ask again when I’m back on it.</p>
+      </section>
+    )
+  }
+
   // "Stop here" and a timeout both arrive as the same frame, and for a card
   // that cannot be skipped they mean the same thing: nothing was written.
   if (entry.timedOut && stops) {

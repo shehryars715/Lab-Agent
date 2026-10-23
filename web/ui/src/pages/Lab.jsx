@@ -7,6 +7,7 @@ import {
   loadHistoryRun,
   loadIdentity,
   reopenRun,
+  resumeRun,
   reviseRun,
   saveIdentity,
   setIdentity,
@@ -124,6 +125,7 @@ function useAutoScroll(scrollerRef, deps) {
 function statusOf(state) {
   const run = lastRun(state)?.state
   if (!run) return 'working'
+  if (run.paused) return 'paused'
   if (run.error) return 'failed'
   if (run.summary) return run.summary.total && run.summary.failed === 0 ? 'done' : run.summary.total ? 'partial' : 'failed'
   if (state.awaiting) return 'waiting'
@@ -212,6 +214,7 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
     if (status === 'done') announce('Your draft is ready to check.')
     if (status === 'partial') announce(`${run?.summary?.passed} of ${run?.summary?.total} tasks solved.`)
     if (status === 'failed') announce('The run stopped. Details are on screen.')
+    if (status === 'paused') announce('The server restarted. Press Resume to carry on.')
     // Settled: the unused part of this lab's credits is back.
     if (status === 'done' || status === 'partial' || status === 'failed') {
       window.dispatchEvent(new Event(CREDITS_CHANGED))
@@ -277,6 +280,25 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
     [lab.jobId, lab.id, beginRevision],
   )
 
+  // A lab a restart interrupted twice, or that had no credits to start again
+  // with, waits for this. A fresh hold pays for what is done from here on.
+  const [resuming, setResuming] = useState(false)
+  const [resumeError, setResumeError] = useState(null)
+  const resume = useCallback(async () => {
+    setResuming(true)
+    setResumeError(null)
+    try {
+      await resumeRun(lab.jobId)
+      openedActive.current = true
+      updateLab(lab.id, { status: 'working' })
+      reconnect()
+    } catch (e) {
+      setResumeError(e.message)
+    } finally {
+      setResuming(false)
+    }
+  }, [lab.jobId, lab.id, reconnect])
+
   const suggest = useCallback((text) => composerRef.current?.fill(text), [])
 
   // Your details go on the files AFTER they exist: a rebuild, no model call,
@@ -305,7 +327,9 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
 
   const composerState = lost
     ? null
-    : failedLast
+    : run?.paused
+      ? { disabled: true, placeholder: 'Press Resume above to carry on' }
+      : failedLast
       ? { disabled: true, placeholder: 'Use Try again above, or start a new lab' }
       : state.awaiting
         ? { disabled: true, placeholder: 'Answer the quick check above first' }
@@ -381,14 +405,30 @@ function LiveLab({ lab, title, announce, onRetry, onEdit }) {
             )
           })}
 
+          {run?.paused && !lost && (
+            <div className="entry notice">
+              <StatusMark status="paused" size={18} />
+              <div>
+                <p className="notice-title">Paused</p>
+                <p>Everything done so far is kept. Resuming uses your credits from here on.</p>
+                {resumeError && <p className="notice-error">{resumeError}</p>}
+                <div className="run-actions">
+                  <button type="button" className="btn btn-primary" onClick={resume} disabled={resuming}>
+                    {resuming ? 'Resuming…' : 'Resume'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {lost && (
             <div className="entry notice">
               <StatusMark status="lost" size={18} />
               <div>
                 <p className="notice-title">The server restarted mid-run</p>
                 <p>
-                  It keeps live runs in memory, so this one went with it. Files it had already
-                  finished are in the <span className="mono">runs/</span> folder.
+                  This lab started before the server kept its chats, so it went with the restart.
+                  Files it had already finished are in the <span className="mono">runs/</span> folder.
                 </p>
                 <div className="run-actions">
                   <button type="button" className="btn btn-primary" onClick={() => onRetry(lab.id)}>

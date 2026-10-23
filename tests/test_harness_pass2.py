@@ -189,6 +189,27 @@ def test_a_declared_blocker_is_not_retried_and_says_why(tmp_path):
     assert model.calls == 2  # no retry, and no extra turn after the tool
 
 
+def test_a_finished_task_is_on_disk_before_it_is_announced(tmp_path):
+    """Persist, then announce (2026-10-23). The live restart check killed the
+    server just after "task 1 finished" reached the browser -- and before the
+    manifest held it, twice in a row, so the restarted lab solved it again."""
+    task = Task(id="task1", title="Colour", statement="Simulate colour blindness.")
+    store = RunStore.create("99", root=tmp_path / "runs")
+    (store.workspace / task.id).mkdir(parents=True, exist_ok=True)
+    (store.workspace / task.id / "task1.py").write_text("import notreal_xyz\n", encoding="utf-8")
+    on_disk_when_announced = []
+
+    def check(event):
+        if isinstance(event, ev.TaskFinished):
+            on_disk_when_announced.append([o.task.id for o in store.load().outcomes])
+
+    run_lab(
+        LabSpec(lab_number="99", title="L", tasks=[task]), store, Settings(deepseek_api_key=""),
+        _Shots(), emitter=ev.Emitter(check), model=ScriptedModel(script=_blocked_script()),
+    )
+    assert on_disk_when_announced == [["task1"]]
+
+
 def test_a_task_built_on_a_blocked_task_is_not_started(tmp_path, monkeypatch):
     import labsagent.orchestrator as orch
 

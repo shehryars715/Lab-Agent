@@ -14,6 +14,9 @@ exists, which is itself something to learn about another student.
 WHERE OWNERSHIP IS RECORDED.
   - Live runs: `Job.owner`, set when the run is created. The job is in this
     process's memory, so the check costs nothing.
+  - A job read back after a restart (durable.py): `job_owner`, the same
+    `runs` row, asked BEFORE its log is read, once per process. Not from the
+    job's folder, for the reason below.
   - Past runs (on disk): in Postgres (`runs` table), NOT in manifest.json. The
     disk is data, not authority -- history.py's rule -- and a manifest is a
     file that a program in that run's folder tree once sat next to.
@@ -64,6 +67,13 @@ def attach_run_dir(job: Job, run_id: str) -> None:
         supa.rpc("attach_run_dir", p_job_id=job.id, p_run_dir=run_id)
     except supa.SupaError:
         pass
+
+
+def job_owner(job_id: str) -> str | None:
+    """Who started this job, by its id -- for a job this process did not
+    start. None: no such job. Unreachable: a 503, never "allow"."""
+    owner = _db("job_owner", p_job_id=job_id)
+    return str(owner) if owner else None
 
 
 def require_job(registry: JobRegistry, job_id: str, user_id: str | None) -> Job:

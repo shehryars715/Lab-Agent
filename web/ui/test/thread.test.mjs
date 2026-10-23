@@ -271,3 +271,81 @@ test('the place goes down, then the solving phase clears the queue', () => {
   assert.equal(run.queued, null)
   assert.equal(stagesFor(run, null).find((s) => s.key === 'solve').state, 'running')
 })
+
+// ---- a server restart (durable.py) -----------------------------------------
+
+const ASKING = [
+  START,
+  { type: 'phase', key: 'reading', label: 'Reading what you sent', seq: 1 },
+  { type: 'spec', lab_number: '03', title: 'Loops', task_count: 1, tasks: [{ id: 'task1', title: 'Sum' }], seq: 2 },
+  { type: 'needs_input', questions: [{ key: 'q', label: 'Which?' }], timeout_s: 600, seq: 3 },
+]
+
+const SOLVING = [
+  START,
+  { type: 'spec', lab_number: '03', title: 'Loops', task_count: 2, tasks: [{ id: 'task1', title: 'A' }, { id: 'task2', title: 'B' }], seq: 1 },
+  { type: 'phase', key: 'solving', label: 'Solving each task', seq: 2 },
+  { type: 'event', event: { kind: 'TaskFinished', task_id: 'task1', status: 'passed', attempts: 1 }, seq: 3 },
+]
+
+test('a lab restarted before its code starts over in a fresh card, and the question is retired', () => {
+  const state = play([
+    ...ASKING,
+    { type: 'interrupted', stage: 'reading', resuming: true, text: 'The server restarted…', seq: 4 },
+  ])
+  assert.equal(state.awaiting, null)
+  assert.ok(state.entries.find((e) => e.kind === 'question').interrupted)
+  const runs = state.entries.filter((e) => e.kind === 'run')
+  assert.equal(runs.length, 2)
+  assert.ok(runs[0].superseded && !runs[1].superseded)
+  assert.equal(lastRun(state).state.finishedAt, null) // still live: the stream stays open
+  // Old card, then what happened, then the new card -- in that order.
+  const kinds = state.entries.map((e) => e.kind)
+  assert.ok(kinds.lastIndexOf('agent-text') > kinds.indexOf('run'))
+})
+
+test('a solve resumed after a restart carries on in the same card', () => {
+  const state = play([
+    ...SOLVING,
+    { type: 'interrupted', stage: 'solving', resuming: true, text: 'During task 2 of 2…', seq: 4 },
+  ])
+  const runs = state.entries.filter((e) => e.kind === 'run')
+  assert.equal(runs.length, 1)
+  const run = lastRun(state).state
+  assert.equal(run.tasks.task1.status, 'passed') // finished work stays ticked
+  assert.equal(run.finishedAt, null)
+})
+
+test('a parked lab settles as paused, and Resume makes it live again', () => {
+  const parked = play([
+    ...SOLVING,
+    { type: 'interrupted', stage: 'solving', resuming: false, text: 'Press Resume…', seq: 4 },
+  ])
+  let run = lastRun(parked).state
+  assert.equal(run.paused.stage, 'solving')
+  assert.ok(run.finishedAt) // settled, so the browser closes the stream
+  assert.equal(run.error, null) // paused is not failed
+
+  const resumed = reduce(parked, { type: 'resumed', stage: 'solving', text: 'Carrying on from task 2.', seq: 5 })
+  run = lastRun(resumed).state
+  assert.equal(run.paused, null)
+  assert.equal(run.finishedAt, null)
+  assert.equal(resumed.entries.filter((e) => e.kind === 'run').length, 1)
+  assert.equal(resumed.entries.at(-1).text, 'Carrying on from task 2.')
+})
+
+test('a replay after the restart lands in the same place as watching it live', () => {
+  const frames = [
+    ...SOLVING,
+    { type: 'interrupted', stage: 'solving', resuming: false, text: 'Press Resume…', seq: 4 },
+    { type: 'resumed', stage: 'solving', text: 'Carrying on.', seq: 5 },
+    { type: 'event', event: { kind: 'TaskFinished', task_id: 'task2', status: 'passed', attempts: 1 }, seq: 6 },
+    { type: 'done', passed: 2, failed: 0, total: 2, seq: 7 },
+  ]
+  const run = lastRun(play(frames)).state
+  assert.equal(run.summary.passed, 2)
+  assert.equal(run.paused, null)
+  // A reconnect resends the server's frames (never the local __start): nothing doubles.
+  const twice = play(frames.slice(1), play(frames))
+  assert.equal(twice.entries.length, play(frames).entries.length)
+})

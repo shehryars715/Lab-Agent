@@ -7,7 +7,11 @@ thread wakes at startup and every few hours and removes:
   - run folders whose name says they are older than the window
     (`<YYYYmmdd-HHMMSS>_lab...`: the name IS the timestamp, which survives a
     copy or a restore where an mtime would not);
-  - upload staging folders (`_web_uploads/<job>`) by modification time;
+  - upload staging folders (`_web_uploads/<job>`) by modification time --
+    and, with a run folder, together with it: the job id is the run
+    folder's suffix. Since 2026-10-23 that folder also holds the job's chat
+    (`events.jsonl`), so a lab's conversation goes when its files go;
+    otherwise every change would keep the chat alive past its files;
   - and, with Supabase, the `runs` rows that pointed at deleted folders.
 
 OFF BY DEFAULT (`retention_days = 0`). Turning it on is a decision about the
@@ -24,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import auth, supa
+from .jobs import JOB_ID
 
 SWEEP_EVERY_S = 6 * 3600
 
@@ -50,6 +55,10 @@ def sweep(root: Path, days: int, *, now: datetime | None = None) -> list[str]:
             shutil.rmtree(folder, ignore_errors=True)
             removed.append(folder.name)
     uploads = root / "_web_uploads"
+    for name in removed:
+        job_id = name.rsplit("_", 1)[-1]
+        if JOB_ID.fullmatch(job_id):
+            shutil.rmtree(uploads / job_id, ignore_errors=True)
     if uploads.is_dir():
         for staged in uploads.iterdir():
             try:

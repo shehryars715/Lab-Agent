@@ -63,7 +63,7 @@ export default function Sidebar({
   // Only marks that say something: the lab on screen and anything still
   // running. Eight identical ticks would be navigation that tells you nothing.
   const railItems = items
-    .filter((i) => i.key === openKey || i.status === 'working' || i.status === 'waiting')
+    .filter((i) => i.key === openKey || ['working', 'waiting', 'paused'].includes(i.status))
     .slice(0, 5)
 
   // The drawer is a modal dialog while it is open: Escape closes it, focus

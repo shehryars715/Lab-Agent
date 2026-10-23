@@ -171,9 +171,10 @@ def test_refills_on_is_the_first_of_next_month():
     assert metering.refills_on(datetime(2026, 12, 31, tzinfo=timezone.utc)) == "1 Jan"
 
 
-def test_out_of_credits_answers_402_and_leaves_no_running_lab(ledger, monkeypatch):
+def test_out_of_credits_answers_402_and_leaves_no_running_lab(ledger, monkeypatch, tmp_path):
     ledger.reply = {"error": "no_credits", "balance": 0}
     monkeypatch.setattr(app_module, "registry", JobRegistry())
+    monkeypatch.setattr(app_module, "UPLOADS_ROOT", tmp_path / "_web_uploads")
     monkeypatch.setattr(app_module, "run_job", lambda **k: pytest.fail("must not start"))
     client = TestClient(app_module.app)
     client.cookies.set(auth.COOKIE, auth.mint(USER))

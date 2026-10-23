@@ -5,6 +5,7 @@
 //   pending   dashed ghost ring            (present from the first frame)
 //   running   ghost ring + coral arc       (the only mark that moves)
 //   waiting   coral ring + dot             (your turn)
+//   paused    drawn as waiting             (a restart; press Resume -- also your turn)
 //   done      ring + a tick that draws itself
 //   partial   tick, with a rose notch      (some tasks failed)
 //   failed    rose ring + cross
@@ -16,6 +17,7 @@ export const STATUS_WORDS = {
   running: 'Running',
   working: 'Running',
   waiting: 'Needs your answer',
+  paused: 'Paused — press Resume',
   done: 'Draft ready',
   passed: 'Passed',
   partial: 'Some tasks failed',
@@ -25,7 +27,8 @@ export const STATUS_WORDS = {
 }
 
 export default function StatusMark({ status, size = 16, draw = false }) {
-  const s = status === 'working' ? 'running' : status === 'passed' ? 'done' : status
+  const s =
+    status === 'working' ? 'running' : status === 'passed' ? 'done' : status === 'paused' ? 'waiting' : status
   return (
     <svg
       className={`mark mark-${s} ${draw ? 'mark-draw' : ''}`}

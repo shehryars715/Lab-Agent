@@ -17,6 +17,7 @@ import re
 import shutil
 from dataclasses import asdict, dataclass, fields, replace
 from dataclasses import field as dataclass_field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ from labsagent.ingest.readers import read_document, read_pasted
 from labsagent.emit import DEFAULT_ARTIFACTS, REGISTRY, EmitContext, emit_all
 from labsagent.ingest.labspec import extract_labspec
 from labsagent.intent import Intent, scope
-from labsagent.models import LabSpec, TaskOutcome
+from labsagent.models import LabSpec, RunManifest, TaskOutcome
 from labsagent.orchestrator import run_lab
 from labsagent.present import CoverSpec, LookPatch, Presentation, receipt, split_identity
 from labsagent.present import apply as apply_look
@@ -50,7 +51,7 @@ from labsagent.profile import ASK_ORDER, StudentProfile
 from labsagent.report.cover import cover_from
 from labsagent.report.title_page import TitlePage, read_title_page
 from labsagent.runstore import RunStore
-from labsagent.usage import RunUsage
+from labsagent.usage import RunUsage, Usage
 
 from .briefing import read_briefing
 from .edit import replay_edits, run_edit
@@ -1356,8 +1357,10 @@ def run_job(
         # manual happened to name, with no chance to correct it. Inside the
         # solve, it runs once per attempt, and `max_retries_per_task` is 3.
         store = RunStore.create(spec.lab_number, root=RUNS_ROOT, suffix=job.id)
-        # History finds a run by its folder; record whose folder this is.
+        # History finds a run by its folder; record whose folder this is --
+        # in the database (history) and in the job's own record (a restart).
         ownership.attach_run_dir(job, store.run_id)
+        job.attach_run(store.dir)
         manual_path = keep_manual(store, manual_path)
         acquired = _acquire(
             job,
@@ -1405,45 +1408,6 @@ def run_job(
         datasets = acquired.datasets
         data_failures = list(acquired.failures)
 
-        # -- 5. solve ------------------------------------------------------
-        # ONLY THE SOLVE WAITS FOR A SLOT (slots.py). Reading and questions
-        # already happened; the files are written after the slot is free.
-        with SOLVE_SLOTS.hold(on_wait=_queued(job)):
-            job.phase("solving", "Solving each task")
-
-            # Two consumers, and the core knows about neither. `Emitter` fans out
-            # and swallows a failing consumer's exception, so a bug in the web
-            # renderer cannot take down a run that is otherwise going fine.
-            recorder = ev.Recorder()
-            emitter = ev.Emitter(
-                lambda event: job.publish({"type": "event", "event": wire_event(event)}),
-                recorder,
-            )
-
-            # `tracing_tools` is scoped around the whole solve phase, and the
-            # tracer is told which task is running by these same task-level
-            # events. A tool callback does not know its own task; the event
-            # stream does. Both arrive on this thread, in order.
-            def note_current_task(event: ev.Event) -> None:
-                if isinstance(event, ev.TaskStarted):
-                    tracer.task_id = event.task_id
-
-            screenshots = screenshot_backend(spec, manual, reading.kind, manual_path)
-            with tracing_tools(job.publish) as tracer:
-                emitter.subscribe(note_current_task)
-                manifest = run_lab(
-                    spec,
-                    store,
-                    settings,
-                    screenshots,
-                    emitter=emitter,
-                    usage=usage,
-                    model=build_model(settings),
-                    explainer=_only_when_wanted(build_explainer(settings, usage), presentation),
-                    datasets=datasets,
-                    data_failures=data_failures,
-                )
-
         # Remember what a revision would need. A re-run has to reach the same
         # run directory, the same manual and the same cover decisions, and
         # rebuilding any of that from scratch would produce a different report
@@ -1459,56 +1423,212 @@ def run_job(
             anchors=reading.anchors,
             intent=intent,
             datasets=datasets,
-            screenshots=screenshots,
+            screenshots=screenshot_backend(spec, manual, reading.kind, manual_path),
             title_page=title_page,
         )
 
-        edited = _emit(job, job.context, manifest.outcomes, usage, edit_request=plan.edit_request)
-        # SAY WHAT WAS DONE WITH WHAT THEY ASKED: the look they asked for, as
-        # a receipt from the diff, what no file could do, and the edit.
-        said = receipt_text(
-            "As you asked:",
-            receipt(taste, presentation, [t.id for t in spec.tasks], title_page=title_page.found),
-            plan.unsupported,
-            edited,
-        )
-        if said:
-            job.publish({"type": "narration", "text": said})
-        page_note = title_page_note(job.context)
-        if page_note:
-            job.publish({"type": "narration", "text": page_note})
-        needs = closing_needs(manifest.outcomes)
-        if needs:
-            job.publish({"type": "narration", "text": needs})
-        stopped = budget_stop(manifest.outcomes)
-        if stopped:
-            job.publish({"type": "narration", "text": stopped})
+        # -- 5. checkpoint -------------------------------------------------
+        #
+        # SAVE HOW TO GO ON, NOT ONLY WHAT WAS DONE. The manifest is saved
+        # after every task, so a restart never lost finished work -- but the
+        # context (the report spec, the anchors, the data, who it is for) was
+        # written only at the very end, so nothing could CONTINUE a lab from
+        # those tasks. Written here, before the first model call of the
+        # solve, a new process can pick the lab up at the next task. The
+        # rest of what the closing lines need rides along under "resume".
+        first = RunManifest(run_id=store.run_id, started_at=datetime.now(timezone.utc), spec=spec)
+        first.datasets = [d.as_dict() for d in datasets]
+        job.context.save_to(first)
+        first.context["resume"] = {
+            "taste": taste.to_dict(),
+            "edit_request": plan.edit_request,
+            "unsupported": list(plan.unsupported),
+            "data_failures": [list(f) for f in data_failures],
+            "answered": bool(answers),
+        }
+        store.save(first)
 
-        recorder_events = recorder.events
-        ev.write_events_log(store, recorder_events)
-
-        # Settle the charge: every phase of the run (ingest, briefing, solve,
-        # explain), rounded up once, recorded with the rate it was charged at.
-        manifest.credits = credits.charge(usage.total.cost_usd)
-        manifest.usd_per_credit = credits.USD_PER_CREDIT
-        job.context.save_to(manifest)
-        store.save(manifest)
-
-        passed = sum(1 for o in manifest.outcomes if o.status == "passed")
-        job.finish(
-            summary={
-                "passed": passed,
-                "failed": len(manifest.outcomes) - passed,
-                "total": len(manifest.outcomes),
-                "credits": manifest.credits,
-                "run_id": store.run_id,
-                "lab_number": spec.lab_number,
-                "blocked": sum(1 for o in manifest.outcomes if o.blocker),
-                "identity_saved": bool(answers),
-            }
+        _solve_and_finish(
+            job, job.context, usage, data_failures,
+            taste=taste,
+            edit_request=plan.edit_request,
+            unsupported=plan.unsupported,
+            answered=bool(answers),
         )
 
     except Exception as exc:  # noqa: BLE001 -- a crash here is a hung browser tab
+        import traceback
+
+        traceback.print_exc()
+        job.finish(error=f"{type(exc).__name__}: {exc}"[:500])
+
+
+def _solve_and_finish(
+    job: Job,
+    context: RunContext,
+    usage: RunUsage,
+    data_failures,
+    *,
+    taste: Presentation,
+    edit_request,
+    unsupported,
+    answered: bool,
+    prior: dict | None = None,
+) -> None:
+    """Solve what is left, make the files, say what was done, finish.
+
+    The second half of `run_job`, and all of `resume_job`: one path, so a lab
+    a restart interrupted ends exactly as an uninterrupted one does. It always
+    goes through `run_lab(resume=True)` -- the checkpoint is already on disk,
+    so a fresh solve is just a resume with nothing settled yet.
+    """
+    store, spec, settings = context.store, context.spec, context.settings
+
+    # -- solve ------------------------------------------------------------
+    # ONLY THE SOLVE WAITS FOR A SLOT (slots.py). Reading and questions
+    # already happened; the files are written after the slot is free.
+    with SOLVE_SLOTS.hold(on_wait=_queued(job)):
+        job.phase("solving", "Solving each task")
+
+        # Two consumers, and the core knows about neither. `Emitter` fans out
+        # and swallows a failing consumer's exception, so a bug in the web
+        # renderer cannot take down a run that is otherwise going fine.
+        recorder = ev.Recorder()
+        emitter = ev.Emitter(
+            lambda event: job.publish({"type": "event", "event": wire_event(event)}),
+            recorder,
+        )
+
+        # `tracing_tools` is scoped around the whole solve phase, and the
+        # tracer is told which task is running by these same task-level
+        # events. A tool callback does not know its own task; the event
+        # stream does. Both arrive on this thread, in order.
+        def note_current_task(event: ev.Event) -> None:
+            if isinstance(event, ev.TaskStarted):
+                tracer.task_id = event.task_id
+
+        with tracing_tools(job.publish) as tracer:
+            emitter.subscribe(note_current_task)
+            manifest = run_lab(
+                spec,
+                store,
+                settings,
+                context.screenshots or RenderedBackend(),
+                emitter=emitter,
+                usage=usage,
+                model=build_model(settings),
+                resume=True,
+                explainer=_only_when_wanted(build_explainer(settings, usage), context.presentation),
+                datasets=context.datasets,
+                data_failures=data_failures,
+            )
+    # A resume finishes tasks after the ones already settled; put them back
+    # in the order the lab lists them.
+    order = [t.id for t in spec.tasks]
+    manifest.outcomes.sort(key=lambda o: order.index(o.task.id) if o.task.id in order else 0)
+
+    edited = _emit(job, context, manifest.outcomes, usage, edit_request=edit_request)
+    # SAY WHAT WAS DONE WITH WHAT THEY ASKED: the look they asked for, as
+    # a receipt from the diff, what no file could do, and the edit.
+    said = receipt_text(
+        "As you asked:",
+        receipt(taste, context.presentation, order, title_page=context.title_page.found),
+        unsupported,
+        edited,
+    )
+    if said:
+        job.publish({"type": "narration", "text": said})
+    page_note = title_page_note(context)
+    if page_note:
+        job.publish({"type": "narration", "text": page_note})
+    needs = closing_needs(manifest.outcomes)
+    if needs:
+        job.publish({"type": "narration", "text": needs})
+    stopped = budget_stop(manifest.outcomes)
+    if stopped:
+        job.publish({"type": "narration", "text": stopped})
+
+    ev.write_events_log(store, recorder.events)
+
+    # Settle the charge: every phase of THIS pass (ingest, briefing, solve,
+    # explain), rounded up once, recorded with the rate it was charged at. A
+    # resumed pass charges only itself; the cost before the restart stays on
+    # the record (`prior`) but was never billed.
+    manifest.credits = credits.charge(usage.total.cost_usd)
+    manifest.usd_per_credit = credits.USD_PER_CREDIT
+    if prior is not None:
+        whole = _usage_from(prior, settings.model_name)
+        for name, phase in usage.phases.items():
+            whole.phase(name).merge(phase)
+        manifest.usage = whole.as_dict()
+        manifest.token_usage = whole.total.as_dict()
+        manifest.cost_usd = whole.total.cost_usd
+    # Rewritten from scratch, so the checkpoint's "resume" notes go with it.
+    context.save_to(manifest)
+    store.save(manifest)
+
+    passed = sum(1 for o in manifest.outcomes if o.status == "passed")
+    job.finish(
+        summary={
+            "passed": passed,
+            "failed": len(manifest.outcomes) - passed,
+            "total": len(manifest.outcomes),
+            "credits": manifest.credits,
+            "run_id": store.run_id,
+            "lab_number": spec.lab_number,
+            "blocked": sum(1 for o in manifest.outcomes if o.blocker),
+            "identity_saved": answered,
+        }
+    )
+
+
+def _usage_from(saved: dict, model: str) -> RunUsage:
+    """A manifest's per-phase usage, back as a RunUsage to add to."""
+    usage = RunUsage(model=model)
+    for name, phase in ((saved or {}).get("phases") or {}).items():
+        usage.phase(name).merge(
+            Usage(
+                model=phase.get("model") or model,
+                calls=int(phase.get("calls", 0)),
+                input_tokens=int(phase.get("input_tokens", 0)),
+                output_tokens=int(phase.get("output_tokens", 0)),
+                cached_tokens=int(phase.get("cached_tokens", 0)),
+            )
+        )
+    return usage
+
+
+def resume_job(
+    job: Job,
+    *,
+    settings: Settings,
+    profile_seed: dict[str, str],
+    usage: RunUsage | None = None,
+) -> None:
+    """Carry on a lab a restart cut short mid-solve. Never raises.
+
+    Everything comes from the run folder: the checkpoint `run_job` wrote
+    before solving, plus every task settled since. No reading, no questions,
+    no download -- they happened, and their results are on disk.
+    """
+    try:
+        usage = usage if usage is not None else RunUsage(model=settings.model_name)
+        store = RunStore.open(job.run_dir)
+        manifest = store.load()
+        saved = (manifest.context or {}).get("resume") or {}
+        job.context = RunContext.from_disk(store, settings, profile_from(profile_seed))
+        _solve_and_finish(
+            job, job.context, usage,
+            [tuple(f) for f in saved.get("data_failures") or []],
+            # No saved taste (a restart in the moment after the files were
+            # saved): nothing to compare against, so no receipt to write.
+            taste=Presentation.from_dict(saved["taste"]) if saved.get("taste") else job.context.presentation,
+            edit_request=saved.get("edit_request"),
+            unsupported=tuple(saved.get("unsupported") or ()),
+            answered=bool(saved.get("answered")),
+            prior=dict(manifest.usage),
+        )
+    except Exception as exc:  # noqa: BLE001
         import traceback
 
         traceback.print_exc()
@@ -1833,6 +1953,7 @@ def reopen_job(job: Job, run_dir: Path, settings: Settings, profile_seed: dict[s
 
     store = RunStore.open(run_dir)
     job.context = RunContext.from_disk(store, settings, profile_from(profile_seed))
+    job.attach_run(store.dir)
     manifest = store.load()
     spec = manifest.spec
     job.publish(

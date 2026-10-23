@@ -33,12 +33,12 @@ from pydantic import BaseModel
 
 from labsagent.config import PROJECT_ROOT, load_settings
 
-from . import auth, history, metering, ownership, profiles, supa
+from . import auth, durable, history, metering, ownership, profiles, supa
 from .jobs import HEARTBEAT_S, JobRegistry
 from labsagent.data import DATA_SUFFIXES
 from labsagent.ingest.readers import ACCEPTED_SUFFIXES
 
-from .pipeline import UPLOADS_ROOT, reopen_job, repackage_job, revise_job, run_job
+from .pipeline import UPLOADS_ROOT, reopen_job, run_job
 from .slots import SOLVE_SLOTS
 
 # The upload ceiling. A lab manual is tens of kilobytes; this exists to turn a
@@ -69,7 +69,10 @@ ZIP_MAGIC = b"PK"
 app = FastAPI(title="Labs-Agent", docs_url="/api/docs", openapi_url="/api/openapi.json")
 # A no-op unless LABSAGENT_USER and LABSAGENT_PASSWORD are both set. See auth.py.
 app.add_middleware(auth.RequireLogin)
-registry = JobRegistry()
+# Jobs outlive the process: each keeps its log in its upload folder, and one
+# from before a restart is read back from there when it is asked for. See
+# durable.py for whose it is and what happens to the work it was doing.
+registry = JobRegistry(root=UPLOADS_ROOT, owner_of=durable.owner_of, on_restore=durable.adopt)
 
 
 @app.on_event("startup")
@@ -80,6 +83,9 @@ def _start_retention() -> None:
     retention.start(settings.runs_dir.resolve(), settings.retention_days)
     # Holds left by runs that died with the last process: release them.
     metering.release_stale_holds()
+    # THEN start that work again (once), on fresh holds. The order matters:
+    # releasing after would release the new holds too.
+    durable.recover(registry)
 
 UI_DIST = PROJECT_ROOT / "web" / "ui" / "dist"
 
@@ -332,13 +338,14 @@ async def create_run(
         raise HTTPException(
             409, "You already have a lab running. Start the next one when it finishes."
         )
-    job = registry.create()
+    job = registry.create(root=UPLOADS_ROOT)
     hold = metering.UNMETERED
     try:
         ownership.record(job, user_id)
 
         # Made unconditionally now: data can arrive with a pasted lab and no
-        # file, and it still needs somewhere of its own to land.
+        # file, and it still needs somewhere of its own to land. It is also
+        # the job's own folder: its log and `job.json` live here.
         upload_dir = UPLOADS_ROOT / job.id
         upload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -348,6 +355,18 @@ async def create_run(
             manual_path.write_bytes(manual_bytes)
 
         dataset_paths = await _save_datasets(datasets, upload_dir)
+
+        # What doing this again would need, written before it starts: a
+        # restart that finds it still set knows this lab was cut short.
+        job.begin(
+            "run",
+            manual=manual_name or None,
+            datasets=[p.name for p in dataset_paths],
+            instructions=instructions,
+            identity=profiles.clean(
+                {"name": name, "cms_id": cms_id, "section": section, "program": program}
+            ),
+        )
 
         # LAST, after every check that can refuse the upload, so a refused
         # file never holds credits. A refusal here is an HTTP answer (402,
@@ -377,19 +396,9 @@ async def create_run(
             # Free if it stops before solving (not a lab, out of scope, no data).
             "free_unless_solved": True,
             "job": job,
-            "manual_path": manual_path,
-            "dataset_paths": dataset_paths,
-            "instructions": instructions,
-            # Who you are comes from your account. Anything typed into this
-            # request wins for this run only (older pages still send it).
-            "profile_seed": {
-                **profiles.get(user_id),
-                **profiles.clean(
-                    {"name": name, "cms_id": cms_id, "section": section, "program": program}
-                ),
-            },
+            # From what was just recorded, by the same function a resume uses.
             # Its cost ceiling is what its credit hold can pay for.
-            "settings": metering.capped(settings, hold),
+            **durable.run_kwargs(job, job.state["work"], upload_dir, metering.capped(settings, hold)),
         },
         name=f"labsagent-{job.id}",
         daemon=True,  # a stuck job must never keep the process alive
@@ -491,28 +500,19 @@ def revise_run(job_id: str, body: Feedback, request: Request) -> dict:
         raise HTTPException(409, "this run is still working")
     if not body.feedback.strip():
         raise HTTPException(422, "feedback is empty")
+    # A job read back after a restart: its context comes from its run folder.
+    durable.ensure_context(job)
     # A follow-up is paid for like a run: even a question is a model call.
     hold = metering.reserve(request.state.user_id, job.id, "followup", load_settings())
 
+    # Recorded before it starts, so a restart part-way makes it again.
+    job.begin("followup", feedback=body.feedback)
     # Reopen the event stream's producer. `finish()` set a terminal status, so
     # the job has to go back to running or `_sse` would end the response the
     # moment it starts -- and the browser would see the revision's events
     # arrive after a stream that had already closed.
     job.reopen()
-    threading.Thread(
-        target=metering.run_metered,
-        args=(revise_job, hold),
-        kwargs={
-            "free_unless_solved": False,
-            "job": job,
-            "feedback": body.feedback,
-            "cap_usd": metering.capped(load_settings(), hold).max_cost_per_run_usd
-            if hold.id
-            else None,
-        },
-        name=f"labsagent-revise-{job.id}",
-        daemon=True,
-    ).start()
+    durable.launch(job, hold)
     return {"job_id": job.id, "revising": True}
 
 
@@ -530,16 +530,37 @@ def set_identity(job_id: str, body: Identity, request: Request) -> dict:
     values = profiles.clean(body.model_dump())
     if not values:
         raise HTTPException(422, "nothing to add")
+    durable.ensure_context(job)
     # Remembered with your account, so the next lab's cover is right first time.
     profiles.save(request.state.user_id, values)
+    job.begin("identity", identity=values)
     job.reopen()
-    threading.Thread(
-        target=repackage_job,
-        args=(job, values),
-        name=f"labsagent-identity-{job.id}",
-        daemon=True,
-    ).start()
+    durable.launch(job, metering.UNMETERED)
     return {"job_id": job.id, "repackaging": True}
+
+
+@app.post("/api/runs/{job_id}/resume", status_code=202)
+def resume_run(job_id: str, request: Request) -> dict:
+    """Carry on a lab a restart interrupted -- the Resume button.
+
+    After a restart, interrupted work starts again by itself ONCE; if the
+    same work is interrupted again, or there were no credits for it then, it
+    waits here (durable.py). A fresh hold pays for what is done from now on.
+    """
+    job = ownership.require_job(registry, job_id, request.state.user_id)
+    pending = job.state.get("pending")
+    if job.status != "interrupted" or not pending:
+        raise HTTPException(409, "this run isn't waiting to be resumed")
+    if (
+        pending.get("kind") == "run"
+        and auth.mode() == "supabase"
+        and [j for j in registry.active_for(request.state.user_id) if j is not job]
+    ):
+        raise HTTPException(
+            409, "You already have a lab running. Resume this one when it finishes."
+        )
+    durable.resume(job, pending, auto=False)
+    return {"job_id": job.id, "resuming": True}
 
 
 @app.get("/api/runs/{job_id}/download/{key}")
@@ -599,8 +620,10 @@ def reopen_run(run_id: str, request: Request) -> dict:
         if not existing.is_terminal():
             raise HTTPException(409, "this run is still working")
         return {"job_id": existing.id, "after_seq": existing.last_seq}
-    job = registry.create()
-    job.owner = request.state.user_id
+    job = registry.create(root=UPLOADS_ROOT)
+    # Recorded like any job, so its chat (the changes made from here) is
+    # still this account's after a restart.
+    ownership.record(job, request.state.user_id)
     try:
         reopen_job(job, directory, load_settings(), profiles.get(request.state.user_id))
     except (FileNotFoundError, KeyError, ValueError, OSError) as exc:

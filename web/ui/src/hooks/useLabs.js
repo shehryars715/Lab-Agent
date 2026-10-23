@@ -65,6 +65,7 @@ export function useBackgroundStatus(store, openId, onSettled) {
             continue
           }
           if (status.status === 'awaiting_input') updateLab(id, { status: 'waiting' })
+          else if (status.status === 'interrupted') updateLab(id, { status: 'paused' })
           else if (status.status === 'queued' || status.status === 'running') {
             updateLab(id, { status: 'working' })
           } else if (status.status === 'failed') {

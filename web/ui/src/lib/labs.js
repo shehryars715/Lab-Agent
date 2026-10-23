@@ -1,7 +1,7 @@
 // The browser's own list of labs.
 //
-// WHY THIS EXISTS AT ALL. The server knows two things about past work: jobs it
-// still holds in memory (lost on restart) and run folders on disk (only once a
+// WHY THIS EXISTS AT ALL. The server knows two things about past work: jobs
+// (whose chats it keeps on disk since 2026-10-23) and run folders (only once a
 // run gets far enough to create one). Neither has a title you chose, and there
 // are no rename or delete endpoints. A sidebar needs all three, so the browser
 // keeps an index of the labs it started plus two overlays -- renamed titles and

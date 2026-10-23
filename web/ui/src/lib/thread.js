@@ -178,6 +178,42 @@ function applyCoreEvent(state, e) {
   }
 }
 
+/** Open a fresh run entry: a new upload, a revision, or a lab a restart sent
+ *  back to the start.
+ *
+ *  Every earlier run entry is superseded, finished or not: a finished one is
+ *  being replaced by the revision, and an unfinished one was abandoned by a new
+ *  upload. Leaving either live would put two "working" cards in the transcript
+ *  and let the composer's mode logic pick the wrong one. */
+function openRun(state, newJob) {
+  const entries = state.entries.map((e) => (e.kind === 'run' ? { ...e, superseded: true } : e))
+  return {
+    ...state,
+    seq: newJob ? 0 : state.seq,
+    awaiting: null,
+    known: [],
+    artifacts: [],
+    entries: [...entries, { id: nextId('run'), kind: 'run', state: emptyRun() }],
+  }
+}
+
+/** A question the restart left unanswered: it will be asked again. */
+function dropQuestion(state) {
+  if (!state.awaiting) return state
+  const entries = state.entries.map((e) =>
+    e.id === state.awaiting ? { ...e, interrupted: true } : e,
+  )
+  return { ...state, entries, awaiting: null }
+}
+
+function say(state, text) {
+  return push(state, {
+    id: nextId('say'),
+    kind: 'agent-text',
+    text: String(text ?? '').slice(0, NARRATION_MAX),
+  })
+}
+
 /** The run entry currently in flight, or the most recent one. */
 export function lastRun(state) {
   for (let i = state.entries.length - 1; i >= 0; i -= 1) {
@@ -200,23 +236,7 @@ export function reduce(state, frame) {
   // again at 1 -- and those would ALL be dropped by a guard still holding the
   // previous job's high-water mark, producing a chat that connects and then
   // shows nothing at all.
-  if (frame.type === '__start') {
-    // Every earlier run entry is superseded, finished or not: a finished one
-    // is being replaced by the revision, and an unfinished one was abandoned
-    // by a new upload. Leaving either live would put two "working" cards in
-    // the transcript and let the composer's mode logic pick the wrong one.
-    const entries = state.entries.map((e) =>
-      e.kind === 'run' ? { ...e, superseded: true } : e,
-    )
-    return {
-      ...state,
-      seq: frame.newJob ? 0 : state.seq,
-      awaiting: null,
-      known: [],
-      artifacts: [],
-      entries: [...entries, { id: nextId('run'), kind: 'run', state: emptyRun() }],
-    }
-  }
+  if (frame.type === '__start') return openRun(state, frame.newJob)
 
   if (frame.type === '__user') {
     return push(state, { id: nextId('user'), kind: 'user-text', text: frame.text })
@@ -385,6 +405,27 @@ export function reduce(state, frame) {
         error: frame.error,
         finishedAt: Date.now(),
       }))
+
+    // A RESTART CUT THE WORK SHORT (server: durable.py). Said in the chat
+    // either way. `resuming`: it is starting again by itself -- a solve carries
+    // on in the same card (finished tasks stay ticked), while a lab that had
+    // not reached its code starts over in a fresh one, opened BEFORE the
+    // sentence so it reads old card, what happened, new card. Not resuming:
+    // it waits for the Resume button, and the card settles as paused, which
+    // also closes the stream (a run that never settles reconnects forever).
+    case 'interrupted': {
+      const cleared = dropQuestion(base)
+      if (frame.resuming) {
+        return say(frame.stage === 'reading' ? openRun(cleared, false) : cleared, frame.text)
+      }
+      return patchRun(say(cleared, frame.text), { paused: { stage: frame.stage }, finishedAt: Date.now() })
+    }
+
+    // The Resume button was pressed: the paused card is live again.
+    case 'resumed': {
+      const live = patchRun(base, { paused: null, finishedAt: null, error: null })
+      return say(frame.stage === 'reading' ? openRun(live, false) : live, frame.text)
+    }
 
     default:
       return base
