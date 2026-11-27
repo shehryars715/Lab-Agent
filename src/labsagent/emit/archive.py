@@ -42,11 +42,22 @@ class ArchiveEmitter:
                     zf.write(path, arcname=f"code/{path.name}")
 
             for outcome in [] if task_files else ctx.outcomes:
+                # Every file of a several-file program, in the task's own
+                # folder under its own names (Harness v2). One file: as always.
+                if len(outcome.code_files or []) > 1:
+                    for item in outcome.code_files:
+                        name = Path(str(item.get("name") or "")).name
+                        if name:
+                            zf.writestr(f"code/{outcome.task.id}/{name}", str(item.get("text") or ""))
+                    continue
                 code_path = outcome.code_path
                 if code_path and Path(code_path).exists():
                     zf.write(code_path, arcname=f"code/{Path(code_path).name}")
                 elif outcome.code_text:
-                    zf.writestr(f"code/{outcome.task.id}.py", outcome.code_text)
+                    from labsagent import languages
+
+                    entry = languages.of(outcome.task).entry(outcome.task.id)
+                    zf.writestr(f"code/{entry}", outcome.code_text)
 
             for outcome in ctx.outcomes:
                 # The zip carries the pictures the report carries: figures

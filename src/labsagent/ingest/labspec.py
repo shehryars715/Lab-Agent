@@ -144,7 +144,7 @@ For each task report:
   the document that show it, copied exactly, under 80 characters, e.g. "create
   a personal portfolio website from scratch using HTML and CSS". Otherwise "".
 - needs: what the PROGRAM itself needs, to run or to show its result, that a
-  Python process with no screen and no internet does not have. Only these:
+  program with no screen and no internet does not have. Only these:
     "display"   a window, GUI, browser or game screen: tkinter, turtle, pygame,
                 a web page to view. NOT a chart saved to a file, NOT plt.show(),
                 NOT printing to the terminal.
@@ -154,9 +154,11 @@ For each task report:
                 NOT downloading the lab's dataset -- that happens before any
                 code runs.
     "hardware"  physical devices: Arduino, sensors, a camera, a microphone, a GPU.
-    "software"  a program other than Python must be used: MATLAB, a database
-                server, Packet Tracer, Wireshark. NOT Jupyter, Colab, an IDE,
-                or an Excel/CSV file.
+    "software"  a program other than the code's own language must be used:
+                MATLAB, a database server, Packet Tracer, Wireshark. NOT
+                Jupyter, Colab, an IDE or editor (Visual Studio, Code::Blocks,
+                Dev-C++, Eclipse, NetBeans, IntelliJ), a compiler, Linux or
+                its terminal, or an Excel/CSV file.
   Each entry: {{"need": one of the above, "why": a short phrase, "evidence":
   the document's words, copied exactly, under 80 characters}}. Only what the
   task text requires, never what its topic suggests. How the student submits
@@ -206,6 +208,11 @@ may be empty, is quoted below.
   by `artifacts` and `tasks_wanted`, and repeating them makes the solver try to
   produce the files itself in Python instead of just solving the task.
   Empty if there is nothing.
+- language / language_quote: ONLY when the student's message asks for the code
+  in a particular programming language ("write it in C++", "use Java instead"):
+  that language, lowercase, and their words that say so, copied exactly.
+  Otherwise both "". Never taken from the document: the document's language is
+  each task's own `language`.
 - show / hide: parts of every answer the student's message asks to ADD or to
   LEAVE OUT, from exactly: "code", "output", "screenshots", "figures",
   "explanation", "statement" (the task's own text above its answer).
@@ -335,6 +342,10 @@ class ExtractedIntent(BaseModel):
     )
     show: list[str] = Field(default_factory=list, description="answer parts to add")
     hide: list[str] = Field(default_factory=list, description="answer parts to leave out")
+    #: The language the STUDENT asked for, and their words (Harness v2, D7).
+    #: Loose on purpose: a null or a stray value costs this field, never a retry.
+    language: str | None = ""
+    language_quote: str | None = ""
 
 
 class ExtractedLab(BaseModel):
@@ -503,6 +514,8 @@ SCHEMA_HINT = """{
     "tasks_wanted": [],
     "artifacts": [],
     "notes": "",
+    "language": "",
+    "language_quote": "",
     "datasets": [],
     "data_unlinked": [],
     "prerequisites": [],
@@ -540,6 +553,9 @@ class Reading:
     #: task id -> what its answer contains and the manual's boxes for it. A
     #: side table too: only the emitters read it, never the solver.
     plans: dict[str, AnswerPlan] = dataclass_field(default_factory=dict)
+    #: Why the tasks are in the language they are (Harness v2, D7): "as you
+    #: asked", "as the manual says", "as the manual's examples are", or "".
+    language_note: str = ""
 
     @property
     def is_lab(self) -> bool:
@@ -611,9 +627,12 @@ _NOT_A_NEED = {
     "internet": re.compile(r"dataset|data set|kaggle|\.csv|\.xlsx|\.zip", re.I),
     # A chart is saved to a file; plt.show() is replaced by savefig.
     "display": re.compile(r"plot|chart|graph|plt\.|figure|visuali[sz]|histogram|heatmap", re.I),
-    # Notebooks, IDEs and spreadsheet files are not "other software".
+    # Notebooks, IDEs, compilers, Linux and spreadsheet files are not "other
+    # software": the code's own toolchain is the environment (Harness v2).
     "software": re.compile(
-        r"jupyter|colab|notebook|\bexcel\b|xlsx|spyder|vs ?code|pycharm|anaconda|\bide\b",
+        r"jupyter|colab|notebook|\bexcel\b|xlsx|spyder|vs ?code|pycharm|anaconda|\bide\b"
+        r"|visual studio|code::?blocks|dev-?c\+\+|eclipse|netbeans|intellij|\bjdk\b|javac"
+        r"|\bgcc\b|g\+\+|compiler|node\.?js|\bnpm\b|ubuntu|linux|\bbash\b",
         re.I,
     ),
 }
@@ -666,17 +685,10 @@ def _requirements(
     """
     haystack = _haystack(manual, request)
     refs = [_squash(r)[:QUOTE_HEAD] for r in data_refs if len(_squash(r)) >= MIN_QUOTE]
+    chosen, _why = task_languages(extracted, manual, request)
     out: dict[str, Requirement] = {}
     for item in extracted.tasks:
-        language = str(item.language or "python").strip().lower()
-        evidence = str(item.language_evidence or "")
-        # A claimed non-Python language needs a quote from the document, and a
-        # quote that itself says "Python" ("a Python program that generates an
-        # HTML report") is the model contradicting its own label.
-        if not is_python(language) and (
-            not _grounded(evidence, haystack) or "python" in evidence.lower()
-        ):
-            language = SOLVER_LANGUAGE
+        language = chosen.get(item.task_number, SOLVER_LANGUAGE)
 
         needs: list[tuple[str, str]] = []
         for raw in item.needs:
@@ -706,6 +718,129 @@ def _requirements(
                 language=language, needs=tuple(needs), libraries=libraries
             )
     return out
+
+
+#: Code that gives a lab's language away -- the BACKSTOP of D7, used only when
+#: no task's language was grounded and the student named none. Deterministic
+#: backstops, never overrides: it can turn "python by default" into C for an OS
+#: lab whose manual is full of printf, but never outvote a quoted language.
+_CODE_SIGNS = {
+    "cpp": re.compile(
+        r"#\s*include\s*<(?:iostream|vector|string|algorithm|bits/stdc\+\+\.h)>|\bstd::"
+        r"|\bcout\s*<<|\bcin\s*>>|using\s+namespace\s+std"
+    ),
+    "c": re.compile(
+        r"#\s*include\s*<(?:stdio|stdlib|string|unistd|pthread|math|sys/\w+)\.h>"
+        r"|\bprintf\s*\(|\bscanf\s*\(|\bint\s+main\s*\("
+    ),
+    "java": re.compile(
+        r"public\s+static\s+void\s+main|System\.out\.print|import\s+java\.|new\s+Scanner\s*\("
+    ),
+    "javascript": re.compile(
+        r"console\.log\s*\(|require\s*\(\s*['\"]|document\.getElementById|=>\s*\{"
+    ),
+}
+_PYTHON_SIGNS = re.compile(
+    r"\bdef\s+\w+\s*\(|\bimport\s+(?:numpy|pandas|matplotlib|math|random)\b|\bprint\s*\(|\binput\s*\("
+)
+
+
+def detect_code_language(manual) -> str | None:
+    """The language the manual's own code samples are in, or None.
+
+    Needs real evidence: C++ wins on two of its own signs (iostream, cout,
+    std::), else three signs of one language -- and a single sign of Python
+    anywhere means None, because a Python lab that shows a C snippet for
+    comparison must stay Python.
+    """
+    text = "\n".join(p.text for p in getattr(manual, "paragraphs", []) or [])
+    if _PYTHON_SIGNS.search(text):
+        return None
+    counts = {key: len(sign.findall(text)) for key, sign in _CODE_SIGNS.items()}
+    if counts["cpp"] >= 2:
+        return "cpp"
+    for key in ("c", "java", "javascript"):
+        if counts[key] >= 3:
+            return key
+    return None
+
+
+def task_languages(extracted, manual, request: str = "") -> tuple[dict[int, str], str]:
+    """Each task's language after Harness v2's precedence (D7), and why.
+
+    1. The STUDENT'S words: "write it in C++" wins, if their quote is really in
+       their message -- how the code is written is theirs to decide.
+    2. The task's own QUOTED language, as before: a claimed non-Python
+       language needs the document's words, and a quote that itself says
+       "Python" is the model contradicting its own label.
+    3. The LAB'S language: the most common grounded language among the coded
+       tasks. A task the model labelled with it but whose own quote failed
+       ("Lab 5: Functions in C++" said once, not per task) is rescued.
+    4. The BACKSTOP: the manual's code samples (`detect_code_language`), only
+       when nothing above said anything.
+    5. Python.
+
+    The second value is the reason, for the one line the student is told:
+    "as you asked", "as the manual says", "as the manual's examples are" or "".
+    """
+    from collections import Counter
+
+    from labsagent import languages as langs
+
+    haystack = _haystack(manual, request)
+    intent = extracted.intent
+    asked = None
+    # GROUNDED IN THEIR MESSAGE, BY NAME. A request is short ("in C++"), far
+    # under the quote length the document checks use, so the check is that the
+    # language's own name stands in it as a word -- the "c" in "can" is not C.
+    raw = str(getattr(intent, "language", "") or "").strip()
+    # Empty means they asked for nothing -- not Python, which "" resolves to.
+    wanted = langs.resolve(raw) if raw else None
+    if wanted is not None and request:
+        said = request.lower()
+        names = [a for a in (wanted.key, *wanted.aliases) if a and a != "none"]
+        if any(re.search(rf"(?<![\w+#]){re.escape(a)}(?![\w+#])", said) for a in names):
+            asked = wanted
+
+    claimed: dict[int, str] = {}
+    grounded: dict[int, str] = {}
+    for item in extracted.tasks:
+        language = str(item.language or "python").strip().lower()
+        claimed[item.task_number] = language
+        evidence = str(item.language_evidence or "")
+        if not is_python(language) and _grounded(evidence, haystack) and (
+            "python" not in evidence.lower()
+        ):
+            grounded[item.task_number] = language
+
+    coded = [item for item in extracted.tasks if item.needs_code]
+    lab = Counter(grounded[i.task_number] for i in coded if i.task_number in grounded)
+    lab_language = lab.most_common(1)[0][0] if lab else None
+    backstop = None
+    if not grounded and asked is None:
+        backstop = detect_code_language(manual)
+
+    chosen: dict[int, str] = {}
+    why = ""
+    for item in extracted.tasks:
+        n = item.task_number
+        if not item.needs_code:
+            chosen[n] = grounded.get(n, SOLVER_LANGUAGE)
+        elif asked is not None:
+            chosen[n], why = asked.key, "as you asked"
+        elif n in grounded:
+            chosen[n] = grounded[n]
+            why = why or "as the manual says"
+        elif lab_language and langs.resolve(claimed[n]) is not None and (
+            langs.resolve(claimed[n]) == langs.resolve(lab_language)
+        ):
+            chosen[n] = lab_language
+            why = why or "as the manual says"
+        elif backstop:
+            chosen[n], why = backstop, "as the manual's examples are"
+        else:
+            chosen[n] = SOLVER_LANGUAGE
+    return chosen, why
 
 
 _DOC_NAME = re.compile(
@@ -951,7 +1086,13 @@ def extract_labspec(manual: RawManual, model, request: str = "") -> Reading:
         if extracted.tasks:
             spec, anchors, repairs = to_labspec(extracted, manual)
             intent = _intent_from(extracted, [t.id for t in spec.tasks], request, manual)
+            # Each task carries the language it will be WRITTEN in (D7). Only a
+            # language the registry knows goes on the task; anything else
+            # (HTML, MATLAB) stays in `requirements`, where the gate reads it.
+            chosen, why = task_languages(extracted, manual, request)
+            spec = _with_languages(spec, chosen)
             return Reading(
+                language_note=why,
                 kind=extracted.document_kind,
                 confidence=extracted.confidence,
                 what_this_is=extracted.what_this_is,
@@ -986,6 +1127,19 @@ def extract_labspec(manual: RawManual, model, request: str = "") -> Reading:
         last = SpecError(f"attempt {attempt} returned no tasks")
 
     raise SpecError(f"extraction failed for {manual.path.name}: {last}") from last
+
+
+def _with_languages(spec: LabSpec, chosen: dict[int, str]) -> LabSpec:
+    from dataclasses import replace
+
+    from labsagent import languages as langs
+
+    tasks = []
+    for task in spec.tasks:
+        digits = re.sub(r"\D", "", task.id)
+        lang = langs.resolve(chosen.get(int(digits), "")) if digits else None
+        tasks.append(replace(task, language=lang.key) if lang and lang is not langs.PYTHON else task)
+    return replace(spec, tasks=tasks)
 
 
 def _usage_from_handler(handler) -> Usage:

@@ -41,8 +41,20 @@ def render(ctx: EmitContext) -> str:
         lines.append(f"{key.replace('_', ' ').title()}: {value}")
     lines += ['"""', ""]
 
+    from labsagent import languages
+
     for outcome in ctx.outcomes:
         task = outcome.task
+        lang = languages.of(task)
+        if lang is not languages.PYTHON:
+            # A .py is Python. Another language's code pasted in would make a
+            # file that does not run, so it says where that task's code is.
+            lines.append("# " + "-" * 70)
+            lines.append(f"# {task.title or task.id}")
+            lines.append(f"# Written in {lang.display}: see its own file.")
+            lines.append("# " + "-" * 70)
+            lines.append("")
+            continue
         lines.append("# " + "-" * 70)
         lines.append(f"# {task.title or task.id}")
         lines.append("# " + "-" * 70)

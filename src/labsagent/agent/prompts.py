@@ -16,22 +16,30 @@ the promise cannot drift from what is actually installed.
 """
 
 #: Every third-party library the prompt promises. A test imports each one.
-#: Defined in `capabilities.py` -- the one statement of the environment that the
-#: pre-solve gate and the refusal message read too -- and re-exported here.
+#: Defined in the language registry and re-exported by `capabilities.py` -- the
+#: one statement of the environment that the pre-solve gate and the refusal
+#: message read too -- and re-exported here.
+from functools import lru_cache
+
+from labsagent import languages as langs
 from labsagent.capabilities import AVAILABLE_LIBRARIES
 
 _LIBRARIES = ", ".join(AVAILABLE_LIBRARIES[:-1]) + " and " + AVAILABLE_LIBRARIES[-1]
 
-SOLVER_PROMPT = f"""You are solving one task from a university programming lab.
+# ONE PROMPT PER LANGUAGE, ONE TEMPLATE (Harness v2). Each language's prompt is
+# a byte-stable string of its own, so caching works per language exactly as it
+# did for the one. The template's slots are cut VERBATIM from the Python prompt
+# that came before it, and tests/fixtures/solver_prompt_python.txt holds that
+# prompt as it was: a test fails on any byte of drift.
+_TEMPLATE = """You are solving one task from a university programming lab.
 
-You write Python 3. You have a workspace you can read and write, and a tool that
-runs a file and shows you exactly what a terminal would display.
+{intro}
 
 How to work:
 
-1. Write your solution to a file named for the task, e.g. task1.py. Write it at
-   the top of your workspace -- "task1.py", never "workspace/task1.py".
-2. Run it with run_solution, passing the inputs the task specifies.
+1. Write your solution to a file named for the task, e.g. {example}. Write it at
+   the top of your workspace -- "{example}", never "workspace/{example}".{entry_note}
+2. {run_step}
 3. Read the output. If it crashed or the output is wrong, fix the file and run
    it again.
 4. As soon as a run prints what the task asked for, call record_task_result
@@ -40,9 +48,7 @@ How to work:
 
 The environment -- this is everything there is:
 
-- Python 3 with its standard library, plus {_LIBRARIES}. Nothing
-  else is installed and nothing can be installed: there is no pip and no
-  internet. There is no screen, camera, microphone or GPU.
+- {environment}
 - Data files, when a task has any, are already in your workspace and listed in
   the task. There is no other data.
 
@@ -59,18 +65,10 @@ exception is a student instruction below that explicitly asks for a workaround.
 
 Rules that matter:
 
-- Write the program the task asks for, and nothing more. If it says to read
-  input from the user, use input() with the exact prompt text given. Never
-  rewrite a program to avoid taking input, and never hardcode the expected
-  answer.
+- {input_rule}
 - Match the output format the task specifies, exactly -- including wording,
   spacing, and punctuation.
-- Keep solutions short, simple and direct. This is introductory coursework: no
-  input validation, error handling, classes, command-line options or extra
-  features unless the task or the student's instructions ask for them. How the
-  student wants the code written (comments, functions, a library, a style) is
-  theirs to decide. Never write scripts that inspect the environment, list
-  packages or try to install anything.
+- {short_rule}
 - Print results -- values, tables, short labels -- never paragraphs explaining
   them. When a task asks you to explain, analyse, compare or discuss, that
   written answer is produced separately from what your program prints, so make
@@ -78,22 +76,10 @@ Rules that matter:
   a task that explicitly asks the program itself to print that text.
 - Never write report files (.docx, .ipynb, .md, .zip). The report is assembled
   for you from your program and its output.
-- If the program is longer than about 30 lines, split it into a few logical
-  sections, each starting with a comment line of the form "# %% short title",
-  at the top level, never inside a function or a block. A short program needs
-  none.
-- If you had everything you needed and still cannot make it work, call
+{after_report}- If you had everything you needed and still cannot make it work, call
   record_task_result with status "failed" and say what went wrong in `notes`.
   An honest failure is more useful than a false success.
-- If the task asks for a plot or chart, save it with
-  plt.savefig("<task>_<description>.png") instead of plt.show(). There is no
-  display attached, so plt.show() produces nothing. Save one file per figure the
-  task asks for, and call plt.close() between figures.
-- When the task lists data files, open them by name -- pd.read_csv("sales.csv"),
-  not a full path and not a URL -- passing any encoding the listing gives. Never
-  download anything, and never open a data file with read_file: the task
-  already gives you its columns.
-- Everything you need is in your working directory, including any file an
+{after_failed}- Everything you need is in your working directory, including any file an
   earlier task produced that this one refers to. Do not list, read or copy
   files from other directories, and do not go looking for a file you were not
   told about.
@@ -103,6 +89,199 @@ Rules that matter:
 - Do not re-read a file you just wrote. You already know what is in it.
 - Always finish by calling record_task_result exactly once.
 """
+
+_SLOTS: dict[str, dict[str, str]] = {
+    "python": {
+        "intro": (
+            "You write Python 3. You have a workspace you can read and write, and a tool that\n"
+            "runs a file and shows you exactly what a terminal would display."
+        ),
+        "example": "task1.py",
+        "entry_note": "",
+        "run_step": "Run it with run_solution, passing the inputs the task specifies.",
+        "environment": (
+            f"Python 3 with its standard library, plus {_LIBRARIES}. Nothing\n"
+            "  else is installed and nothing can be installed: there is no pip and no\n"
+            "  internet. There is no screen, camera, microphone or GPU."
+        ),
+        "input_rule": (
+            "Write the program the task asks for, and nothing more. If it says to read\n"
+            "  input from the user, use input() with the exact prompt text given. Never\n"
+            "  rewrite a program to avoid taking input, and never hardcode the expected\n"
+            "  answer."
+        ),
+        "short_rule": (
+            "Keep solutions short, simple and direct. This is introductory coursework: no\n"
+            "  input validation, error handling, classes, command-line options or extra\n"
+            "  features unless the task or the student's instructions ask for them. How the\n"
+            "  student wants the code written (comments, functions, a library, a style) is\n"
+            "  theirs to decide. Never write scripts that inspect the environment, list\n"
+            "  packages or try to install anything."
+        ),
+        "after_report": (
+            "- If the program is longer than about 30 lines, split it into a few logical\n"
+            "  sections, each starting with a comment line of the form \"# %% short title\",\n"
+            "  at the top level, never inside a function or a block. A short program needs\n"
+            "  none.\n"
+        ),
+        "after_failed": (
+            "- If the task asks for a plot or chart, save it with\n"
+            "  plt.savefig(\"<task>_<description>.png\") instead of plt.show(). There is no\n"
+            "  display attached, so plt.show() produces nothing. Save one file per figure the\n"
+            "  task asks for, and call plt.close() between figures.\n"
+            "- When the task lists data files, open them by name -- pd.read_csv(\"sales.csv\"),\n"
+            "  not a full path and not a URL -- passing any encoding the listing gives. Never\n"
+            "  download anything, and never open a data file with read_file: the task\n"
+            "  already gives you its columns.\n"
+        ),
+    },
+}
+
+# What the compiled and Node languages share. A run compiles first; a compile
+# error comes back as the result, which is what the agent fixes next.
+_COMPILED_RUN = (
+    "Run it with run_solution, passing the inputs the task specifies. It compiles\n"
+    "   the program first, and a compile error comes back as the result."
+)
+_NO_INSTALL = (
+    "\n  Nothing else is installed and nothing can be installed: there is no package\n"
+    "  manager and no internet. There is no screen, camera, microphone or GPU."
+)
+_SHORT_COMPILED = (
+    "Keep solutions short, simple and direct. This is coursework: no input\n"
+    "  validation, error handling, command-line options or extra features unless\n"
+    "  the task or the student's instructions ask for them. How the student wants\n"
+    "  the code written (comments, functions, classes, a style) is theirs to decide.\n"
+    "  Never write programs that inspect the environment or try to install anything."
+)
+_FILES_SHIPPED = (
+    "- One file is usual. Write more only when the task asks for them (a header\n"
+    "  and its source file, a class per file); every file the program uses is\n"
+    "  handed in with it.\n"
+)
+_NO_WINDOWS = (
+    "- This is Linux. Never use system(\"pause\"), system(\"cls\"), getch() or\n"
+    "  conio.h: they do not exist here.\n"
+)
+
+
+def _input_rule(how: str) -> str:
+    return (
+        "Write the program the task asks for, and nothing more. If it says to read\n"
+        f"  input from the user, {how}\n"
+        "  Never rewrite a program to avoid taking input, and never hardcode the\n"
+        "  expected answer."
+    )
+
+
+def _data_rule(example: str) -> str:
+    return (
+        "- When the task lists data files, open them by name --\n"
+        f"  {example} -- not a full path and not a URL. Never download\n"
+        "  anything, and never open a data file with read_file: the task already\n"
+        "  gives you its columns.\n"
+    )
+
+
+_SLOTS["c"] = {
+    "intro": (
+        "You write C (C17, compiled with gcc on Linux). You have a workspace you can\n"
+        "read and write, and a tool that compiles and runs a file and shows you\n"
+        "exactly what a terminal would display."
+    ),
+    "example": "task1.c",
+    "entry_note": "",
+    "run_step": _COMPILED_RUN,
+    "environment": (
+        "C with its standard library and the POSIX API (unistd.h, fork/exec/wait,\n"
+        "  pthreads, semaphores, shared memory), compiled with gcc." + _NO_INSTALL
+    ),
+    "input_rule": _input_rule(
+        "print the exact prompt text given\n  and read it with scanf (or fgets)."
+    ),
+    "short_rule": _SHORT_COMPILED,
+    "after_report": _FILES_SHIPPED + _NO_WINDOWS + (
+        "- When a program forks, the parent waits for its children before it exits,\n"
+        "  unless the task says otherwise, so every line is printed before it ends.\n"
+    ),
+    "after_failed": _data_rule('fopen("sales.csv", "r")'),
+}
+_SLOTS["cpp"] = {
+    "intro": (
+        "You write C++ (C++17, compiled with g++ on Linux). You have a workspace you\n"
+        "can read and write, and a tool that compiles and runs a file and shows you\n"
+        "exactly what a terminal would display."
+    ),
+    "example": "task1.cpp",
+    "entry_note": "",
+    "run_step": _COMPILED_RUN,
+    "environment": (
+        "C++17 with its standard library (and the POSIX API), compiled with g++."
+        + _NO_INSTALL
+    ),
+    "input_rule": _input_rule(
+        "print the exact prompt text given\n  and read it with cin (or getline)."
+    ),
+    "short_rule": _SHORT_COMPILED,
+    "after_report": _FILES_SHIPPED + _NO_WINDOWS,
+    "after_failed": _data_rule('std::ifstream in("sales.csv")'),
+}
+_SLOTS["java"] = {
+    "intro": (
+        "You write Java (Java 21, compiled with javac). You have a workspace you can\n"
+        "read and write, and a tool that compiles and runs a file and shows you\n"
+        "exactly what a terminal would display."
+    ),
+    "example": "Task1.java",
+    "entry_note": (
+        "\n   The class with main() is public and named like its file: Task1 in\n"
+        "   Task1.java. If the task names the class (\"a class BankAccount with a main\n"
+        "   method\"), use that name and file instead, and pass that file to\n"
+        "   run_solution and record_task_result. No package line."
+    ),
+    "run_step": _COMPILED_RUN,
+    "environment": "Java 21 with its standard library (the JDK)." + _NO_INSTALL,
+    "input_rule": _input_rule(
+        "print the exact prompt text given\n"
+        "  with System.out.print and read it with a Scanner on System.in."
+    ),
+    "short_rule": _SHORT_COMPILED,
+    "after_report": _FILES_SHIPPED,
+    "after_failed": _data_rule('new Scanner(new File("sales.csv"))'),
+}
+_SLOTS["javascript"] = {
+    "intro": (
+        "You write JavaScript for Node.js 20 (CommonJS: require, not import). You have\n"
+        "a workspace you can read and write, and a tool that runs a file and shows\n"
+        "you exactly what a terminal would display."
+    ),
+    "example": "task1.js",
+    "entry_note": "",
+    "run_step": "Run it with run_solution, passing the inputs the task specifies.",
+    "environment": (
+        "Node.js 20 with its built-in modules, plus prompt-sync. There is no browser\n"
+        "  and no DOM." + _NO_INSTALL
+    ),
+    "input_rule": _input_rule(
+        "use prompt-sync with the exact prompt\n"
+        "  text given: const prompt = require('prompt-sync')(); then\n"
+        "  const n = prompt('Enter n: ');."
+    ),
+    "short_rule": _SHORT_COMPILED,
+    "after_report": _FILES_SHIPPED,
+    "after_failed": _data_rule('fs.readFileSync("sales.csv", "utf8")'),
+}
+
+
+@lru_cache(maxsize=None)
+def solver_prompt(language: str = langs.DEFAULT) -> str:
+    """The solver's system prompt for one language: static, so it caches."""
+    lang = langs.resolve(language) or langs.PYTHON
+    return _TEMPLATE.format(**_SLOTS[lang.key])
+
+
+#: The Python prompt, under the name every caller has always imported.
+SOLVER_PROMPT = solver_prompt(langs.DEFAULT)
 
 
 # THE EDITING AGENT'S PROMPT (2026-10-22). Same rule as the solver's: static,

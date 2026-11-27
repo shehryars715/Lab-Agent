@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     # mount it, and the host resolves the path on the host.
     runs_dir: Path = Field(default=PROJECT_ROOT / "runs", alias="LABSAGENT_RUNS_DIR")
 
+    # WHICH LANGUAGES THIS DEPLOYMENT CAN RUN (Harness v2). Python always; C,
+    # C++, Java and JavaScript only where programs run in the image that carries
+    # their toolchains (runner/sandbox.Dockerfile), because they run on a
+    # pseudo-terminal that needs Linux -- not on a Windows dev machine's local
+    # backend. A comma list, e.g. "python,c,cpp,java,javascript". The capability
+    # gate offers exactly these; anything else is refused before any spend.
+    sandbox_languages: str = Field(default="python", alias="SANDBOX_LANGUAGES")
+
     # How many labs may SOLVE at once (reading and questions never wait). One,
     # because a solve plus its program container is most of a 1 GB server.
     max_concurrent_solves: int = 1
@@ -160,6 +168,12 @@ class Settings(BaseSettings):
     @property
     def kaggle_configured(self) -> bool:
         return bool(self.kaggle_username and self.kaggle_key)
+
+    @property
+    def languages(self) -> tuple[str, ...]:
+        """`sandbox_languages` as keys. Python is always among them."""
+        keys = tuple(k.strip().lower() for k in self.sandbox_languages.split(",") if k.strip())
+        return keys if "python" in keys else ("python", *keys)
 
 
 def load_settings() -> Settings:

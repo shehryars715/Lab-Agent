@@ -49,6 +49,7 @@ from pathlib import Path, PurePosixPath
 from langgraph.errors import GraphRecursionError
 
 from labsagent import events as ev
+from labsagent import languages as langs
 from labsagent.agent.build import build_solver, fast_variant, solver_config
 from labsagent.agent.tools import RunRecord, missing_module
 from labsagent.budget import BudgetExceeded, LiveUsage
@@ -93,6 +94,7 @@ def choose_run(
     task_id: str,
     declared: str | None = None,
     known_ids=(),
+    language: str = "python",
 ) -> RunRecord | None:
     """The run that was actually this task's solution, or None.
 
@@ -117,10 +119,14 @@ def choose_run(
     and NOTHING ELSE. There is deliberately no "or whatever ran" fallback: that
     fallback is the defect. A task with no eligible run is a task that failed,
     and the caller has a token-free rescue (`verify_entry`) before it says so.
+
+    "The file the task asked for" is the LANGUAGE's entry name (task3.c,
+    Task3.java); names are compared lowercased, as `normalize_entry` makes them.
     """
-    others = {f"{other}.py" for other in known_ids if other != task_id}
+    lang = langs.resolve(language) or langs.PYTHON
+    others = {lang.entry(other).lower() for other in known_ids if other != task_id}
     eligible = [r for r in runs if r.ok and r.transcript]
-    wanted = f"{task_id}.py"
+    wanted = lang.entry(task_id).lower()
 
     def pick(predicate):
         matches = [r for r in eligible if predicate(normalize_entry(r.entry_file))]
@@ -139,8 +145,8 @@ def choose_run(
 
     return pick(
         lambda name: name not in others
-        and name.endswith(".py")
-        and PurePosixPath(name).stem.startswith(task_id)
+        and name.endswith(lang.suffix)
+        and PurePosixPath(name).stem.startswith(task_id.lower())
     )
 
 
@@ -177,14 +183,16 @@ def verify_entry(sandbox, task: Task, settings: Settings) -> RunRecord | None:
     Returns None if the file is missing or does not run cleanly, which puts the
     task back on the honest-failure path.
     """
-    entry = f"{task.id}.py"
+    lang = langs.of(task)
+    entry = lang.entry(task.id)
     try:
         sandbox.read_file(entry)
     except Exception:  # noqa: BLE001 -- missing file is just "no candidate"
         return None
     try:
         outcome = _run_file(
-            sandbox, entry, list(task.sample_inputs or []), settings.timeout_s
+            sandbox, entry, list(task.sample_inputs or []), settings.timeout_s,
+            language=lang.key,
         )
     except Exception:  # noqa: BLE001 -- a rescue must never raise into the loop
         return None
@@ -198,6 +206,7 @@ def verify_entry(sandbox, task: Task, settings: Settings) -> RunRecord | None:
         stderr=outcome.result.stderr,
         figures=list(outcome.figures),
         source_sha=None,
+        sources=list(outcome.sources),
     )
 
 
@@ -235,7 +244,7 @@ def build_task_prompt(
         parts.append(
             f"\nThis task refers to {ref_id}, which you already solved.\n"
             f"Its requirement was: {prior.task.statement}\n"
-            f"Your solution was:\n```python\n{prior.code_text}```"
+            f"Your solution was:\n```{langs.of(prior.task).fence}\n{prior.code_text}```"
         )
 
     # AFTER everything describing the work, BEFORE the filename line. PLAN.md
@@ -273,7 +282,7 @@ def build_task_prompt(
             + "; ".join(questions)
         )
 
-    parts.append(f"\nWrite your solution to a file named {task.id}.py")
+    parts.append(f"\nWrite your solution to a file named {langs.of(task).entry(task.id)}")
     return "\n".join(parts)
 
 
@@ -298,9 +307,9 @@ def _produced_by(
     of the task that read it.
     """
     from labsagent.data.preview import profile
-    from labsagent.runner import INPUTS_NAME, SHIM_NAME
+    from labsagent.runner import HARNESS_FILES
 
-    ours = {INPUTS_NAME, SHIM_NAME}
+    ours = HARNESS_FILES
     made: list[dict] = []
     destination = artifacts_dir / task_id
     for path in sorted(workspace.iterdir()):
@@ -328,6 +337,41 @@ def _produced_by(
             }
         )
     return made
+
+
+def _code_files(sandbox, lang, entry_name, entry_text, chosen, store, task) -> list[dict]:
+    """Every file the program is made of, entry first (Harness v2, D8).
+
+    SHIP WHAT THE RUN USED. The list is the driver's: the files the compiler
+    actually took (javac's own parse list; the quoted-include closure for C and
+    C++; the require closure for Node), so a probe the agent left in the
+    workspace is never handed in. Empty for Python, whose program is its entry.
+
+    The list arrives on stderr, which the program also writes to, so a name is
+    kept only if it is a source file of this language that exists in the
+    workspace -- a forged marker can at most re-ship the task's own code.
+    """
+    if lang is langs.PYTHON:
+        return []
+    files = [{"name": entry_name, "text": entry_text}]
+    folder = store.code_dir / task.id
+    for name in chosen.sources or []:
+        clean = str(name).replace("\\", "/").lstrip("/")
+        if PurePosixPath(clean).name == entry_name or not lang.is_source(clean):
+            continue
+        if any(f["name"] == clean for f in files):
+            continue
+        try:
+            text = sandbox.read_file(clean)
+        except Exception:  # noqa: BLE001 -- outside the workspace, or gone
+            continue
+        files.append({"name": clean, "text": text})
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / PurePosixPath(clean).name).write_text(text, encoding="utf-8")
+        except OSError:
+            pass  # the outcome still carries the text
+    return files
 
 
 def _section_shots(sections: list[dict], task: Task, command: str, screenshots, store) -> None:
@@ -381,7 +425,12 @@ def _sections(
     run's output differs from the chosen run (an unseeded random number, say),
     the section run wins, so the Word screenshot and the notebook cells can
     never show two different results for the same code.
+
+    Only a language whose sections can run one by one has them (Python: one
+    module, exec'd part by part). A compiled program is one run.
     """
+    if not langs.of(task).sections:
+        return [], chosen.transcript
     try:
         found = run_sections(
             sandbox, chosen.entry_file, list(task.sample_inputs or []), settings.timeout_s
@@ -509,6 +558,8 @@ def solve_task(
     """
     workspace = store.workspace / task.id
     workspace.mkdir(parents=True, exist_ok=True)
+    # The task's language decides the prompt, the file name and how it runs.
+    lang = langs.of(task)
 
     # The data lands BEFORE the agent is built, so the file is simply there
     # when the first tool call happens. Two reasons it is not a tool the agent
@@ -608,7 +659,8 @@ def solve_task(
         with make_sandbox(settings, workspace) as sandbox:
             result = None
             agent, recorder = build_solver(
-                sandbox, settings, model=fast_variant(model, settings) if fast else model
+                sandbox, settings, model=fast_variant(model, settings) if fast else model,
+                language=lang.key,
             )
             recorder.workdir = sandbox.workdir
             recorders.append(recorder)
@@ -719,6 +771,7 @@ def solve_task(
                 task.id,
                 recorder.entry_file,
                 known_ids=done.keys(),
+                language=lang.key,
             )
             # A transcript that no longer describes the file we are about to
             # ship is worse than no transcript: the report would show output
@@ -732,8 +785,16 @@ def solve_task(
               try:
                 code_text = sandbox.read_file(chosen.entry_file)
 
-                code_path = store.code_dir / f"{task.id}.py"
+                # Python keeps its one file under the task's name, as always.
+                # Another language keeps the entry's REAL name -- Java's
+                # public class must match it -- and every other file the
+                # build used goes beside it, in the task's own folder.
+                entry_name = PurePosixPath(str(chosen.entry_file).replace("\\", "/")).name
+                code_path = store.code_dir / (
+                    lang.entry(task.id) if lang is langs.PYTHON else entry_name
+                )
                 code_path.write_text(code_text, encoding="utf-8")
+                code_files = _code_files(sandbox, lang, entry_name, code_text, chosen, store, task)
                 emitter.emit(
                     ev.ArtifactWritten(task_id=task.id, artifact="code", path=str(code_path))
                 )
@@ -792,6 +853,7 @@ def solve_task(
                     # Done except one part, said plainly -- the honest version
                     # of a stand-in that claimed the whole task.
                     gap=plain_sentence(recorder.missing) or None,
+                    code_files=code_files,
                     produced=_produced_by(
                         Path(sandbox.workdir),
                         started_with,
@@ -835,7 +897,7 @@ def solve_task(
                 error = error_tail(recorder.last_stderr) or "produced no output"
             elif recorder.runs:
                 error = (
-                    f"no successful run of {task.id}.py "
+                    f"no successful run of {lang.entry(task.id)} "
                     f"(ran: {', '.join(sorted({r.entry_file for r in recorder.runs}))})"
                 )
             else:

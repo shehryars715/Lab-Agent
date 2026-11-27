@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 from langchain_core.tools import BaseTool, tool
 
+from labsagent import languages as langs
 from labsagent.prose import PROSE_WARN_LINES, prose_lines
 from labsagent.runner import run_solution as _run_solution
 from labsagent.sandbox.base import DEFAULT_TIMEOUT_S, Sandbox
@@ -50,6 +51,9 @@ class RunRecord:
     #: code we are about to ship; comparing this against the file on disk is
     #: how that is caught. None when the file could not be read.
     source_sha: str | None = None
+    #: The files the program was built from (Harness v2, D8), as the driver
+    #: reported them. Empty for Python: the entry is the program.
+    sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -172,27 +176,59 @@ def missing_module(stderr: str, workdir) -> str | None:
 
     A module the agent wrote itself (a helper file in the workspace) is not
     missing from the environment; neither is one that imports fine here.
+    Python's case of `Language.missing_dependency`, which owns the rule now
+    that every language has one.
     """
-    match = _MISSING_MODULE.search(stderr or "")
-    if not match:
-        return None
-    top = match.group(1).split(".")[0]
-    if (Path(workdir) / f"{top}.py").exists() or (Path(workdir) / top).is_dir():
-        return None
-    try:
-        if importlib.util.find_spec(top) is not None:
-            return None
-    except (ImportError, ValueError):
-        pass
-    return top
+    return langs.PYTHON.missing_dependency(stderr, workdir)
+
+
+#: What the tools say to an agent writing something other than Python. The
+#: Python wording stays in the docstrings below, byte for byte, so a Python
+#: solver's tool schemas -- part of its cached prefix -- did not change.
+_RUN_DESCRIPTION = """Compile (when the language needs it) and run a program file, and return what a terminal would have shown.
+
+Use this after writing your solution to check that it works. Pass the
+inputs the program should receive on stdin, in order, as a list of
+strings -- for example ["5", "3"] for a program that asks for two
+numbers. Pass an empty list if the program takes no input. A value of
+"^D" presses Ctrl-D (end of input), for a program that reads until the
+input ends.
+
+Returns the exit code and the program's output, with input values shown
+inline beside their prompts exactly as a real terminal would display
+them. A compile error, or a non-zero exit code from a crash, comes back
+with the compiler's or the program's messages so you can fix it."""
+
+_RECORD_DESCRIPTION = """Declare this task finished. Call it exactly once, as your final action.
+
+status:
+  "passed"  run_solution exited 0 and printed what the task asked for.
+  "failed"  you had everything you needed but could not get it working.
+            An honest failure is far more useful than a false success.
+  "blocked" the task needs something this environment does not have:
+            a library that is not installed, a file format nothing here
+            can read, data you were not given, internet access, a
+            screen, camera or GPU, or another programming language.
+            Stop as soon as you know. Never build a substitute.
+
+missing: with "blocked", or with "passed" when one part of the task could
+not be done, ONE plain sentence for the student saying what is missing
+and what they can do -- no code, no error names. For example: "I can't
+use graphics.h here, so the drawing part is left out." """
 
 
 def build_tools(
     sandbox: Sandbox,
     recorder: TaskRecorder,
     timeout_s: int = DEFAULT_TIMEOUT_S,
+    language: str = langs.DEFAULT,
 ) -> list[BaseTool]:
-    """Return the domain tools bound to this run's sandbox and recorder."""
+    """Return the domain tools bound to this run's sandbox and recorder.
+
+    `language` is the task's: it decides how a file is run and how a missing
+    library is recognised. Python keeps its tool descriptions exactly.
+    """
+    lang = langs.resolve(language) or langs.PYTHON
 
     @tool
     def run_solution(entry_file: str, stdin_values: list[str] | None = None) -> str:
@@ -208,7 +244,9 @@ def build_tools(
         them. A non-zero exit code means the program crashed; the traceback is
         included so you can fix it.
         """
-        outcome = _run_solution(sandbox, entry_file, stdin_values or [], timeout_s)
+        outcome = _run_solution(
+            sandbox, entry_file, stdin_values or [], timeout_s, language=lang.key
+        )
 
         recorder.attempts += 1
         recorder.warnings = outcome.warnings
@@ -221,10 +259,16 @@ def build_tools(
                 stderr=outcome.result.stderr,
                 figures=list(outcome.figures),
                 source_sha=_sha_of(sandbox, entry_file),
+                sources=list(outcome.sources),
             )
         )
 
         parts = [f"exit_code: {outcome.result.exit_code}"]
+        if outcome.compile_error:
+            parts.append(
+                "COMPILE ERROR: the program did not compile, so it did not run. The "
+                "compiler's messages are below; fix them and run it again."
+            )
         if outcome.result.timed_out:
             parts.append(f"TIMED OUT after {timeout_s}s")
         if outcome.result.truncated:
@@ -245,10 +289,12 @@ def build_tools(
         # met with a hand-written stand-in -- a fake seaborn.histplot that then
         # "passed" -- or a probe script trying pip. The prompt says not to; this
         # says it again at the one place the agent is guaranteed to look next.
-        absent = missing_module(outcome.result.stderr, sandbox.workdir)
+        absent = lang.missing_dependency(outcome.result.stderr, sandbox.workdir)
         if absent:
+            # Python's sentence is unchanged; the others name no pip.
+            no_install = "no pip" if lang is langs.PYTHON else "no package manager"
             parts.append(
-                f"warning: {absent} is not installed here and cannot be installed (no pip, "
+                f"warning: {absent} is not installed here and cannot be installed ({no_install}, "
                 "no internet). Do not write your own version of it or a stand-in. If the "
                 "task can be done properly with the libraries that are available, do "
                 f"that. If the task needs {absent}, stop: call record_task_result with "
@@ -297,4 +343,7 @@ def build_tools(
         recorder.missing = missing
         return f"Recorded {entry_file} as {status}."
 
+    if lang is not langs.PYTHON:
+        run_solution.description = _RUN_DESCRIPTION
+        record_task_result.description = _RECORD_DESCRIPTION
     return [run_solution, record_task_result]

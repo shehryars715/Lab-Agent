@@ -15,7 +15,12 @@ WHAT IS VALIDATED, because this is the security boundary:
   - task_dir is an existing <RUNS_DIR>/<run>/workspace/<task> directory, with
     no symlink anywhere on the way;
   - argv is `python _labsagent_shim.py [--cells] <file> <file>`, where each
-    file is a relative path with no `..` and no backslash;
+    file is a relative path with no `..` and no backslash -- OR exactly
+    `python _labsagent_run.py _labsagent_job.json` (Harness v2: the
+    pseudo-terminal driver for C, C++, Java and JavaScript). The driver reads
+    the job, refuses any language or file outside its own fixed templates and
+    builds every command itself, so the request still names WHAT to run and
+    never HOW -- and it runs inside the same container as any program would;
   - the token matches (compare_digest), and the body is small.
 
 Standard library plus the `docker` SDK, on purpose: less code to trust.
@@ -36,6 +41,9 @@ from pathlib import Path, PurePosixPath
 TOKEN = os.environ.get("RUNNER_TOKEN", "")
 RUNS_DIR = Path(os.environ.get("RUNS_DIR", "/srv/labsagent/runs"))
 IMAGE = os.environ.get("SANDBOX_IMAGE", "labsagent-app")
+#: Used when IMAGE has not been built (Harness v2): the toolchain image is an
+#: extra build step, and forgetting it must not stop Python labs as well.
+FALLBACK_IMAGE = "labsagent-app"
 PORT = int(os.environ.get("RUNNER_PORT", "7000"))
 MEMORY = os.environ.get("PROGRAM_MEMORY", "384m")
 PROGRAM_USER = os.environ.get("PROGRAM_USER", "1000:1000")
@@ -46,6 +54,8 @@ MAX_TIMEOUT_S = 300
 MAX_BODY_BYTES = 64 * 1024
 FILE_SIZE_CAP = 200 * 1024 * 1024  # RLIMIT_FSIZE: one file a program may write
 SHIM = "_labsagent_shim.py"
+#: The second shape (Harness v2): the driver and its job, both fixed names.
+DRIVER_ARGV = ["python", "_labsagent_run.py", "_labsagent_job.json"]
 LABEL = "labsagent.run"
 
 # What a program starts with. Nothing from this process's environment, which
@@ -100,11 +110,18 @@ def validate(body: dict) -> tuple[str, list[str], int]:
 
     if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
         raise Refused("argv must be a list of strings")
+    if argv == DRIVER_ARGV:
+        if not isinstance(timeout, (int, float)) or not 1 <= timeout <= MAX_TIMEOUT_S:
+            raise Refused(f"timeout_s must be between 1 and {MAX_TIMEOUT_S}")
+        return normal, list(argv), int(timeout)
     rest = argv[2:]
     if rest[:1] == ["--cells"]:
         rest = rest[1:]
     if argv[:2] != ["python", SHIM] or len(rest) != 2:
-        raise Refused("argv must be: python _labsagent_shim.py [--cells] <file> <file>")
+        raise Refused(
+            "argv must be: python _labsagent_shim.py [--cells] <file> <file>, "
+            "or python _labsagent_run.py _labsagent_job.json"
+        )
     for arg in rest:
         path = PurePosixPath(arg)
         if not _ARG.match(arg) or path.is_absolute() or ".." in path.parts:
@@ -120,8 +137,14 @@ def run(task_dir: str, argv: list[str], timeout: int) -> dict:
     from docker.types import LogConfig, Ulimit
 
     started = time.monotonic()
+    try:
+        client().images.get(IMAGE)
+        image = IMAGE
+    except docker.errors.ImageNotFound:
+        sys.stderr.write(f"runner: image {IMAGE} not built; using {FALLBACK_IMAGE}\n")
+        image = FALLBACK_IMAGE
     container = client().containers.create(
-        IMAGE,
+        image,
         command=argv,
         entrypoint=[],
         working_dir="/work",

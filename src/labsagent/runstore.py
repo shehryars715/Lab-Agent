@@ -47,7 +47,7 @@ DEFAULT_ROOT = Path("runs")
 
 
 def _task_to_dict(task: Task) -> dict[str, Any]:
-    return {
+    data = {
         "id": task.id,
         "title": task.title,
         "statement": task.statement,
@@ -60,6 +60,11 @@ def _task_to_dict(task: Task) -> dict[str, Any]:
         "effort": task.effort,
         "prerequisites": [p.as_dict() for p in task.prerequisites],
     }
+    # Written only when it is not the default, so a Python run's manifest is
+    # byte-for-byte what it always was; absent reads back as Python.
+    if task.language and task.language != "python":
+        data["language"] = task.language
+    return data
 
 
 def _task_from_dict(data: dict[str, Any]) -> Task:
@@ -81,6 +86,7 @@ def _task_from_dict(data: dict[str, Any]) -> Task:
             for item in (data.get("prerequisites") or [])
             if isinstance(item, dict) and item.get("what")
         ],
+        language=str(data.get("language") or "python"),
     )
 
 
@@ -104,7 +110,40 @@ def _spec_from_dict(data: dict[str, Any]) -> LabSpec:
     )
 
 
+def _transcript_to_dict(transcript) -> dict[str, Any]:
+    data = {
+        "command": transcript.command,
+        "lines": list(transcript.lines),
+        "prompt": transcript.prompt,
+    }
+    # Harness v2 fields, written only when set: a Python run's manifest is
+    # byte-for-byte what it always was.
+    if transcript.language:
+        data["language"] = transcript.language
+        data["entry"] = transcript.entry
+        data["setup"] = list(transcript.setup)
+    return data
+
+
+def _transcript_from_dict(raw: dict[str, Any]) -> Transcript:
+    return Transcript(
+        command=raw["command"],
+        lines=raw["lines"],
+        prompt=raw["prompt"],
+        language=str(raw.get("language") or ""),
+        entry=str(raw.get("entry") or ""),
+        setup=tuple(raw.get("setup") or ()),
+    )
+
+
 def _outcome_to_dict(outcome: TaskOutcome) -> dict[str, Any]:
+    data = _outcome_fields(outcome)
+    if outcome.code_files:
+        data["code_files"] = [dict(f) for f in outcome.code_files]
+    return data
+
+
+def _outcome_fields(outcome: TaskOutcome) -> dict[str, Any]:
     return {
         "task": _task_to_dict(outcome.task),
         "status": outcome.status,
@@ -115,13 +154,7 @@ def _outcome_to_dict(outcome: TaskOutcome) -> dict[str, Any]:
         "screenshot_paths": [p.as_posix() for p in outcome.screenshot_paths],
         "figure_paths": [p.as_posix() for p in outcome.figure_paths],
         "transcript": (
-            {
-                "command": outcome.transcript.command,
-                "lines": list(outcome.transcript.lines),
-                "prompt": outcome.transcript.prompt,
-            }
-            if outcome.transcript
-            else None
+            _transcript_to_dict(outcome.transcript) if outcome.transcript else None
         ),
         "explanation": outcome.explanation,
         "answers": [dict(a) for a in outcome.answers],
@@ -148,11 +181,7 @@ def _outcome_from_dict(data: dict[str, Any]) -> TaskOutcome:
         code_text=data.get("code_text", ""),
         screenshot_paths=[Path(p) for p in data.get("screenshot_paths", [])],
         figure_paths=[Path(p) for p in data.get("figure_paths", [])],
-        transcript=(
-            Transcript(command=raw["command"], lines=raw["lines"], prompt=raw["prompt"])
-            if raw
-            else None
-        ),
+        transcript=_transcript_from_dict(raw) if raw else None,
         explanation=data.get("explanation"),
         answers=[dict(a) for a in (data.get("answers") or [])],
         sections=[dict(x) for x in (data.get("sections") or [])],
@@ -169,6 +198,10 @@ def _outcome_from_dict(data: dict[str, Any]) -> TaskOutcome:
         blocker=data.get("blocker"),
         gap=data.get("gap"),
         runs=data.get("runs", 0),
+        code_files=[
+            dict(f) for f in (data.get("code_files") or [])
+            if isinstance(f, dict) and f.get("name")
+        ],
     )
 
 

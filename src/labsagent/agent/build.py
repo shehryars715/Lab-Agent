@@ -33,7 +33,7 @@ from langchain_deepseek import ChatDeepSeek
 
 from labsagent.agent.confined import ConfinedBackend
 from labsagent.agent.explainer import Explainer
-from labsagent.agent.prompts import SOLVER_PROMPT
+from labsagent.agent.prompts import SOLVER_PROMPT, solver_prompt  # noqa: F401
 from labsagent.agent.tools import TaskRecorder, build_tools
 from labsagent.config import Settings
 from labsagent.sandbox.base import Sandbox
@@ -139,12 +139,22 @@ def build_explainer(settings: Settings, usage=None, model=None) -> Explainer:
     )
 
 
-def build_solver(sandbox: Sandbox, settings: Settings, model=None, system_prompt: str = SOLVER_PROMPT):
+def build_solver(
+    sandbox: Sandbox,
+    settings: Settings,
+    model=None,
+    system_prompt: str | None = None,
+    language: str = "python",
+):
     """Return (agent, recorder). One agent per task -- fresh context each time.
 
     The editing agent is the same assembly with its own prompt: the same two
     file tools, the same confined backend, the same run-and-record tools.
+    `language` is the task's: its prompt (unless one is given) and how its
+    files are run. Python's prompt is SOLVER_PROMPT, byte for byte.
     """
+    if system_prompt is None:
+        system_prompt = solver_prompt(language)
     recorder = TaskRecorder()
     # root_dir alone is not a boundary: it honours absolute paths. See confined.py.
     backend = ConfinedBackend(
@@ -163,7 +173,7 @@ def build_solver(sandbox: Sandbox, settings: Settings, model=None, system_prompt
 
     agent = create_deep_agent(
         model=model if model is not None else build_model(settings),
-        tools=build_tools(sandbox, recorder, settings.timeout_s),
+        tools=build_tools(sandbox, recorder, settings.timeout_s, language=language),
         system_prompt=system_prompt,
         backend=backend,
         **extra,

@@ -35,7 +35,7 @@ from labsagent.emit import DEFAULT_ARTIFACTS, REGISTRY, EmitContext, emit_all
 from labsagent.ingest.labspec import extract_labspec
 from labsagent.intent import Intent, scope
 from labsagent.models import LabSpec, RunManifest, TaskOutcome
-from labsagent.orchestrator import run_lab
+from labsagent.orchestrator import plain_sentence, run_lab
 from labsagent.present import CoverSpec, LookPatch, Presentation, receipt, split_identity
 from labsagent.present import apply as apply_look
 from labsagent.prerequisites import (
@@ -327,6 +327,82 @@ def resolve_prerequisites(
             return None
         decisions[index] = (resolution, value[:4000])
     return decisions
+
+
+SCOPE_KEY = "scope"
+
+
+def scope_question(out, spec, languages=("python",)) -> dict:
+    """The required field when SOME tasks are out of scope (Harness v2, D2).
+
+    ASK, DON'T REFUSE. One task this environment cannot do (a tkinter window, a
+    MATLAB script) used to refuse the whole lab, which decided for the student.
+    The rule this harness keeps everywhere else is "every input is present, or
+    the student decides" -- so now they decide: do the rest, or stop. Required,
+    like a prerequisite: no answer means stop, and nothing has been spent on a
+    solve yet. Reuses the prerequisite card's radio chips.
+    """
+    left = len(spec.tasks) - len(out)
+    parts = [
+        f"{o.task_id.replace('task', 'Task ')} ({o.title}): {o.reasons[0]}" for o in out[:4]
+    ]
+    return {
+        "key": SCOPE_KEY,
+        "kind": "prerequisite",
+        "label": "Task I can't do here" if len(out) == 1 else "Tasks I can't do here",
+        "reason": "; ".join(parts) + ".",
+        "hint": capabilities.can_do(languages),
+        "options": [
+            {"value": "rest", "label": f"Do the other {left}",
+             "hint": "Those will be marked as not done in the report."},
+            {"value": "stop", "label": "Stop here"},
+        ],
+        "value": "",
+        "default": "",
+        "required": True,
+    }
+
+
+def skipped_sentence(reason: str) -> str:
+    """"it needs a screen ..." -> the task's "Not done" line in the report."""
+    body = reason[3:] if reason.startswith("it ") else reason
+    return plain_sentence(f"This task {body}, which can't be done here.")
+
+
+def language_line(spec, note: str) -> str:
+    """One line saying which language the code will be in, when it is not
+    Python (Harness v2, D7). "" for a Python lab: nothing new to say."""
+    from labsagent import languages as langs
+
+    by_language: dict[str, list[str]] = {}
+    for task in spec.tasks:
+        lang = langs.of(task)
+        if getattr(task, "needs_code", True):
+            by_language.setdefault(lang.display, []).append(task.id)
+    if set(by_language) <= {"Python"}:
+        return ""
+    reason = f", {note}" if note else ""
+    if len(by_language) == 1:
+        return f"I'll write the code in {next(iter(by_language))}{reason}."
+    parts = [f"{_task_phrase(ids).lower()} in {name}" for name, ids in by_language.items()]
+    return "I'll write " + ", ".join(parts[:-1]) + " and " + parts[-1] + reason + "."
+
+
+def code_formats(formats: list[str], spec) -> list[str]:
+    """A ".py" for a lab with no Python task means "the code": the task files.
+
+    "Give me the code" is resolved to `py` by habit; for a C or Java lab that
+    would be a Python file saying "see its own file" for every task. The task
+    files (one folder per task, every file under its own name) are what was
+    meant. A lab with any Python task keeps the .py exactly as asked.
+    """
+    from labsagent import languages
+
+    coded = [t for t in spec.tasks if getattr(t, "needs_code", True)]
+    if "py" not in formats or not coded or any(languages.of(t) is languages.PYTHON for t in coded):
+        return formats
+    out = ["files" if f == "py" else f for f in formats]
+    return list(dict.fromkeys(out))
 
 
 def prerequisite_stop(kept: list[Needed]) -> str:
@@ -841,6 +917,12 @@ def keep_manual(store: RunStore, manual_path: Path | None) -> Path | None:
 
 
 _NOTEBOOK_TOOL = re.compile(r"\b(colab|jupyter)\b", re.I)
+#: A lab done on Linux: it names the system or its compiler, or uses the
+#: POSIX calls only Linux labs teach (fork, pthreads). "terminal" alone is not
+#: a sign -- Windows labs say "run it in the terminal" too.
+_LINUX_TOOL = re.compile(
+    r"\b(ubuntu|linux|gcc|g\+\+|bash|pthread\w*|unistd\.h|fork\s*\(|\./a\.out)", re.I
+)
 
 
 def screenshot_backend(spec, manual, kind: str, manual_path) -> RenderedBackend:
@@ -848,8 +930,9 @@ def screenshot_backend(spec, manual, kind: str, manual_path) -> RenderedBackend:
 
     A lab done in Jupyter or Colab -- an .ipynb handed out as the lab, a lab
     the reading classed as a notebook lab, or a manual that names either tool
-    -- gets a notebook cell. Everything else gets Windows Terminal, in the
-    lab's own folder under a generic user.
+    -- gets a notebook cell. A lab done on Linux (Harness v2, D9: an OS lab
+    with fork and pthreads) gets Ubuntu's terminal. Everything else gets
+    Windows Terminal, in the lab's own folder under a generic user.
     """
     text = " ".join(p.text for p in getattr(manual, "paragraphs", []) or [])
     notebook = (
@@ -858,7 +941,11 @@ def screenshot_backend(spec, manual, kind: str, manual_path) -> RenderedBackend:
         or _NOTEBOOK_TOOL.search(text) is not None
     )
     folder = f"Lab {spec.lab_number}".strip() if spec.lab_number else "Lab"
-    return RenderedBackend(look="notebook" if notebook else "terminal", folder=folder)
+    if notebook:
+        return RenderedBackend(look="notebook", folder=folder)
+    if _LINUX_TOOL.search(text) is not None:
+        return RenderedBackend(look="ubuntu", folder=folder)
+    return RenderedBackend(look="terminal", folder=folder)
 
 
 def _only_when_wanted(explainer, presentation: Presentation):
@@ -1210,7 +1297,15 @@ def run_job(
         # "only tasks 2-4" still works when task 1 is out of scope. Before the
         # briefing call and before any run directory: nothing is charged,
         # exactly like a document that is not a lab.
-        out_of_scope = capabilities.check(spec, reading.requirements)
+        # What THIS deployment can run (Harness v2): Python everywhere, the
+        # other languages only where the runner's image has their toolchains.
+        out_of_scope = capabilities.check(spec, reading.requirements, settings.languages)
+        # ASK, DON'T REFUSE (Harness v2, D2 -- reverses the 2026-09-26 rule).
+        # The whole lab is refused only when NOTHING in it can be done here;
+        # otherwise the student is asked (in the one pause) whether to do the
+        # rest, and the tasks that can't be done are reported as not done.
+        skipped: list = []
+        scope_field = None
         if out_of_scope:
             job.publish(
                 {
@@ -1221,8 +1316,19 @@ def run_job(
                     ],
                 }
             )
-            job.finish(error=capabilities.refusal(out_of_scope, len(spec.tasks)))
-            return
+            if len(out_of_scope) >= len(spec.tasks):
+                job.finish(
+                    error=capabilities.refusal(out_of_scope, len(spec.tasks), settings.languages)
+                )
+                return
+            skipped = out_of_scope
+            scope_field = scope_question(out_of_scope, spec, settings.languages)
+        skipped_ids = {o.task_id for o in skipped}
+        solvable = replace(spec, tasks=[t for t in spec.tasks if t.id not in skipped_ids])
+
+        line = language_line(solvable, reading.language_note)
+        if line:
+            job.publish({"type": "narration", "text": line})
 
         # A LIBRARY THAT ISN'T INSTALLED is one step, not the lab: said now,
         # before any money is spent, and the solver leaves that step out
@@ -1257,7 +1363,9 @@ def run_job(
         asked_for_data = data_question(intent, dataset_paths or [])
         # WORK FROM OUTSIDE THIS LAB that nothing here supplies -- asked about
         # here, by code, before any code is written. See prerequisites.py.
-        needed, prereq_fields = prerequisite_questions(intent.prerequisites, spec)
+        # Only about tasks that will run: asking for Lab 02's results on
+        # behalf of a task the student chose to skip would be noise.
+        needed, prereq_fields = prerequisite_questions(intent.prerequisites, solvable)
         job.publish({"type": "plan", "question_count": len(plan.questions)})
         n = len(spec.tasks)
         follow = ""
@@ -1273,9 +1381,14 @@ def run_job(
                 f" {_task_phrase(item.task_ids)} rel{'ies' if one else 'y'} on "
                 f"{item.what[0].lower() + item.what[1:]}, which you didn't send."
             )
+        if skipped:
+            follow += (
+                f" {_task_phrase([o.task_id for o in skipped])} can't be done here"
+                f" — tell me whether to do the other {len(spec.tasks) - len(skipped)}."
+            )
         if needed:
             follow += " Tell me how to handle that before I start."
-        elif plan.questions and not asked_for_data:
+        elif plan.questions and not asked_for_data and not skipped:
             follow = " One quick question first — skip it if you like."
         job.publish(
             {"type": "narration", "text": f"Found {n} task{'s' if n != 1 else ''}." + follow}
@@ -1292,13 +1405,23 @@ def run_job(
         questions = [*prereq_fields, *questions]
         if asked_for_data:
             questions = [asked_for_data, *questions]
+        if scope_field is not None:
+            questions = [scope_field, *questions]
 
-        proposed = list(intent.artifacts or plan.artifacts or DEFAULT_ARTIFACTS)
+        proposed = code_formats(list(intent.artifacts or plan.artifacts or DEFAULT_ARTIFACTS), solvable)
         job.publish(
             {"type": "questions_ready", "known": known, "proposed_artifacts": proposed}
         )
         answers = job.ask(questions, timeout_s=ASK_TIMEOUT_S) if questions else {}
         profile = profile_from(profile_seed)
+
+        # NO "DO THE REST", NO RUN: the scope card is required, like a
+        # prerequisite. Stopping here has written nothing and solved nothing.
+        if scope_field is not None and str(answers.get(SCOPE_KEY) or "").strip().lower() != "rest":
+            job.finish(
+                error=capabilities.refusal(skipped, len(spec.tasks), settings.languages)
+            )
+            return
 
         # NO LINK, NO ANSWER, NO RUN. Solving against invented data is the
         # improvisation this whole pass exists to stop, so a skipped data
@@ -1437,6 +1560,21 @@ def run_job(
         # solve, a new process can pick the lab up at the next task. The
         # rest of what the closing lines need rides along under "resume".
         first = RunManifest(run_id=store.run_id, started_at=datetime.now(timezone.utc), spec=spec)
+        # The tasks the student chose to skip are SETTLED before the solve:
+        # a failed outcome with its reason as the blocker. run_lab(resume=True)
+        # never solves a settled task, so they cost nothing, and every emitter
+        # already prints a blocker as "Not done: ...".
+        first.outcomes = [
+            TaskOutcome(
+                task=task, status="failed",
+                error=skipped_sentence(next(o.reasons[0] for o in skipped if o.task_id == task.id)),
+                blocker=skipped_sentence(
+                    next(o.reasons[0] for o in skipped if o.task_id == task.id)
+                ),
+            )
+            for task in spec.tasks
+            if task.id in skipped_ids
+        ]
         first.datasets = [d.as_dict() for d in datasets]
         job.context.save_to(first)
         first.context["resume"] = {

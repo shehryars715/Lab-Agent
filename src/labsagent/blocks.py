@@ -141,7 +141,20 @@ def blocks_for(outcome) -> list[Block]:
             return [Block("error", text=_failure_note(outcome))]
         return outside_notes(outcome) + _prose_of(outcome)
 
-    out: list[Block] = [Block("code", text=outcome.code_text or NO_SOLUTION)]
+    # The task's own language tags its code (Harness v2), and a program made
+    # of several files shows each one under its name. A Python task is the
+    # one block it always was.
+    from labsagent import languages
+
+    fence = languages.of(task).fence if task is not None else "python"
+    files = list(getattr(outcome, "code_files", None) or [])
+    if len(files) > 1:
+        out: list[Block] = [
+            Block("code", text=f.get("text", ""), lang=fence, title=str(f.get("name", "")))
+            for f in files
+        ]
+    else:
+        out = [Block("code", text=outcome.code_text or NO_SOLUTION, lang=fence)]
 
     if outcome.status == "failed":
         out.append(Block("error", text=_failure_note(outcome)))

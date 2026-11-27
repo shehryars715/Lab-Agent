@@ -56,6 +56,12 @@ class Task:
     #: and the report itself -- see `prerequisites.py`. Persisted with the task
     #: so a resume or a revision honours the same decision.
     prerequisites: list[Prerequisite] = field(default_factory=list)
+    #: The language the solution is WRITTEN in, a key of `languages.REGISTRY`
+    #: ("python", "c", "cpp", "java", "javascript"). On the task rather than
+    #: in a side table (like `requirements`) because of who reads it: the
+    #: solver's prompt, the runner, the file names, the emitters and the
+    #: screenshot all do. Persisted; a manifest from before it is Python.
+    language: str = "python"
 
 
 @dataclass(frozen=True)
@@ -108,6 +114,15 @@ class Transcript:
     #: Never persisted, like head and tail.
     code: str = ""
     cell: int = 1
+    #: The language and the file that ran (Harness v2), so a screenshot can
+    #: draw the commands ITS platform would show (`Language.commands`): a
+    #: Windows window types `.\task1.exe`, an Ubuntu one `./task1`. Empty for
+    #: Python runs recorded before them, which keep `command` as it is.
+    language: str = ""
+    entry: str = ""
+    #: Commands typed before `command` -- the compile step: `gcc task1.c -o
+    #: task1`. Each shows as its own prompt line, as in a real session.
+    setup: tuple[str, ...] = ()
 
     @classmethod
     def from_exec(cls, command: str, result: ExecResult, prompt: str = r"PS C:\lab>") -> "Transcript":
@@ -118,7 +133,11 @@ class Transcript:
 
     def display_lines(self) -> list[str]:
         """Full rendering including the command line and trailing cursor."""
-        head = [f"{self.prompt} {self.command}"] if self.head else []
+        head = (
+            [f"{self.prompt} {step}" for step in self.setup] + [f"{self.prompt} {self.command}"]
+            if self.head
+            else []
+        )
         tail = [f"{self.prompt} "] if self.tail else []
         return [*head, *self.lines, *tail]
 
@@ -176,6 +195,11 @@ class TaskOutcome:
     #: run_solution calls across every attempt -- the write/run/fix cycles a
     #: person watching the run sees, which were recorded nowhere before.
     runs: int = 0
+    #: EVERY file the program is made of, entry first, as {"name", "text"}
+    #: (Harness v2, D8: ship what the run used -- the files the build actually
+    #: compiled, so a leftover probe is never handed in). Empty means the one
+    #: file in `code_text`, which stays the entry so every reader of it works.
+    code_files: list[dict] = field(default_factory=list)
 
 
 @dataclass

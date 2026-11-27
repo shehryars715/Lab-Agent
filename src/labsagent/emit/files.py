@@ -23,15 +23,27 @@ from labsagent.present import select
 SUBDIR = "tasks"
 
 
+def _header(ctx: EmitContext, outcome, mark: str) -> list[str]:
+    """The task's title, the student's details and (unless left out) the
+    statement, as comments in the file's own syntax: `#` or `//`."""
+    task = outcome.task
+    include = ctx.plan_for(task.id).include
+    lines = [f"{mark} {task.title or task.id}"]
+    lines += [
+        f"{mark} {key.replace('_', ' ').title()}: {value}"
+        for key, value in ctx.profile.as_display().items()
+    ]
+    if include.statement and task.statement.strip():
+        lines.append(mark)
+        lines += [mark + line[1:] for line in _comment(task.statement)]
+    lines.append("")
+    return lines
+
+
 def render(ctx: EmitContext, outcome) -> str:
     task = outcome.task
     include = ctx.plan_for(task.id).include
-    lines = [f"# {task.title or task.id}"]
-    lines += [f"# {key.replace('_', ' ').title()}: {value}" for key, value in ctx.profile.as_display().items()]
-    if include.statement and task.statement.strip():
-        lines.append("#")
-        lines += _comment(task.statement)
-    lines.append("")
+    lines = _header(ctx, outcome, "#")
     code = [b.text.rstrip() for b in select(blocks_for(outcome), include) if b.kind == "code"]
     lines.append("\n\n".join(code) if code else "# no solution was produced for this task")
     return "\n".join(lines).rstrip() + "\n"
@@ -44,20 +56,58 @@ class FilesEmitter:
     extensions: tuple[str, ...] = ()
 
     def emit(self, ctx: EmitContext) -> list[Path]:
+        from labsagent import languages
+
         folder = ctx.out_dir / SUBDIR
         folder.mkdir(parents=True, exist_ok=True)
         written = []
         for outcome in ctx.outcomes:
-            path = folder / f"{ctx.stem()}_{outcome.task.id}.py"
-            path.write_text(render(ctx, outcome), encoding="utf-8")
+            lang = languages.of(outcome.task)
+            if lang is languages.PYTHON and len(outcome.code_files or []) <= 1:
+                path = folder / f"{ctx.stem()}_{outcome.task.id}.py"
+                path.write_text(render(ctx, outcome), encoding="utf-8")
+                written.append(path)
+                continue
+            written += self._project(ctx, outcome, lang, folder)
+        return written
+
+    @staticmethod
+    def _project(ctx: EmitContext, outcome, lang, folder: Path) -> list[Path]:
+        """A FOLDER per task for any other language (Harness v2): every file
+        under its own name -- Java's public class must match its file name,
+        and a header is #included by its name -- with the header comment on
+        the entry only. `// ` for the C family, Java and JavaScript."""
+        task_dir = folder / f"{ctx.stem()}_{outcome.task.id}"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        files = list(outcome.code_files or [])
+        if not files:
+            name = Path(outcome.code_path).name if outcome.code_path else lang.entry(outcome.task.id)
+            files = [{"name": name, "text": outcome.code_text or ""}]
+        mark = "#" if lang.key == "python" else "//"
+        written = []
+        for index, item in enumerate(files):
+            text = str(item.get("text") or "")
+            if index == 0:
+                body = text.rstrip() or f"{mark} no solution was produced for this task"
+                text = "\n".join(_header(ctx, outcome, mark)) + body + "\n"
+            path = task_dir / Path(str(item.get("name") or f"file{index}")).name
+            path.write_text(text, encoding="utf-8")
             written.append(path)
         return written
 
     @staticmethod
     def key_for(path: Path) -> str:
         """`code:task2` -- the same key the raw code download uses, which
-        these replace when they were asked for."""
-        return f"code:{Path(path).stem.rsplit('_', 1)[-1]}"
+        these replace when they were asked for. A file in a task's folder is
+        `code:task2` when it is the task's own entry (task2.c, Task2.java) and
+        `code:task2/Helper.java` otherwise, so no two files share a key."""
+        path = Path(path)
+        if path.parent.parent.name == SUBDIR:
+            task = path.parent.name.rsplit("_", 1)[-1]
+            if path.stem.lower() == task.lower():
+                return f"code:{task}"
+            return f"code:{task}/{path.name}"
+        return f"code:{path.stem.rsplit('_', 1)[-1]}"
 
 
 register(FilesEmitter())

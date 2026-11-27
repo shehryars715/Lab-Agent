@@ -18,8 +18,19 @@ drawn instead -- as a copy of a specific real one, measured, not imagined:
   blue `[n]:` prompt, the grey editor box with its syntax colours, the output
   beneath, the selected cell's blue bar.
 
+- `ubuntu` (Harness v2, D9): Ubuntu's GNOME Terminal, for labs done on Linux
+  (fork, pthreads, gcc) -- the classic aubergine background, the Tango
+  palette, bash's default two-colour prompt (`student@ubuntu` green, the path
+  blue), the header bar with its title and round window buttons, and the
+  block cursor.
+
 The owner chose the terminal's real dark default (2026-10-02). `light` is
 Windows Terminal's own built-in "One Half Light" scheme, not invented colours.
+
+COMMANDS FOLLOW THE WINDOW. A transcript of a C, C++, Java or JavaScript run
+carries its language and file, and each look draws the commands a student
+would type THERE: `gcc task1.c -o task1` then `.\\task1.exe` in PowerShell,
+`./task1` in bash. A Python transcript keeps its own command, as always.
 """
 
 from __future__ import annotations
@@ -37,7 +48,7 @@ from PIL import Image, ImageDraw
 from labsagent.capture import fonts
 from labsagent.models import Transcript
 
-LOOKS = ("terminal", "notebook")
+LOOKS = ("terminal", "notebook", "ubuntu")
 
 
 @dataclass(frozen=True)
@@ -76,8 +87,21 @@ ONE_HALF_LIGHT = Scheme(
 SCHEMES = {"dark": CAMPBELL, "light": ONE_HALF_LIGHT}
 THEMES = SCHEMES  # the name older callers import
 
+#: Ubuntu's GNOME Terminal: the classic aubergine with the Tango palette.
+UBUNTU = Scheme(
+    bg="#300A24", fg="#FFFFFF", command="#FFFFFF", cursor="#FFFFFF",
+    tabbar="#2C2C2C", tab_fg="#FFFFFF", border="#1A1A1A",
+    palette=(
+        "#2E3436", "#CC0000", "#4E9A06", "#C4A000", "#3465A4", "#75507B", "#06989A", "#D3D7CF",
+        "#555753", "#EF2929", "#8AE234", "#FCE94F", "#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
+    ),
+)
+UBUNTU_CLOSE = "#E95420"  # Ubuntu orange
+
 #: A generic user and the lab's own folder: real-looking, nobody's name in it.
 PROMPT_TEMPLATE = "PS C:\\Users\\student\\Desktop\\{folder}>"
+UBUNTU_USER = "student@ubuntu"
+UBUNTU_PATH = "~/Desktop/{folder}"
 
 _SGR = re.compile(r"\x1b\[([0-9;]*)([A-Za-z])")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -229,19 +253,22 @@ class RenderedBackend:
         look: str = "terminal",
         folder: str = "",
     ) -> None:
-        self.scheme = SCHEMES.get(theme, CAMPBELL)
-        self.theme = self.scheme
         self.look = look if look in LOOKS else "terminal"
+        self.scheme = UBUNTU if self.look == "ubuntu" else SCHEMES.get(theme, CAMPBELL)
+        self.theme = self.scheme
         self.scale = scale
         self.max_cols = max_cols
         self.max_lines = max_lines
         self.padding = padding * scale
         self.title = title
+        self.folder = folder
         self.prompt = PROMPT_TEMPLATE.format(folder=folder) if folder else ""
         self.font_size = font_size * scale
         if self.look == "notebook":
             self.font_size = 13 * scale
             self.font, self.font_provenance = fonts.mono(self.font_size)
+        elif self.look == "ubuntu":
+            self.font, self.font_provenance = fonts.ubuntu(self.font_size)
         else:
             self.font, self.font_provenance = fonts.terminal(self.font_size)
         self.ui_font, _ = fonts.ui(12 * scale)
@@ -264,20 +291,46 @@ class RenderedBackend:
 
     # ----------------------------------------------------------- terminal
 
+    def _prompt_runs(self, transcript: Transcript) -> list[tuple[str, str]]:
+        """The prompt as coloured runs: one colour in PowerShell, bash's two."""
+        if self.look == "ubuntu":
+            path = UBUNTU_PATH.format(folder=self.folder) if self.folder else "~"
+            green, blue = self.scheme.palette[10], self.scheme.palette[12]
+            return [(UBUNTU_USER, green), (":", self.scheme.fg), (path, blue), ("$ ", self.scheme.fg)]
+        return [(f"{self.prompt or transcript.prompt} ", self.scheme.fg)]
+
+    def _commands(self, transcript: Transcript) -> list[str]:
+        """What was typed, in this window's own words.
+
+        A transcript that knows its language and file gets the commands of
+        THIS platform; one that does not (every Python run) keeps its own.
+        """
+        if transcript.language and transcript.entry:
+            from labsagent import languages
+
+            lang = languages.resolve(transcript.language)
+            if lang is not None:
+                setup, run = lang.commands(
+                    transcript.entry, "linux" if self.look == "ubuntu" else "windows"
+                )
+                return [*setup, run]
+        return [*transcript.setup, transcript.command]
+
     def _rows(self, transcript: Transcript) -> list[tuple[str, list]]:
-        prompt = self.prompt or transcript.prompt
+        prompt = self._prompt_runs(transcript)
         rows: list[tuple[str, list]] = []
         if transcript.head:
-            command = transcript.command.split(" ", 1)
-            runs = [(f"{prompt} ", self.scheme.fg), (command[0], self.scheme.command)]
-            if len(command) > 1:
-                runs.append((" " + command[1], self.scheme.fg))
-            rows.append(("command", runs))
+            for typed in self._commands(transcript):
+                command = typed.split(" ", 1)
+                runs = [*prompt, (command[0], self.scheme.command)]
+                if len(command) > 1:
+                    runs.append((" " + command[1], self.scheme.fg))
+                rows.append(("command", runs))
         for line in transcript.lines:
             runs = _segments(line.expandtabs(8), self.scheme)
             rows += [("out", row) for row in _wrap(runs, self.max_cols)]
         if transcript.tail:
-            rows.append(("cursor", [(f"{prompt} ", self.scheme.fg)]))
+            rows.append(("cursor", list(prompt)))
         return rows
 
     def _draw_controls(self, draw, width: int, band_h: int) -> None:
@@ -351,6 +404,51 @@ class RenderedBackend:
         img.save(out_path, "PNG")
         return out_path
 
+    def _draw_ubuntu(self, rows, out_path: Path) -> Path:
+        """GNOME Terminal on Ubuntu: a header bar with the title centred and
+        round window buttons, the aubergine body, a block cursor."""
+        u, s = self._u, self.scheme
+        bar_h, pad = u(46), self.padding
+        width = int(pad * 2 + self.char_w * self.max_cols)
+        height = bar_h + pad * 2 + self.line_h * max(1, len(rows))
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        radius = u(12)
+        draw.rounded_rectangle([0, 0, width - 1, height - 1], radius=radius, fill=s.bg)
+        draw.rounded_rectangle([0, 0, width - 1, bar_h + radius], radius=radius, fill=s.tabbar)
+        draw.rectangle([0, bar_h, width - 1, bar_h + radius], fill=s.bg)
+        path = UBUNTU_PATH.format(folder=self.folder) if self.folder else "~"
+        draw.text((width // 2, bar_h // 2), f"{UBUNTU_USER}: {path}", font=self.ui_font,
+                  fill=s.tab_fg, anchor="mm")
+        # Minimise, maximise, close: round buttons, close in Ubuntu orange.
+        cy, r, stroke = bar_h // 2, u(11), max(1, self.scale)
+        for slot, kind in enumerate(("close", "max", "min")):
+            cx = width - u(24) - slot * u(32)
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r],
+                         fill=UBUNTU_CLOSE if kind == "close" else "#4A4A4A")
+            half = u(4)
+            if kind == "close":
+                draw.line([cx - half, cy - half, cx + half, cy + half], fill="#FFFFFF", width=stroke)
+                draw.line([cx - half, cy + half, cx + half, cy - half], fill="#FFFFFF", width=stroke)
+            elif kind == "max":
+                draw.rectangle([cx - half, cy - half, cx + half, cy + half], outline="#FFFFFF",
+                               width=stroke)
+            else:
+                draw.line([cx - half, cy + half, cx + half, cy + half], fill="#FFFFFF", width=stroke)
+
+        y = bar_h + pad
+        for kind, runs in rows:
+            self._text_runs(draw, pad, y, runs)
+            if kind == "cursor":
+                x = pad + self.char_w * sum(len(t) for t, _ in runs)
+                draw.rectangle([x, y, x + self.char_w - 1, y + self.line_h - u(2)], fill=s.cursor)
+            y += self.line_h
+        draw.rounded_rectangle([0, 0, width - 1, height - 1], radius=radius,
+                               outline=s.border, width=max(1, self.scale // 2))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out_path, "PNG")
+        return out_path
+
     # ----------------------------------------------------------- notebook
 
     def _draw_notebook(self, code: str, rows, cell: int, out_path: Path, with_code: bool) -> Path:
@@ -409,6 +507,8 @@ class RenderedBackend:
                 code = getattr(transcript, "code", "") or ""
                 cell = getattr(transcript, "cell", 1) or 1
                 return self._draw_notebook(code, chunk, cell, path, with_code=first)
+            if self.look == "ubuntu":
+                return self._draw_ubuntu(chunk, path)
             return self._draw_terminal(chunk, path)
 
         if len(chunks) == 1:

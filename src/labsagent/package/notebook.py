@@ -129,9 +129,18 @@ def build_notebook(
         )
 
     nb.cells = cells
+    # The notebook's kernel is the lab's language when every coded task shares
+    # one (Harness v2) -- a C++ lab opens with a C++ kernel, its cells
+    # highlighted as C++. Mixed or Python: the Python kernel, as always.
+    from labsagent import languages
+
+    coded = {
+        languages.of(o.task).key for o in outcomes if getattr(o.task, "needs_code", True)
+    }
+    lang = languages.REGISTRY[coded.pop()] if len(coded) == 1 else languages.PYTHON
     nb.metadata = {
-        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
-        "language_info": {"name": "python"},
+        "kernelspec": dict(lang.kernelspec),
+        "language_info": dict(lang.language_info),
         "colab": {"provenance": []},
     }
     return nb

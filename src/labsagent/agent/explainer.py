@@ -164,7 +164,9 @@ def build_brief(task: Task, code_text: str, transcript: Transcript | None) -> st
         f"\nWhat the task asked for:\n{task.statement.strip()}",
     ]
     if code:
-        parts.append(f"\nThe program:\n```python\n{code}\n```")
+        from labsagent import languages
+
+        parts.append(f"\nThe program:\n```{languages.of(task).fence}\n{code}\n```")
     else:
         # NOT AN INVITATION TO RECALL RESULTS. "Answer from knowledge" alone
         # got "The Technology category typically shows..." for a question

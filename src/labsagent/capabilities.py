@@ -18,6 +18,11 @@ ONE SOURCE OF TRUTH. The solver prompt, the gate and the refusal message all
 read the constants below, so what the student is told, what the gate checks and
 what the solver is promised cannot drift apart. `AVAILABLE_LIBRARIES` is
 imported by a test that tries to import every entry.
+
+MORE THAN ONE LANGUAGE (Harness v2). Which languages exist is the registry's
+(`languages.py`); which ones THIS deployment can run is the caller's, passed as
+`languages=` (from `Settings.sandbox_languages`). The default is Python alone,
+so a caller that says nothing gets exactly the old gate.
 """
 
 from __future__ import annotations
@@ -26,15 +31,15 @@ import re
 import sys
 from dataclasses import dataclass, field
 
-#: The one language the solver writes and runs.
-SOLVER_LANGUAGE = "python"
+from labsagent import languages as langs
 
-#: Every third-party library the solver is promised. Nothing else is installed
-#: as far as a task is concerned -- a package that happens to be importable as
-#: a dependency of the harness itself is not a promise.
-AVAILABLE_LIBRARIES = (
-    "numpy", "pandas", "matplotlib", "seaborn", "scipy", "scikit-learn", "openpyxl",
-)
+#: The default language, and the only one every backend can run.
+SOLVER_LANGUAGE = langs.DEFAULT
+
+#: Every third-party Python library the solver is promised. Defined in the
+#: language registry (its Python entry reads it); re-exported under the old
+#: name because the prompt, the gate and a test all import it from here.
+AVAILABLE_LIBRARIES = langs.PYTHON_LIBRARIES
 
 #: Import names and common spellings -> the name in AVAILABLE_LIBRARIES.
 LIBRARY_ALIASES = {
@@ -64,13 +69,26 @@ NEEDS = {
 TOOL_NEEDS = {"software", "hardware"}
 
 
-def can_do() -> str:
-    """The environment in one sentence, for a student."""
+def can_do(languages=(SOLVER_LANGUAGE,)) -> str:
+    """The environment in one sentence, for a student.
+
+    With Python alone the sentence is exactly the one students have always
+    seen. With more, the others are listed after it with their standard
+    libraries -- what the registry describes AND this deployment can run.
+    """
     libs = ", ".join(AVAILABLE_LIBRARIES[:-1]) + " and " + AVAILABLE_LIBRARIES[-1]
+    others = [lang.display for lang in langs.enabled(languages) if lang is not langs.PYTHON]
+    if not others:
+        return (
+            f"Right now I can only write and run Python 3 programs, using the standard "
+            f"library plus {libs}, offline and with no screen, and nothing else can be "
+            "installed."
+        )
+    listed = ", ".join(others[:-1]) + (" and " if len(others) > 1 else "") + others[-1]
     return (
-        f"Right now I can only write and run Python 3 programs, using the standard "
-        f"library plus {libs}, offline and with no screen, and nothing else can be "
-        "installed."
+        f"Right now I can write and run Python 3 programs (the standard library plus "
+        f"{libs}) and {listed} programs with their standard libraries, offline and "
+        "with no screen, and nothing else can be installed."
     )
 
 
@@ -119,6 +137,9 @@ class OutOfScope:
 
 
 def _language_phrase(language: str) -> str:
+    known = langs.resolve(language)
+    if known is not None:
+        return known.display
     shown = {
         "html": "HTML", "css": "CSS", "html/css": "HTML and CSS", "javascript": "JavaScript",
         "js": "JavaScript", "java": "Java", "c": "C", "c++": "C++", "cpp": "C++",
@@ -136,13 +157,28 @@ def is_python(language: str) -> bool:
     return lang in ("", "python", "python3", "python 3", "py", "none")
 
 
-def check(spec, requirements: dict[str, Requirement]) -> list[OutOfScope]:
+def runnable(language: str, languages=(SOLVER_LANGUAGE,)) -> bool:
+    """Can this deployment write and run a program in `language`?
+
+    Empty or Python is always yes (failing open on a missing field, as
+    `is_python` always has). Anything else must be in the registry AND enabled.
+    """
+    if is_python(language):
+        return True
+    lang = langs.resolve(language)
+    return lang is not None and lang in langs.enabled(languages)
+
+
+def check(
+    spec, requirements: dict[str, Requirement], languages=(SOLVER_LANGUAGE,)
+) -> list[OutOfScope]:
     """Every task in `spec` this environment cannot do, with the reasons.
 
     Only the tasks IN the spec are checked, and the caller passes the scoped
     spec: a student who asks for "only tasks 2-4" of a lab whose task 1 is HTML
     gets tasks 2-4. A pure theory question needs nothing and is never out of
-    scope.
+    scope. `languages` is what this deployment can run (Python alone unless
+    the caller says more).
     """
     out: list[OutOfScope] = []
     for task in spec.tasks:
@@ -156,7 +192,7 @@ def check(spec, requirements: dict[str, Requirement]) -> list[OutOfScope]:
         # device can put such a task out of scope.
         coded = getattr(task, "needs_code", True)
         reasons: list[str] = []
-        if coded and not is_python(req.language):
+        if coded and not runnable(req.language, languages):
             reasons.append(f"it is written in {_language_phrase(req.language)}")
         for need, why in req.needs:
             if need in NEEDS and (coded or need in TOOL_NEEDS):
@@ -182,7 +218,10 @@ def missing_libraries(spec, requirements: dict[str, Requirement]) -> list[tuple[
         req = requirements.get(task.id)
         if req is None or not getattr(task, "needs_code", True):
             continue
-        missing = [lib for lib in req.libraries if not library_available(lib)]
+        # Each language judges its own libraries; Python's rule is the one
+        # above (the registry delegates back to `library_available`).
+        lang = langs.resolve(req.language) or langs.PYTHON
+        missing = [lib for lib in req.libraries if not lang.library_available(lib)]
         if missing:
             found.append((task.id, missing))
     return found
@@ -205,7 +244,7 @@ def library_notice(found: list[tuple[str, list[str]]]) -> str:
     )
 
 
-def refusal(out: list[OutOfScope], total: int) -> str:
+def refusal(out: list[OutOfScope], total: int, languages=(SOLVER_LANGUAGE,)) -> str:
     """What the student is told, in one paragraph (the web UI shows it in a <p>).
 
     Names each task and why, states the environment, and says what to do. The
@@ -217,7 +256,7 @@ def refusal(out: list[OutOfScope], total: int) -> str:
         label = item.task_id.replace("task", "Task ")
         parts.append(f"{label} ({item.title}): " + "; ".join(item.reasons[:2]))
     lead = "I can't do this lab. " + ". ".join(parts) + ". "
-    tail = can_do() + " I stopped before writing any code."
+    tail = can_do(languages) + " I stopped before writing any code."
     if len(out) < total:
         ids = ", ".join(i.task_id.replace("task", "") for i in out)
         tail += (

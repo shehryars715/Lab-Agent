@@ -11,8 +11,15 @@
 # program sees are exactly the app's. That container has no network and sees
 # only its own task folder.
 #
+#   docker compose build app
+#   docker build -f runner/sandbox.Dockerfile -t labsagent-sandbox .
 #   docker compose up -d --build     first run, and after every `git pull`
 #   docker compose logs -f app       watch a run
+#
+# THE SANDBOX IMAGE (Harness v2) is the app's image plus the C, C++, Java and
+# JavaScript toolchains; programs run in it. Build it AFTER the app image, which
+# it starts from (the two commands above). If it is missing the runner falls
+# back to the app image: Python still runs, the other languages fail honestly.
 #
 # RUNS LIVE AT THE SAME ABSOLUTE PATH IN EVERY CONTAINER (LABSAGENT_RUNS_DIR,
 # default /srv/labsagent/runs). The runner asks the HOST's Docker to mount a
@@ -46,6 +53,9 @@ services:
       RUNNER_URL: http://runner:7000
       RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env}
       LABSAGENT_RUNS_DIR: *runs
+      # What the capability gate offers. Every language here must be in the
+      # runner's image (SANDBOX_IMAGE below); Python is always on.
+      SANDBOX_LANGUAGES: ${SANDBOX_LANGUAGES:-python,c,cpp,java,javascript}
     restart: unless-stopped
     # A tiny init as PID 1 reaps orphaned processes (audit finding 6).
     init: true
@@ -66,7 +76,7 @@ services:
     environment:
       RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env (python -c "import secrets; print(secrets.token_urlsafe(32))")}
       RUNS_DIR: *runs
-      SANDBOX_IMAGE: labsagent-app
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-labsagent-sandbox}
     depends_on:
       runs-init:
         condition: service_completed_successfully

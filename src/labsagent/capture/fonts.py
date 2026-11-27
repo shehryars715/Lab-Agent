@@ -63,6 +63,25 @@ def mono(size: int, bold: bool = False):
     return font, f"system:{name}"
 
 
+def ubuntu(size: int):
+    """(font, provenance) for the Ubuntu terminal look (Harness v2, D9).
+
+    DejaVu Sans Mono from matplotlib's own data folder first: the same file on
+    this machine and the server, so the picture does not change with where it
+    was drawn. (Ubuntu Mono, the real default, is the faithful upgrade; it
+    would be bundled like Cascadia.)
+    """
+    candidates = []
+    try:
+        import matplotlib
+
+        candidates.append(Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSansMono.ttf")
+    except Exception:  # noqa: BLE001 -- the system copy, or the platform's mono
+        pass
+    font, name = _first((*candidates, *_MONO), size)
+    return font, f"system:{name}"
+
+
 def ui(size: int):
     """(font, provenance) for window titles."""
     font, name = _first(_UI, size)
